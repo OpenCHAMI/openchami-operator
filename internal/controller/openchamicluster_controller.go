@@ -139,8 +139,8 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.CertificatesReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.GatewayReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.NetworkPoliciesReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.TopologyReconciler{Client: r.Client, Recorder: r.Recorder},
 		// Phase 3:  logbucket (deferred to phase 12 with funicular)
-		// Phase 9:  topology
 		// Phase 12: funicular
 	}
 

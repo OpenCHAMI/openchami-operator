@@ -89,7 +89,7 @@ func TestMetadataServiceReconciler_AppliesAllResources(t *testing.T) {
 	if !ok {
 		t.Fatalf("METADATA_CLUSTER_NAME env var not found")
 	}
-	if clusterNameEnv.Value != "alpha" {
+	if clusterNameEnv.Value != testClusterAlpha {
 		t.Errorf("expected METADATA_CLUSTER_NAME=alpha, got %q", clusterNameEnv.Value)
 	}
 

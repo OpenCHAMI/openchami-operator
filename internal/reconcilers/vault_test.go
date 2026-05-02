@@ -30,8 +30,9 @@ import (
 // Shared fixture cluster names used across reconciler tests. Extracted to
 // satisfy goconst across sibling test files.
 const (
-	testClusterRed  = "red"
-	testClusterBlue = "blue"
+	testClusterRed   = "red"
+	testClusterBlue  = "blue"
+	testClusterAlpha = "alpha"
 
 	// Shared test fixture values used across the network/coredhcp/magellan
 	// test files. Extracted to satisfy goconst.
