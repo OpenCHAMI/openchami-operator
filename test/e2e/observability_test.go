@@ -20,7 +20,15 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,6 +145,68 @@ spec:
 	return observabilityKubectlApply(manifest)
 }
 
+// observabilityShortLivedSecretYAML generates a self-signed cert/key pair
+// whose NotAfter is the supplied timestamp, then returns the YAML for a
+// kubernetes.io/tls Secret carrying both PEM blocks. Used by E2E-11 to drive
+// the certificates reconciler's <48h warning path without waiting on a real
+// cert-manager issuance.
+func observabilityShortLivedSecretYAML(namespace, name string, notAfter time.Time) (string, error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return "", fmt.Errorf("generating ec key: %w", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "openchami-e2e-11"},
+		NotBefore:    notAfter.Add(-72 * time.Hour),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		return "", fmt.Errorf("creating cert: %w", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return "", fmt.Errorf("marshalling key: %w", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	return fmt.Sprintf(`apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+  namespace: %s
+type: kubernetes.io/tls
+data:
+  tls.crt: %s
+  tls.key: %s
+`,
+		name,
+		namespace,
+		base64.StdEncoding.EncodeToString(certPEM),
+		base64.StdEncoding.EncodeToString(keyPEM),
+	), nil
+}
+
+// observabilityFetchConditionReason returns the Reason string for the named
+// condition on the venado cluster.
+func observabilityFetchConditionReason(condType string) (string, error) {
+	jp := fmt.Sprintf(`jsonpath={.status.conditions[?(@.type=="%s")].reason}`, condType)
+	cmd := exec.Command("kubectl", "get", "openchamicluster",
+		observabilityVenadoClusterName,
+		"-n", observabilityVenadoCRNamespace,
+		"-o", jp,
+	)
+	out, err := utils.Run(cmd)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // observabilityFetchCondition returns the Status string for the named
 // condition on the venado cluster, or an error if missing.
 func observabilityFetchCondition(condType string) (string, error) {
@@ -192,25 +262,72 @@ var _ = Describe("Observability", Ordered, func() {
 
 	Context("E2E-11: Certificate Warning Event", func() {
 		It("fires a Warning Event when the TLS cert has <48h remaining", func() {
-			Skip("E2E-11: requires a test-only short-lived cert harness " +
-				"(monkey-patched cert-manager Certificate Duration or a hand-crafted " +
-				"self-signed Secret with notAfter ~1h from now). The <48h Warning " +
-				"path is exercised by the unit tests in " +
-				"internal/reconcilers/certificates_test.go. " +
-				"TODO(phase-15): wire up a deterministic short-lived Certificate " +
-				"so this assertion can run end-to-end against kind.")
+			By("pre-creating the per-cluster namespace so the Secret can land first")
+			Expect(observabilityKubectlApply(fmt.Sprintf(
+				"apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n",
+				observabilityVenadoNamespace,
+			))).To(Succeed(), "creating namespace %s", observabilityVenadoNamespace)
 
-			// Intended flow once the harness exists:
-			//   1. Pre-create a TLS Secret named observabilityCertSecretName in
-			//      observabilityVenadoNamespace whose tls.crt has notAfter set
-			//      to ~1h from now (well under the 48h warning gap).
-			//   2. Apply the venado cluster so the certificates reconciler picks
-			//      up the existing Secret instead of waiting on cert-manager.
-			//   3. Eventually the CertificatesValid condition's reason field
-			//      (read via kubectl get -o jsonpath) should return
-			//      "ExpirationImminent".
-			//   4. kubectl get events -n openchami-venado should include a
-			//      Warning event with reason=ExpirationImminent.
+			By("generating a self-signed cert with notAfter ~1h from now")
+			notAfter := time.Now().Add(time.Duration(observabilityShortLivedCertHours) * time.Hour)
+			secretYAML, err := observabilityShortLivedSecretYAML(
+				observabilityVenadoNamespace,
+				observabilityCertSecretName,
+				notAfter,
+			)
+			Expect(err).NotTo(HaveOccurred(), "generating short-lived cert")
+			Expect(observabilityKubectlApply(secretYAML)).To(Succeed(),
+				"applying pre-baked TLS Secret %s", observabilityCertSecretName)
+
+			By("applying the venado cluster so the certificates reconciler picks up the existing Secret")
+			Expect(observabilityApplyVenadoCluster()).To(Succeed(),
+				"failed to apply venado OpenCHAMICluster CR")
+
+			By("waiting for ConditionCertificatesValid reason=ExpirationImminent")
+			Eventually(func(g Gomega) {
+				out, ferr := observabilityFetchConditionReason("CertificatesValid")
+				g.Expect(ferr).NotTo(HaveOccurred(),
+					"failed to read CertificatesValid reason")
+				g.Expect(out).To(Equal("ExpirationImminent"),
+					"CertificatesValid reason should be ExpirationImminent for a <48h cert")
+			}).Should(Succeed())
+
+			By("waiting for a Warning Event with reason=ExpirationImminent")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "events",
+					"-n", observabilityVenadoNamespace,
+					"--field-selector", "reason=ExpirationImminent,type=Warning",
+					"-o", "jsonpath={.items[*].metadata.name}",
+				)
+				out, ferr := utils.Run(cmd)
+				g.Expect(ferr).NotTo(HaveOccurred(),
+					"kubectl get events failed")
+				g.Expect(strings.TrimSpace(out)).NotTo(BeEmpty(),
+					"expected at least one Warning Event with reason=ExpirationImminent")
+			}).Should(Succeed())
+
+			By("verifying status.certExpiryTime is within ~1h of the generated NotAfter")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "openchamicluster",
+					observabilityVenadoClusterName,
+					"-n", observabilityVenadoCRNamespace,
+					"-o", "jsonpath={.status.certExpiryTime}",
+				)
+				out, ferr := utils.Run(cmd)
+				g.Expect(ferr).NotTo(HaveOccurred(), "fetching certExpiryTime")
+				ts := strings.TrimSpace(out)
+				g.Expect(ts).NotTo(BeEmpty(), "status.certExpiryTime not set")
+				parsed, perr := time.Parse(time.RFC3339, ts)
+				g.Expect(perr).NotTo(HaveOccurred(),
+					"status.certExpiryTime not RFC3339: %q", ts)
+				skew := parsed.Sub(notAfter)
+				if skew < 0 {
+					skew = -skew
+				}
+				g.Expect(skew).To(BeNumerically("<", time.Minute),
+					"status.certExpiryTime %v drifted from generated notAfter %v",
+					parsed, notAfter)
+			}).Should(Succeed())
 		})
 	})
 
