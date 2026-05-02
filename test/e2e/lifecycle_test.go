@@ -409,8 +409,89 @@ var _ = Describe("Lifecycle", Ordered, func() {
 	})
 
 	Context("E2E-10 upgrade simulation", func() {
+		const (
+			pinnedName    = "pinnedcluster"
+			unpinnedName  = "frontier"
+			upgradeTo     = "0.2.0"
+			upgradeScript = "hack/local-dev/rebuild-operator.sh"
+		)
+
+		AfterEach(func() {
+			lifecycleDeleteCluster(pinnedName)
+			lifecycleDeleteCluster(unpinnedName)
+		})
+
 		It("leaves a pinned cluster untouched after operator restart with new version", func() {
-			Skip("E2E-10: requires operator-binary rebuild inside e2e harness; manual step")
+			lifecycleSkipIfNoRebuildScript(upgradeScript)
+
+			By("applying the unpinned cluster to discover the running operator's version")
+			lifecycleApplyCluster(unpinnedName, lifecycleDevVaultAddr, unpinnedName)
+			Eventually(func() bool {
+				return lifecycleClusterReady(unpinnedName)
+			}).WithTimeout(lifecycleClusterTimeout).
+				WithPolling(lifecycleClusterPolling).
+				Should(BeTrue(), "unpinned cluster never reached Ready before upgrade")
+			beforeVersion := lifecycleClusterManagedByVersion(unpinnedName)
+			Expect(beforeVersion).NotTo(BeEmpty(),
+				"unable to read operator version from %s/status.managedByVersion", unpinnedName)
+			Expect(beforeVersion).NotTo(Equal(upgradeTo),
+				"baseline version %q matches upgrade target — pick a different upgradeTo", beforeVersion)
+
+			By("applying the pinned cluster at the current operator version " + beforeVersion)
+			lifecycleApplyClusterWithChannel(pinnedName, lifecycleDevVaultAddr, pinnedName,
+				"pinned", beforeVersion)
+			Eventually(func() bool {
+				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionFalse &&
+					lifecycleConditionReason(pinnedName, "ReconcileActive") == "VersionPinned"
+			}).WithTimeout(lifecycleConditionTimeout).
+				WithPolling(lifecycleClusterPolling).
+				Should(BeTrue(), "pinned cluster did not settle on ReconcileActive=False/VersionPinned")
+
+			By("rebuilding the operator at version " + upgradeTo)
+			cmd := exec.Command(upgradeScript, upgradeTo)
+			output, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(),
+				"%s %s failed: %s", upgradeScript, upgradeTo, string(output))
+
+			By("waiting for the unpinned cluster to be re-managed by " + upgradeTo)
+			Eventually(func() string {
+				return lifecycleClusterManagedByVersion(unpinnedName)
+			}).WithTimeout(lifecycleClusterTimeout).
+				WithPolling(lifecycleClusterPolling).
+				Should(Equal(upgradeTo),
+					"unpinned cluster should have been re-managed by the new operator")
+
+			By("verifying the pinned cluster's ManagedByVersion did not advance")
+			Consistently(func() string {
+				return lifecycleClusterManagedByVersion(pinnedName)
+			}).WithTimeout(30*time.Second).
+				WithPolling(lifecycleClusterPolling).
+				Should(Equal(beforeVersion),
+					"pinned cluster's ManagedByVersion changed across upgrade")
+			Expect(lifecycleConditionStatus(pinnedName, "ReconcileActive")).
+				To(Equal(lifecycleConditionFalse),
+					"pinned cluster ReconcileActive should remain False after upgrade")
 		})
 	})
 })
+
+// lifecycleSkipIfNoRebuildScript skips the calling spec when the rebuild
+// helper isn't on disk — keeps the test honest in environments without a
+// kind cluster wired up.
+func lifecycleSkipIfNoRebuildScript(path string) {
+	if out, err := exec.Command("test", "-x", path).CombinedOutput(); err != nil {
+		Skip(fmt.Sprintf("E2E-10: %s not executable in this environment: %s", path, string(out)))
+	}
+}
+
+// lifecycleClusterManagedByVersion returns the cluster's
+// status.managedByVersion or "" if unset.
+func lifecycleClusterManagedByVersion(name string) string {
+	cmd := exec.Command("kubectl", "get", "openchamicluster", name,
+		"-o", "jsonpath={.status.managedByVersion}")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
