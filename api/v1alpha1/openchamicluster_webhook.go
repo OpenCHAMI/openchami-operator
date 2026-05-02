@@ -235,20 +235,22 @@ func (w *OpenCHAMIClusterWebhook) validate(ctx context.Context, obj *OpenCHAMICl
 	}
 
 	// 4. ClusterName uniqueness across the cluster.
+	// Fail closed: invariants #2 (namespace isolation) and #4 (DHCP node
+	// exclusivity) both depend on this check. A transient list failure
+	// becomes a transient admission failure (failurePolicy=Fail) — the
+	// user retries — which is vastly safer than admitting a possible
+	// duplicate.
 	others, listErr := w.listOtherClusters(ctx, obj)
 	if listErr != nil {
-		// Don't fail admission on a transient list error; log and skip
-		// uniqueness checks. Other invariants are still enforced.
-		openchamiclusterlog.Error(listErr, "listing OpenCHAMIClusters for uniqueness check; skipping")
-	} else {
-		for i := range others {
-			if others[i].Spec.ClusterName == obj.Spec.ClusterName {
-				allErrs = append(allErrs, field.Duplicate(
-					specPath.Child("clusterName"),
-					obj.Spec.ClusterName,
-				))
-				break
-			}
+		return nil, fmt.Errorf("listing OpenCHAMIClusters for uniqueness check: %w", listErr)
+	}
+	for i := range others {
+		if others[i].Spec.ClusterName == obj.Spec.ClusterName {
+			allErrs = append(allErrs, field.Duplicate(
+				specPath.Child("clusterName"),
+				obj.Spec.ClusterName,
+			))
+			break
 		}
 	}
 
@@ -274,15 +276,13 @@ func (w *OpenCHAMIClusterWebhook) validate(ctx context.Context, obj *OpenCHAMICl
 			}
 
 			// 7. nodeSelector must be unique across clusters.
-			if listErr == nil {
-				for i := range others {
-					if reflect.DeepEqual(others[i].Spec.Services.CoreDHCP.NodeSelector, obj.Spec.Services.CoreDHCP.NodeSelector) {
-						allErrs = append(allErrs, field.Duplicate(
-							dhcpPath.Child("nodeSelector"),
-							obj.Spec.Services.CoreDHCP.NodeSelector,
-						))
-						break
-					}
+			for i := range others {
+				if reflect.DeepEqual(others[i].Spec.Services.CoreDHCP.NodeSelector, obj.Spec.Services.CoreDHCP.NodeSelector) {
+					allErrs = append(allErrs, field.Duplicate(
+						dhcpPath.Child("nodeSelector"),
+						obj.Spec.Services.CoreDHCP.NodeSelector,
+					))
+					break
 				}
 			}
 		}
