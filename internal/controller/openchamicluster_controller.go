@@ -149,8 +149,8 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.NetworkPoliciesReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.TopologyReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.ServiceMonitorReconciler{Client: r.Client, Recorder: r.Recorder},
-		// Phase 3:  logbucket (deferred to phase 12 with funicular)
-		// Phase 12: funicular
+		&reconcilers.LogBucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: r.S3Client},
+		&reconcilers.FunicularReconciler{Client: r.Client, Recorder: r.Recorder},
 	}
 
 	var longestRequeue time.Duration
@@ -261,6 +261,10 @@ func (r *OpenCHAMIClusterReconciler) reconcileDelete(ctx context.Context, cluste
 		bucket := reconcilers.BootBucketName(cluster)
 		if err := r.S3Client.DeleteBucket(ctx, bucket); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting s3 bucket: %w", err)
+		}
+		logBucket := reconcilers.LogBucketName(cluster)
+		if err := r.S3Client.DeleteBucket(ctx, logBucket); err != nil {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting log s3 bucket: %w", err)
 		}
 	}
 

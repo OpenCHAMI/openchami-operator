@@ -46,6 +46,11 @@ const (
 	testProbeLabelTrue  = "true"
 	testNodeAName       = "node-a"
 	testProbeContainer  = "probe"
+
+	// testS3Endpoint is the placeholder ObjectStorage.Endpoint baked into
+	// newCluster(). Centralised here so test asserts can reference the
+	// same value without tripping goconst.
+	testS3Endpoint = "http://s3.test:9000"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -87,7 +92,7 @@ func newCluster(name string) *openahamiv1alpha1.OpenCHAMICluster {
 					AuthMethod: openahamiv1alpha1.VaultAuthMethodKubernetes,
 				},
 				ObjectStorage: openahamiv1alpha1.ObjectStorageSpec{
-					Endpoint: "http://s3.test:9000",
+					Endpoint: testS3Endpoint,
 				},
 			},
 			Services: openahamiv1alpha1.ServicesSpec{

@@ -114,7 +114,7 @@ func TestTopologyReconciler_AppliesConfigMap(t *testing.T) {
 	if spec.Services.BootService.Endpoint != wantBoot {
 		t.Errorf("boot-service endpoint: want %q, got %q", wantBoot, spec.Services.BootService.Endpoint)
 	}
-	if spec.Services.BootService.S3Endpoint != "http://s3.test:9000" {
+	if spec.Services.BootService.S3Endpoint != testS3Endpoint {
 		t.Errorf("boot-service s3Endpoint: got %q", spec.Services.BootService.S3Endpoint)
 	}
 	if spec.Services.BootService.S3Bucket != "alpha-boot-images" {
