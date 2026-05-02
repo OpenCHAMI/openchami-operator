@@ -46,7 +46,6 @@ import (
 	"github.com/openchami/openchami-operator/internal/controller"
 	"github.com/openchami/openchami-operator/internal/vault"
 	"github.com/openchami/openchami-operator/internal/version"
-	webhookv1alpha1 "github.com/openchami/openchami-operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -212,7 +211,7 @@ func main() {
 	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupOpenCHAMIClusterWebhookWithManager(mgr); err != nil {
+		if err := openchamiv1alpha1.SetupOpenCHAMIClusterWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "OpenCHAMICluster")
 			os.Exit(1)
 		}
