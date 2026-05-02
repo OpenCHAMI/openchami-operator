@@ -66,7 +66,7 @@ manifests: controller-gen ## Generate CRD and webhook manifests
 	  rbac:roleName=manager-role \
 	  crd \
 	  webhook \
-	  paths="./api/..." \
+	  paths="./api/...;./internal/controller/..." \
 	  output:crd:artifacts:config=config/crd/bases \
 	  output:rbac:artifacts:config=config/rbac \
 	  output:webhook:artifacts:config=config/webhook
