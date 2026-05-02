@@ -71,7 +71,7 @@ func (r *NamespaceReconciler) buildNamespace(cluster *openahamiv1alpha1.OpenCHAM
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				"kubernetes.io/metadata.name":        name,
+				kubernetesMetadataNameLabel:          name,
 				"openchami.org/cluster":              cluster.Spec.ClusterName,
 				"pod-security.kubernetes.io/enforce": "restricted",
 			},

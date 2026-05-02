@@ -66,6 +66,10 @@ const (
 
 	// ConditionMagellanReady is true when the Magellan CronJob exists.
 	ConditionMagellanReady = "MagellanReady"
+
+	// ConditionNetworkPoliciesReady is true when all per-cluster
+	// NetworkPolicies have been applied to the cluster namespace.
+	ConditionNetworkPoliciesReady = "NetworkPoliciesReady"
 )
 
 // Reasons used across multiple conditions.

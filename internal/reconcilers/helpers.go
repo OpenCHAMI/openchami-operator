@@ -143,7 +143,7 @@ func VaultEgressPeer(vaultAddress string) (networkingv1.NetworkPolicyPeer, error
 		nsSelector := &networkingv1.NetworkPolicyPeer{
 			NamespaceSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"kubernetes.io/metadata.name": ns,
+					kubernetesMetadataNameLabel: ns,
 				},
 			},
 		}
@@ -157,6 +157,53 @@ func VaultEgressPeer(vaultAddress string) (networkingv1.NetworkPolicyPeer, error
 	}
 	if len(addrs) == 0 {
 		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("vault host %q resolved to no addresses", host)
+	}
+	cidr := addrs[0] + "/32"
+	return networkingv1.NetworkPolicyPeer{
+		IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+	}, nil
+}
+
+// VersityGWEgressPeer returns the appropriate NetworkPolicyPeer for VersityGW
+// (S3-compatible object store) egress.
+//
+// If the endpoint resolves to a .svc.cluster.local hostname, a
+// namespaceSelector peer is returned (same-cluster deployment).
+// Otherwise the hostname is resolved to an IP and an ipBlock /32 peer
+// is returned (cross-cluster or external deployment).
+//
+// VersityGW is never deployed by this operator (invariant #1); this helper
+// exists solely so the funicular and boot-service NetworkPolicies can permit
+// egress to whichever location the cluster admin has provisioned.
+func VersityGWEgressPeer(endpoint string) (networkingv1.NetworkPolicyPeer, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("parsing versitygw endpoint: %w", err)
+	}
+	host := u.Hostname()
+
+	if strings.HasSuffix(host, ".svc.cluster.local") {
+		parts := strings.Split(host, ".")
+		// parts: [service, namespace, svc, cluster, local]
+		if len(parts) < 5 {
+			return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("unexpected versitygw svc hostname: %s", host)
+		}
+		ns := parts[1]
+		return networkingv1.NetworkPolicyPeer{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					kubernetesMetadataNameLabel: ns,
+				},
+			},
+		}, nil
+	}
+
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("resolving versitygw host %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("versitygw host %q resolved to no addresses", host)
 	}
 	cidr := addrs[0] + "/32"
 	return networkingv1.NetworkPolicyPeer{

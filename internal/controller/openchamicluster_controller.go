@@ -51,6 +51,7 @@ const clusterFinalizer = "openchami.org/cluster-protection"
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=securitypolicies;backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // OpenCHAMIClusterReconciler reconciles an OpenCHAMICluster object.
 type OpenCHAMIClusterReconciler struct {
@@ -137,8 +138,8 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.MagellanReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.CertificatesReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.GatewayReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.NetworkPoliciesReconciler{Client: r.Client, Recorder: r.Recorder},
 		// Phase 3:  logbucket (deferred to phase 12 with funicular)
-		// Phase 8:  networkpolicies
 		// Phase 9:  topology
 		// Phase 12: funicular
 	}
