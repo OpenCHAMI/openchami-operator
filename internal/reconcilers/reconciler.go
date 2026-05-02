@@ -15,7 +15,7 @@ import (
 	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
-// subReconciler is implemented by each concern-specific reconciler.
+// SubReconciler is implemented by each concern-specific reconciler.
 //
 // Implementation rules (enforced by validate-invariants.sh):
 //   - Must be idempotent: calling Reconcile twice has no additional effect.
@@ -26,7 +26,7 @@ import (
 //   - Must use helpers.RecordConditionEvent for all Events.
 //   - Must not call log.FromContext directly.
 //   - Must not call recorder.Event directly.
-type subReconciler interface { //nolint:unused // implemented in Phases 2–12
+type SubReconciler interface {
 	// Reconcile creates, updates, or deletes Kubernetes resources for this
 	// sub-domain. Returns a ctrl.Result instructing the controller when to
 	// requeue, and any error that should trigger an immediate requeue.

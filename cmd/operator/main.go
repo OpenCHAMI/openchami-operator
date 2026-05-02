@@ -37,6 +37,7 @@ import (
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/controller"
+	"github.com/openchami/openchami-operator/internal/version"
 	webhookv1alpha1 "github.com/openchami/openchami-operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
@@ -180,8 +181,11 @@ func main() {
 	}
 
 	if err := (&controller.OpenCHAMIClusterReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("openchamicluster-controller"),
+		DefaultImages: version.DefaultImages(),
+		DryRun:        os.Getenv("OPENCHAMI_DRY_RUN") == "true",
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "openchamicluster")
 		os.Exit(1)
