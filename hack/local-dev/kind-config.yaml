@@ -1,0 +1,21 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: openchami-dev
+nodes:
+  - role: control-plane
+    # Pre-label the node for network probe tests.
+    # In a real deployment these labels are applied by the probe DaemonSet.
+    # In tests we set them directly so CoreDHCP and Magellan can schedule.
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "openchami.org/testcluster/provision-network-ready=true,openchami.org/testcluster/bmc-network-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 8443
+        protocol: TCP

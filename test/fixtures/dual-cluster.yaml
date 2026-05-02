@@ -1,0 +1,111 @@
+# Two clusters with distinct network selectors.
+# Used to verify namespace isolation and Vault path isolation.
+# Apply with: kubectl apply -f test/fixtures/dual-cluster.yaml
+---
+apiVersion: openchami.org/v1alpha1
+kind: OpenCHAMICluster
+metadata:
+  name: venado
+  namespace: default
+spec:
+  clusterName: venado
+  domain: venado.local
+
+  platform:
+    vault:
+      address: "http://localhost:8200"
+      authMethod: appRole
+      appRoleSecretRef:
+        name: venado-approle
+    objectStorage:
+      endpoint: "http://localhost:4566"
+      tlsInsecure: true
+
+  networkProbe:
+    enabled: false
+
+  services:
+    smd:
+      replicas: 1
+    tokensmith:
+      oidcProvider: vault
+    bootService:
+      replicas: 1
+    metadataService:
+      replicas: 1
+    coreDHCP:
+      nodeSelector:
+        openchami.org/venado/provision-network-ready: "true"
+      leaseRanges:
+        - subnet: 10.100.1.0/24
+          start: 10.100.1.100
+          end: 10.100.1.200
+    magellan:
+      bmcSubnet: 10.100.2.0/24
+      nodeSelector:
+        openchami.org/venado/bmc-network-ready: "true"
+
+  database:
+    instances: 1
+    storageSize: 5Gi
+
+  logging:
+    enabled: true
+    flushIntervalSeconds: 60
+
+  operatorChannel: stable
+
+---
+apiVersion: openchami.org/v1alpha1
+kind: OpenCHAMICluster
+metadata:
+  name: frontier
+  namespace: default
+spec:
+  clusterName: frontier
+  domain: frontier.local
+
+  platform:
+    vault:
+      address: "http://localhost:8200"
+      authMethod: appRole
+      appRoleSecretRef:
+        name: frontier-approle
+    objectStorage:
+      endpoint: "http://localhost:4566"
+      tlsInsecure: true
+
+  networkProbe:
+    enabled: false
+
+  services:
+    smd:
+      replicas: 1
+    tokensmith:
+      oidcProvider: vault
+    bootService:
+      replicas: 1
+    metadataService:
+      replicas: 1
+    coreDHCP:
+      # Different nodeSelector from venado — no conflict
+      nodeSelector:
+        openchami.org/frontier/provision-network-ready: "true"
+      leaseRanges:
+        - subnet: 10.200.1.0/24
+          start: 10.200.1.100
+          end: 10.200.1.200
+    magellan:
+      bmcSubnet: 10.200.2.0/24
+      nodeSelector:
+        openchami.org/frontier/bmc-network-ready: "true"
+
+  database:
+    instances: 1
+    storageSize: 5Gi
+
+  logging:
+    enabled: true
+    flushIntervalSeconds: 60
+
+  operatorChannel: stable

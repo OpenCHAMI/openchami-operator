@@ -1,0 +1,39 @@
+/*
+Copyright 2026 OpenCHAMI Authors.
+Licensed under the Apache License, Version 2.0.
+*/
+
+// Package reconcilers contains sub-reconcilers for each OpenCHAMICluster concern.
+package reconcilers
+
+import (
+	"context"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+)
+
+// subReconciler is implemented by each concern-specific reconciler.
+//
+// Implementation rules (enforced by validate-invariants.sh):
+//   - Must be idempotent: calling Reconcile twice has no additional effect.
+//   - Must call logging.Enrich() at the top of Reconcile().
+//   - Must update the relevant condition on cluster.Status before returning.
+//   - Must use server-side apply (client.Apply). Never client.Create then client.Update.
+//   - Must wrap errors: fmt.Errorf("reconciling X: %w", err).
+//   - Must use helpers.RecordConditionEvent for all Events.
+//   - Must not call log.FromContext directly.
+//   - Must not call recorder.Event directly.
+type subReconciler interface { //nolint:unused // implemented in Phases 2–12
+	// Reconcile creates, updates, or deletes Kubernetes resources for this
+	// sub-domain. Returns a ctrl.Result instructing the controller when to
+	// requeue, and any error that should trigger an immediate requeue.
+	Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error)
+
+	// Describe returns the Kubernetes objects this reconciler would apply,
+	// in apply order, without actually applying them. Used by
+	// `ochami-admin describe`. Must not contact any external service.
+	Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error)
+}
