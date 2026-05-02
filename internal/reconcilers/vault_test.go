@@ -13,6 +13,7 @@ import (
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -67,6 +68,9 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := egv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("adding envoy gateway scheme: %v", err)
+	}
+	if err := monitoringv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("adding prometheus-operator monitoring scheme: %v", err)
 	}
 	return scheme
 }

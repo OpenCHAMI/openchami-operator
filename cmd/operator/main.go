@@ -26,6 +26,7 @@ import (
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -44,6 +45,7 @@ import (
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/controller"
+	"github.com/openchami/openchami-operator/internal/status"
 	"github.com/openchami/openchami-operator/internal/vault"
 	"github.com/openchami/openchami-operator/internal/version"
 	// +kubebuilder:scaffold:imports
@@ -63,6 +65,7 @@ func init() {
 	utilruntime.Must(gwapiv1.Install(scheme))
 	utilruntime.Must(cmv1.AddToScheme(scheme))
 	utilruntime.Must(egv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(monitoringv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -197,6 +200,12 @@ func main() {
 		setupLog.Error(err, "Failed to build vault client; vault sub-reconciler will report Unreachable")
 	}
 
+	//nolint:staticcheck // legacy events API; migration to events.EventRecorder is a future cleanup
+	reporter := &status.Reporter{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorderFor("openchami-operator"),
+	}
+
 	if err := (&controller.OpenCHAMIClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -205,6 +214,7 @@ func main() {
 		VaultClient:   vaultClient,
 		DefaultImages: version.DefaultImages(),
 		DryRun:        os.Getenv("OPENCHAMI_DRY_RUN") == "true",
+		Reporter:      reporter,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "openchamicluster")
 		os.Exit(1)

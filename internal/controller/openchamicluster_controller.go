@@ -8,6 +8,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -31,6 +32,7 @@ import (
 	"github.com/openchami/openchami-operator/internal/logging"
 	"github.com/openchami/openchami-operator/internal/reconcilers"
 	"github.com/openchami/openchami-operator/internal/s3"
+	"github.com/openchami/openchami-operator/internal/status"
 	"github.com/openchami/openchami-operator/internal/vault"
 	"github.com/openchami/openchami-operator/internal/version"
 )
@@ -52,6 +54,7 @@ const clusterFinalizer = "openchami.org/cluster-protection"
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=securitypolicies;backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 // OpenCHAMIClusterReconciler reconciles an OpenCHAMICluster object.
 type OpenCHAMIClusterReconciler struct {
@@ -62,6 +65,11 @@ type OpenCHAMIClusterReconciler struct {
 	S3Client      s3.Client
 	DefaultImages version.ImageConfig
 	DryRun        bool
+
+	// Reporter centralises post-reconcile phase computation and Prometheus
+	// metric updates. Optional in tests; the controller falls back to its
+	// existing aggregator when nil so unit tests need not wire it.
+	Reporter *status.Reporter
 }
 
 func (r *OpenCHAMIClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -140,6 +148,7 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.GatewayReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.NetworkPoliciesReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.TopologyReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.ServiceMonitorReconciler{Client: r.Client, Recorder: r.Recorder},
 		// Phase 3:  logbucket (deferred to phase 12 with funicular)
 		// Phase 12: funicular
 	}
@@ -159,7 +168,11 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 			}
 			continue
 		}
+		start := time.Now()
 		result, err := sub.Reconcile(ctx, cluster)
+		if r.Reporter != nil {
+			status.ObserveReconcile(cluster.Spec.ClusterName, subName(sub), time.Since(start))
+		}
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -170,7 +183,19 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 
 	r.aggregateServicesReady(cluster)
 	cluster.Status.ManagedByVersion = version.Version
+
+	if r.Reporter != nil {
+		r.Reporter.ComputeAndSetPhase(cluster)
+		r.Reporter.UpdateMetrics(cluster)
+	}
+
 	return ctrl.Result{RequeueAfter: longestRequeue}, nil
+}
+
+// subName returns the leaf type name of a sub-reconciler (e.g. "VaultReconciler"
+// from *reconcilers.VaultReconciler) for use as a metric label.
+func subName(sub reconcilers.SubReconciler) string {
+	return strings.TrimPrefix(fmt.Sprintf("%T", sub), "*reconcilers.")
 }
 
 // aggregateServicesReady computes ConditionServicesReady from per-service
