@@ -122,7 +122,9 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 	subs := []reconcilers.SubReconciler{
 		&reconcilers.NamespaceReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.RBACReconciler{Client: r.Client, Recorder: r.Recorder},
-		// Phase 3:  vault, bucket, logbucket
+		&reconcilers.VaultReconciler{Client: r.Client, Recorder: r.Recorder, VaultClient: r.VaultClient},
+		&reconcilers.BucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: r.S3Client},
+		// Phase 3:  logbucket (deferred to phase 12 with funicular)
 		// Phase 4:  database
 		// Phase 5:  smd, tokensmith, bootService, metadataService
 		// Phase 6:  networkprobe, coredhcp, magellan

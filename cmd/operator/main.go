@@ -17,10 +17,12 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
 
+	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -37,6 +39,7 @@ import (
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/controller"
+	"github.com/openchami/openchami-operator/internal/vault"
 	"github.com/openchami/openchami-operator/internal/version"
 	webhookv1alpha1 "github.com/openchami/openchami-operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
@@ -51,6 +54,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(openchamiv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(vsov1beta1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -180,10 +184,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	vaultClient, err := buildVaultClient()
+	if err != nil {
+		setupLog.Error(err, "Failed to build vault client; vault sub-reconciler will report Unreachable")
+	}
+
 	if err := (&controller.OpenCHAMIClusterReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		//nolint:staticcheck // legacy events API; migration to events.EventRecorder is a future cleanup
 		Recorder:      mgr.GetEventRecorderFor("openchamicluster-controller"),
+		VaultClient:   vaultClient,
 		DefaultImages: version.DefaultImages(),
 		DryRun:        os.Getenv("OPENCHAMI_DRY_RUN") == "true",
 	}).SetupWithManager(mgr); err != nil {
@@ -213,4 +224,28 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// buildVaultClient constructs a vault.Client from environment variables.
+// Returns nil with no error when VAULT_ADDR is unset, allowing the operator
+// to start in dev environments without Vault. The vault sub-reconciler will
+// then report VaultConfigured=False/Error until config is provided.
+func buildVaultClient() (vault.Client, error) {
+	addr := os.Getenv("VAULT_ADDR")
+	if addr == "" {
+		return nil, nil
+	}
+	cfg := vault.Config{
+		Address:    addr,
+		AuthMethod: os.Getenv("VAULT_AUTH_METHOD"),
+		K8sRole:    os.Getenv("VAULT_KUBERNETES_ROLE"),
+	}
+	if cfg.AuthMethod == "" {
+		cfg.AuthMethod = "kubernetes"
+	}
+	if cfg.AuthMethod == "appRole" {
+		cfg.AppRoleID = os.Getenv("VAULT_APPROLE_ROLE_ID")
+		cfg.AppRoleSecretID = os.Getenv("VAULT_APPROLE_SECRET_ID")
+	}
+	return vault.NewClient(context.Background(), cfg)
 }
