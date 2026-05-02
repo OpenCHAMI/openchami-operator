@@ -129,8 +129,10 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.TokensmithReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.BootServiceReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.MetadataServiceReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.NetworkProbeReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.CoreDHCPReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.MagellanReconciler{Client: r.Client, Recorder: r.Recorder},
 		// Phase 3:  logbucket (deferred to phase 12 with funicular)
-		// Phase 6:  networkprobe, coredhcp, magellan
 		// Phase 7:  gateway, certificates
 		// Phase 8:  networkpolicies
 		// Phase 9:  topology

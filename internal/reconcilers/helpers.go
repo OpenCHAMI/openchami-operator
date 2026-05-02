@@ -52,14 +52,14 @@ func EffectiveNodeSelector(
 	probeType string, // "provision" or "bmc"
 ) map[string]string {
 	if cluster.Spec.NetworkProbe.Enabled {
-		key := fmt.Sprintf("openchami.org/%s/%s-network-ready",
+		key := fmt.Sprintf(probeNetworkReadyLabelFmt,
 			cluster.Spec.ClusterName, probeType)
-		return map[string]string{key: "true"}
+		return map[string]string{key: probeLabelValueTrue}
 	}
 	switch probeType {
-	case "provision":
+	case probeTypeProvision:
 		return cluster.Spec.Services.CoreDHCP.NodeSelector
-	case "bmc":
+	case probeTypeBMC:
 		return cluster.Spec.Services.Magellan.NodeSelector
 	}
 	return nil

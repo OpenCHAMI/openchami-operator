@@ -29,6 +29,18 @@ import (
 const (
 	testClusterRed  = "red"
 	testClusterBlue = "blue"
+
+	// Shared test fixture values used across the network/coredhcp/magellan
+	// test files. Extracted to satisfy goconst.
+	testProvisionSubnet = "10.0.0.0/24"
+	testBMCSubnet       = "10.1.0.0/24"
+	testNodeRoleKey     = "node-role"
+	testNodeRoleDHCP    = "dhcp"
+	testNodeRoleBMC     = "bmc"
+	testPriorityClass   = "system-node-critical"
+	testProbeLabelTrue  = "true"
+	testNodeAName       = "node-a"
+	testProbeContainer  = "probe"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
