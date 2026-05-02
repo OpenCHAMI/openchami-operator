@@ -37,10 +37,10 @@ const (
 
 // vssNames lists the suffixes of every VaultStaticSecret produced by the vault sub-reconciler.
 var vssNames = []string{
-	"db-credentials",
-	"s3-credentials",
-	"log-credentials",
-	"tokensmith-oidc",
+	SuffixDBCredentials,
+	SuffixS3Credentials,
+	SuffixLogCredentials,
+	SuffixTokensmithOIDC,
 }
 
 // VaultReconciler ensures Vault paths, policies, and VSO resources exist.
@@ -165,7 +165,7 @@ func (r *VaultReconciler) ensureClusterSecrets(ctx context.Context, paths vault.
 		keys []string
 	}
 	for _, s := range []seed{
-		{paths.DBCredentials, []string{"SMD_DB_PASSWORD", "BOOT_SERVICE_DB_PASSWORD"}},
+		{paths.DBCredentials, []string{VaultKeySMDPassword, VaultKeyBootServicePassword}},
 		{paths.S3Credentials, []string{"access_key", "secret_key"}},
 		{paths.LogCredentials, []string{"access_key", "secret_key"}},
 		{paths.TokensmithOIDC, []string{"client_secret"}},

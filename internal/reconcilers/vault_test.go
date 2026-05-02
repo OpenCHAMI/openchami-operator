@@ -122,7 +122,7 @@ func TestVaultReconciler_NoOverwriteExistingSecrets(t *testing.T) {
 	v := vaultfake.NewClient()
 
 	paths := vault.Paths("gamma")
-	v.Secrets[paths.DBCredentials] = map[string]any{"SMD_DB_PASSWORD": "original-value"}
+	v.Secrets[paths.DBCredentials] = map[string]any{VaultKeySMDPassword: "original-value"}
 
 	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
 	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
@@ -130,8 +130,8 @@ func TestVaultReconciler_NoOverwriteExistingSecrets(t *testing.T) {
 	}
 
 	got := v.Secrets[paths.DBCredentials]
-	if got["SMD_DB_PASSWORD"] != "original-value" {
-		t.Errorf("expected original DB password preserved, got %v", got["SMD_DB_PASSWORD"])
+	if got[VaultKeySMDPassword] != "original-value" {
+		t.Errorf("expected original DB password preserved, got %v", got[VaultKeySMDPassword])
 	}
 }
 
@@ -156,7 +156,7 @@ func TestVaultReconciler_TwoClustersIsolated(t *testing.T) {
 	}
 	v.AssertSecretExists(t, red.DBCredentials)
 	v.AssertSecretExists(t, blue.DBCredentials)
-	if v.Secrets[red.DBCredentials]["SMD_DB_PASSWORD"] == v.Secrets[blue.DBCredentials]["SMD_DB_PASSWORD"] {
+	if v.Secrets[red.DBCredentials][VaultKeySMDPassword] == v.Secrets[blue.DBCredentials][VaultKeySMDPassword] {
 		t.Errorf("expected distinct random passwords across clusters")
 	}
 }

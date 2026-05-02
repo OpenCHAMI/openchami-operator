@@ -70,6 +70,39 @@ func ClusterNamespace(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 	return "openchami-" + cluster.Spec.ClusterName
 }
 
+// SecretName returns the canonical name for a per-cluster Kubernetes Secret
+// (also used as the VSO destination Secret name).
+func SecretName(cluster *openahamiv1alpha1.OpenCHAMICluster, suffix string) string {
+	return "openchami-" + cluster.Spec.ClusterName + "-" + suffix
+}
+
+// SuffixDBCredentials, SuffixS3Credentials, etc. name the standard
+// VSO-synced secrets in each cluster namespace.
+const (
+	SuffixDBCredentials  = "db-credentials"
+	SuffixS3Credentials  = "s3-credentials"
+	SuffixLogCredentials = "log-credentials"
+	SuffixTokensmithOIDC = "tokensmith-oidc"
+
+	// VaultKeySMDPassword and VaultKeyBootServicePassword are the keys
+	// inside the db-credentials KV/Secret.
+	VaultKeySMDPassword         = "SMD_DB_PASSWORD"
+	VaultKeyBootServicePassword = "BOOT_SERVICE_DB_PASSWORD"
+)
+
+// Canonical service names. Used as ServiceAccount names, database owners,
+// and component-specific secret keys.
+const (
+	ServiceSMD             = "smd"
+	ServiceTokensmith      = "tokensmith"
+	ServiceBootService     = "boot-service"
+	ServiceMetadataService = "metadata-service"
+	ServiceCoreDHCP        = "coredhcp"
+	ServiceMagellan        = "magellan"
+	ServiceNetworkProbe    = "network-probe"
+	ServiceFunicular       = "funicular-collector"
+)
+
 // BootBucketName returns the S3 bucket name for boot images.
 func BootBucketName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 	if cluster.Spec.Platform.ObjectStorage.Bucket != "" {

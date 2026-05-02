@@ -28,14 +28,14 @@ const (
 
 // serviceAccountNames lists every SA the operator creates in the cluster namespace.
 var serviceAccountNames = []string{
-	"smd",
-	"tokensmith",
-	"boot-service",
-	"metadata-service",
-	"coredhcp",
-	"magellan",
-	"network-probe",
-	"funicular-collector",
+	ServiceSMD,
+	ServiceTokensmith,
+	ServiceBootService,
+	ServiceMetadataService,
+	ServiceCoreDHCP,
+	ServiceMagellan,
+	ServiceNetworkProbe,
+	ServiceFunicular,
 	configReaderName,
 }
 
