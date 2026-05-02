@@ -125,8 +125,11 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.VaultReconciler{Client: r.Client, Recorder: r.Recorder, VaultClient: r.VaultClient},
 		&reconcilers.BucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: r.S3Client},
 		&reconcilers.DatabaseReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.SMDReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.TokensmithReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.BootServiceReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.MetadataServiceReconciler{Client: r.Client, Recorder: r.Recorder},
 		// Phase 3:  logbucket (deferred to phase 12 with funicular)
-		// Phase 5:  smd, tokensmith, bootService, metadataService
 		// Phase 6:  networkprobe, coredhcp, magellan
 		// Phase 7:  gateway, certificates
 		// Phase 8:  networkpolicies
@@ -134,6 +137,7 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		// Phase 12: funicular
 	}
 
+	var longestRequeue time.Duration
 	for _, sub := range subs {
 		if r.DryRun {
 			objs, err := sub.Describe(cluster)
@@ -152,13 +156,53 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if result != (ctrl.Result{}) {
-			return result, nil
+		if result.RequeueAfter > longestRequeue {
+			longestRequeue = result.RequeueAfter
 		}
 	}
 
+	r.aggregateServicesReady(cluster)
 	cluster.Status.ManagedByVersion = version.Version
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: longestRequeue}, nil
+}
+
+// aggregateServicesReady computes ConditionServicesReady from per-service
+// readiness reported by each Phase 5 sub-reconciler in cluster.Status.Services.
+// True when every enabled service reports Ready; otherwise False with a list
+// of pending services in the message.
+func (r *OpenCHAMIClusterReconciler) aggregateServicesReady(cluster *openahamiv1alpha1.OpenCHAMICluster) {
+	enabled := map[string]bool{
+		reconcilers.ServiceSMD:             cluster.Spec.Services.SMD.Enabled,
+		reconcilers.ServiceTokensmith:      cluster.Spec.Services.Tokensmith.Enabled,
+		reconcilers.ServiceBootService:     cluster.Spec.Services.BootService.Enabled,
+		reconcilers.ServiceMetadataService: cluster.Spec.Services.MetadataService.Enabled,
+	}
+
+	var pending []string
+	for name, on := range enabled {
+		if !on {
+			continue
+		}
+		st, ok := cluster.Status.Services[name]
+		if !ok || !st.Ready {
+			pending = append(pending, name)
+		}
+	}
+
+	cond := metav1.Condition{
+		Type:               conditions.ConditionServicesReady,
+		ObservedGeneration: cluster.Generation,
+	}
+	if len(pending) == 0 {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = conditions.ReasonReady
+		cond.Message = "all enabled services report Ready"
+	} else {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = conditions.ReasonProvisioning
+		cond.Message = fmt.Sprintf("waiting on services: %v", pending)
+	}
+	apimeta.SetStatusCondition(&cluster.Status.Conditions, cond)
 }
 
 func (r *OpenCHAMIClusterReconciler) reconcileDelete(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {

@@ -24,6 +24,13 @@ import (
 	vaultfake "github.com/openchami/openchami-operator/internal/vault/fake"
 )
 
+// Shared fixture cluster names used across reconciler tests. Extracted to
+// satisfy goconst across sibling test files.
+const (
+	testClusterRed  = "red"
+	testClusterBlue = "blue"
+)
+
 func newScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -140,7 +147,7 @@ func TestVaultReconciler_TwoClustersIsolated(t *testing.T) {
 	v := vaultfake.NewClient()
 	rec := record.NewFakeRecorder(20)
 
-	for _, name := range []string{"red", "blue"} {
+	for _, name := range []string{testClusterRed, testClusterBlue} {
 		cluster := newCluster(name)
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
 		r := &VaultReconciler{Client: c, Recorder: rec, VaultClient: v}
@@ -149,8 +156,8 @@ func TestVaultReconciler_TwoClustersIsolated(t *testing.T) {
 		}
 	}
 
-	red := vault.Paths("red")
-	blue := vault.Paths("blue")
+	red := vault.Paths(testClusterRed)
+	blue := vault.Paths(testClusterBlue)
 	if red.SecretPrefix == blue.SecretPrefix {
 		t.Fatalf("two clusters share secret prefix %q", red.SecretPrefix)
 	}

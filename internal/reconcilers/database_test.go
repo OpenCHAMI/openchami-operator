@@ -185,7 +185,7 @@ func TestDatabaseReconciler_PostInitJobOnceHealthy(t *testing.T) {
 
 func TestDatabaseReconciler_TwoClustersIsolated(t *testing.T) {
 	scheme := newDBScheme(t)
-	for _, name := range []string{"red", "blue"} {
+	for _, name := range []string{testClusterRed, testClusterBlue} {
 		cluster := newCluster(name)
 		creds := newDBCredsSecret(cluster)
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, creds).Build()
