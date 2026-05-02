@@ -22,8 +22,11 @@ import (
 	"flag"
 	"os"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
+	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -58,6 +61,9 @@ func init() {
 	utilruntime.Must(openchamiv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(vsov1beta1.AddToScheme(scheme))
 	utilruntime.Must(cnpgv1.AddToScheme(scheme))
+	utilruntime.Must(gwapiv1.Install(scheme))
+	utilruntime.Must(cmv1.AddToScheme(scheme))
+	utilruntime.Must(egv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

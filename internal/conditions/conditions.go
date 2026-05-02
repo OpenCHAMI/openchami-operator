@@ -70,13 +70,15 @@ const (
 
 // Reasons used across multiple conditions.
 const (
-	ReasonProvisioning       = "Provisioning"
-	ReasonReady              = "Ready"
-	ReasonError              = "Error"
-	ReasonUnreachable        = "Unreachable"
-	ReasonNoEligibleNodes    = "NoEligibleNodes"
-	ReasonVersionPinned      = "VersionPinned"
-	ReasonWaitingForProbe    = "WaitingForNetworkProbe"
-	ReasonExpirationImminent = "ExpirationImminent"
-	ReasonExpired            = "Expired"
+	ReasonProvisioning        = "Provisioning"
+	ReasonReady               = "Ready"
+	ReasonError               = "Error"
+	ReasonUnreachable         = "Unreachable"
+	ReasonNoEligibleNodes     = "NoEligibleNodes"
+	ReasonVersionPinned       = "VersionPinned"
+	ReasonWaitingForProbe     = "WaitingForNetworkProbe"
+	ReasonExpirationImminent  = "ExpirationImminent"
+	ReasonExpired             = "Expired"
+	ReasonAwaitingCertificate = "AwaitingCertificate"
+	ReasonNotProgrammed       = "NotProgrammed"
 )

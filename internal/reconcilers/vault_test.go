@@ -10,6 +10,8 @@ import (
 	"errors"
 	"testing"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +19,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
@@ -54,6 +57,15 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := vsov1beta1.AddToScheme(scheme); err != nil {
 		t.Fatalf("adding vso scheme: %v", err)
+	}
+	if err := gwapiv1.Install(scheme); err != nil {
+		t.Fatalf("adding gateway-api scheme: %v", err)
+	}
+	if err := cmv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("adding cert-manager scheme: %v", err)
+	}
+	if err := egv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("adding envoy gateway scheme: %v", err)
 	}
 	return scheme
 }

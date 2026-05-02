@@ -48,6 +48,9 @@ const clusterFinalizer = "openchami.org/cluster-protection"
 // +kubebuilder:rbac:groups="",resources=configmaps;secrets;services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=securitypolicies;backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // OpenCHAMIClusterReconciler reconciles an OpenCHAMICluster object.
 type OpenCHAMIClusterReconciler struct {
@@ -132,8 +135,9 @@ func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *
 		&reconcilers.NetworkProbeReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.CoreDHCPReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.MagellanReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.CertificatesReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.GatewayReconciler{Client: r.Client, Recorder: r.Recorder},
 		// Phase 3:  logbucket (deferred to phase 12 with funicular)
-		// Phase 7:  gateway, certificates
 		// Phase 8:  networkpolicies
 		// Phase 9:  topology
 		// Phase 12: funicular
@@ -250,6 +254,39 @@ func (r *OpenCHAMIClusterReconciler) reconcileDelete(ctx context.Context, cluste
 	return ctrl.Result{}, nil
 }
 
+// secretToCluster maps changes to a TLS Secret back to the cluster(s) that own
+// it, so that certificate renewal events trigger a fresh reconcile and the
+// CertExpiryTime / CertificatesValid condition stay current.
+func (r *OpenCHAMIClusterReconciler) secretToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		return nil
+	}
+
+	clusterList := &openahamiv1alpha1.OpenCHAMIClusterList{}
+	if err := r.List(ctx, clusterList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range clusterList.Items {
+		c := &clusterList.Items[i]
+		if reconcilers.ClusterNamespace(c) != secret.Namespace {
+			continue
+		}
+		if secret.Name != reconcilers.GatewayTLSSecretName(c) {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      c.Name,
+				Namespace: c.Namespace,
+			},
+		})
+	}
+	return requests
+}
+
 func (r *OpenCHAMIClusterReconciler) nodeToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	node, ok := obj.(*corev1.Node)
 	if !ok {
@@ -288,6 +325,7 @@ func (r *OpenCHAMIClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&batchv1.CronJob{}).
 		Owns(&corev1.ConfigMap{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.nodeToCluster)).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToCluster)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 5}).
 		Named("openchamicluster").
 		Complete(r)
