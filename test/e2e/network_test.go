@@ -86,13 +86,6 @@ var _ = Describe("Network", Ordered, func() {
 					"network-probe DaemonSet should have numberReady > 0")
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
-			// TODO(probe-binary): The probe binary at cmd/probe/main.go is
-			// currently a stub that exits 0; it does not perform real netlink
-			// probing or apply node labels. Once the probe is real, re-enable
-			// the label-presence assertion below (also see E2E-06).
-			Skip("E2E-03: probe binary at cmd/probe/main.go is a stub; node-label probing pending")
-
-			//nolint:govet // unreachable code is intentional until probe is implemented
 			By("waiting for the probe to apply a provision-network-ready label to at least one node")
 			label := networkNodeLabel(clusterName, "provision")
 			Eventually(func(g Gomega) {
@@ -252,13 +245,6 @@ var _ = Describe("Network", Ordered, func() {
 		const clusterName = "netbad06"
 
 		BeforeAll(func() {
-			// TODO(probe-binary): The probe binary at cmd/probe/main.go is
-			// currently a stub that exits 0; it does not validate subnets or
-			// emit a per-node verdict. Once real probing is in place, drop
-			// the Skip and let the test exercise the real failure path.
-			Skip("E2E-06: probe binary at cmd/probe/main.go is a stub; subnet validation pending")
-
-			//nolint:govet // unreachable until probe binary is implemented
 			yaml := networkProbeClusterYAML(clusterName, "999.999.999.999/32", "10.1.0.0/24")
 			networkApplyCluster(clusterName, yaml)
 		})

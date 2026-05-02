@@ -95,17 +95,17 @@ ENVTEST_K8S_VERSION := 1.31.x
 test: ## Run unit tests with envtest
 	@mkdir -p $(ENVTEST_ASSETS_DIR)
 	KUBEBUILDER_ASSETS=$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_ASSETS_DIR) -p path) \
-	  go test -race -count=1 -timeout 5m ./internal/... ./api/...
+	  go test -race -count=1 -timeout 5m ./internal/... ./api/... ./cmd/...
 
 test-verbose: ## Run unit tests with verbose output
 	@mkdir -p $(ENVTEST_ASSETS_DIR)
 	KUBEBUILDER_ASSETS=$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_ASSETS_DIR) -p path) \
-	  go test -race -v -count=1 -timeout 5m ./internal/... ./api/...
+	  go test -race -v -count=1 -timeout 5m ./internal/... ./api/... ./cmd/...
 
 test-cover: ## Run tests with coverage report
 	@mkdir -p $(ENVTEST_ASSETS_DIR)
 	KUBEBUILDER_ASSETS=$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_ASSETS_DIR) -p path) \
-	  go test -race -count=1 -timeout 5m -coverprofile=cover.out ./internal/... ./api/...
+	  go test -race -count=1 -timeout 5m -coverprofile=cover.out ./internal/... ./api/... ./cmd/...
 	go tool cover -html=cover.out -o cover.html
 	@echo "Coverage report: cover.html"
 
