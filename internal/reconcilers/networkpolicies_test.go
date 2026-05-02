@@ -421,6 +421,79 @@ func TestNetworkPoliciesReconciler_TwoClustersIsolated(t *testing.T) {
 	}
 }
 
+// TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVault asserts that
+// calling Describe against a cluster whose Vault address is a non-resolvable
+// external hostname (test.invalid is reserved by RFC 6761) does not return an
+// error. Live DNS would surface as a "no such host" failure on most systems;
+// success here means VaultEgressPeerSyntax was used and no LookupHost call
+// was made.
+func TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVault(t *testing.T) {
+	scheme := newScheme(t)
+	cluster := newCluster("alpha")
+	cluster.Spec.Platform.Vault.Address = "https://test.invalid:8200"
+	cluster.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr
+	c := newNetworkPolicyClient(scheme, cluster)
+
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(5)}
+	objs, err := r.Describe(cluster)
+	if err != nil {
+		t.Fatalf("describe with unresolvable vault host: %v", err)
+	}
+	if len(objs) != len(expectedPolicyNames()) {
+		t.Fatalf("expected %d objects, got %d", len(expectedPolicyNames()), len(objs))
+	}
+
+	policy := findDescribedPolicy(t, objs, policyAllowVaultEgress)
+	peer := policy.Spec.Egress[0].To[0]
+	if peer.IPBlock == nil {
+		t.Fatalf("expected ipBlock placeholder, got %+v", peer)
+	}
+	if peer.IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Errorf("expected sentinel CIDR %q, got %q", SyntaxOnlyExternalCIDR, peer.IPBlock.CIDR)
+	}
+}
+
+// TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVersityGW mirrors the
+// Vault test for VersityGW; same rationale.
+func TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVersityGW(t *testing.T) {
+	scheme := newScheme(t)
+	cluster := newCluster("alpha")
+	cluster.Spec.Platform.Vault.Address = testInClusterVaultAddr
+	cluster.Spec.Platform.ObjectStorage.Endpoint = "https://test.invalid:10000"
+	c := newNetworkPolicyClient(scheme, cluster)
+
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(5)}
+	objs, err := r.Describe(cluster)
+	if err != nil {
+		t.Fatalf("describe with unresolvable versitygw host: %v", err)
+	}
+
+	policy := findDescribedPolicy(t, objs, policyAllowVersityGWEgress)
+	peer := policy.Spec.Egress[0].To[0]
+	if peer.IPBlock == nil {
+		t.Fatalf("expected ipBlock placeholder, got %+v", peer)
+	}
+	if peer.IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Errorf("expected sentinel CIDR %q, got %q", SyntaxOnlyExternalCIDR, peer.IPBlock.CIDR)
+	}
+}
+
+// findDescribedPolicy locates a NetworkPolicy by name in a Describe slice.
+func findDescribedPolicy(t *testing.T, objs []client.Object, name string) *networkingv1.NetworkPolicy {
+	t.Helper()
+	for _, o := range objs {
+		np, ok := o.(*networkingv1.NetworkPolicy)
+		if !ok {
+			continue
+		}
+		if np.Name == name {
+			return np
+		}
+	}
+	t.Fatalf("describe output missing policy %q", name)
+	return nil
+}
+
 func TestNetworkPoliciesReconciler_ConditionSet(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newInClusterNetworkPolicyCluster("alpha")

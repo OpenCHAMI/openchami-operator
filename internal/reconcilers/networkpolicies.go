@@ -90,7 +90,7 @@ type NetworkPoliciesReconciler struct {
 func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "networkpolicies")
 
-	policies, err := r.buildPolicies(cluster)
+	policies, err := r.buildPolicies(cluster, true)
 	if err != nil {
 		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkPoliciesReady,
@@ -137,13 +137,14 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *open
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 //
-// Returns an empty (but non-nil) slice if peer resolution fails (e.g. a DNS
-// lookup against an unreachable Vault address) — this matches the contract of
-// other reconcilers' Describe methods, which must not contact remote services.
-// In that case the caller will see no policies; that surfaces the
-// configuration error without panicking.
+// Describe uses the syntax-only Vault/VersityGW egress helpers and never
+// performs DNS — it honours the SubReconciler contract that Describe "must
+// not contact any external service". For external hostnames the resulting
+// allow-vault-egress / allow-versitygw-egress / allow-logs-egress policies
+// reference a sentinel ipBlock 0.0.0.0/0 in place of the resolved /32 peer.
+// Reconcile() resolves the peer for real before applying.
 func (r *NetworkPoliciesReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	policies, err := r.buildPolicies(cluster)
+	policies, err := r.buildPolicies(cluster, false)
 	if err != nil {
 		return []client.Object{}, fmt.Errorf("building network policies: %w", err)
 	}
@@ -157,14 +158,27 @@ func (r *NetworkPoliciesReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAM
 // buildPolicies materialises the full set of per-cluster NetworkPolicy objects.
 // Returns an error only when egress peer resolution (Vault or VersityGW) fails;
 // all policies that do not depend on external resolution are still constructed.
-func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]networkingv1.NetworkPolicy, error) {
+//
+// resolveDNS controls how external (non-.svc.cluster.local) Vault/VersityGW
+// hostnames become peers. When true, hostnames are resolved with net.LookupHost
+// to produce a /32 ipBlock — this is the Reconcile path. When false, the
+// syntax-only helpers substitute a placeholder ipBlock without touching DNS —
+// this is the Describe path.
+func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openahamiv1alpha1.OpenCHAMICluster, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
 	ns := ClusterNamespace(cluster)
 
-	vaultPeer, err := VaultEgressPeer(cluster.Spec.Platform.Vault.Address)
+	vaultPeerFn := VaultEgressPeerSyntax
+	versityPeerFn := VersityGWEgressPeerSyntax
+	if resolveDNS {
+		vaultPeerFn = VaultEgressPeer
+		versityPeerFn = VersityGWEgressPeer
+	}
+
+	vaultPeer, err := vaultPeerFn(cluster.Spec.Platform.Vault.Address)
 	if err != nil {
 		return nil, fmt.Errorf("resolving vault egress peer: %w", err)
 	}
-	versityPeer, err := VersityGWEgressPeer(cluster.Spec.Platform.ObjectStorage.Endpoint)
+	versityPeer, err := versityPeerFn(cluster.Spec.Platform.ObjectStorage.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("resolving versitygw egress peer: %w", err)
 	}

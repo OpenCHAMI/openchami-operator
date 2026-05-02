@@ -119,48 +119,100 @@ func LogBucketName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 	return cluster.Spec.ClusterName + "-logs"
 }
 
+// SyntaxOnlyExternalCIDR is the placeholder ipBlock used by the *Syntax
+// helpers when the configured address is an external hostname that would
+// otherwise require DNS resolution. Describe() must not contact remote
+// services; consumers that need the resolved peer call the non-Syntax form
+// inside Reconcile().
+const SyntaxOnlyExternalCIDR = "0.0.0.0/0"
+
+// parseEgressHost extracts the hostname portion of an egress URL. Returns the
+// in-cluster .svc.cluster.local namespace peer when the host is a service-DNS
+// name; otherwise returns the raw host so callers can decide whether to
+// resolve it (Reconcile) or substitute a syntax-only placeholder (Describe).
+//
+// The bool inCluster is true exactly when peer is non-zero (the namespace
+// selector form). When false, host holds the external hostname/IP that
+// requires further handling.
+func parseEgressHost(addr, kind string) (host string, peer networkingv1.NetworkPolicyPeer, inCluster bool, err error) {
+	u, parseErr := url.Parse(addr)
+	if parseErr != nil {
+		return "", networkingv1.NetworkPolicyPeer{}, false, fmt.Errorf("parsing %s address: %w", kind, parseErr)
+	}
+	host = u.Hostname()
+
+	if strings.HasSuffix(host, ".svc.cluster.local") {
+		parts := strings.Split(host, ".")
+		// parts: [service, namespace, svc, cluster, local]
+		if len(parts) < 5 {
+			return "", networkingv1.NetworkPolicyPeer{}, false, fmt.Errorf("unexpected %s svc hostname: %s", kind, host)
+		}
+		ns := parts[1]
+		return host, networkingv1.NetworkPolicyPeer{
+			NamespaceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					kubernetesMetadataNameLabel: ns,
+				},
+			},
+		}, true, nil
+	}
+	return host, networkingv1.NetworkPolicyPeer{}, false, nil
+}
+
+// resolveExternalPeer turns an external hostname/IP into a /32 ipBlock peer.
+// Performs DNS via net.LookupHost — only call from Reconcile paths, never from
+// Describe (see VaultEgressPeerSyntax / VersityGWEgressPeerSyntax).
+func resolveExternalPeer(host, kind string) (networkingv1.NetworkPolicyPeer, error) {
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("resolving %s host %q: %w", kind, host, err)
+	}
+	if len(addrs) == 0 {
+		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("%s host %q resolved to no addresses", kind, host)
+	}
+	return networkingv1.NetworkPolicyPeer{
+		IPBlock: &networkingv1.IPBlock{CIDR: addrs[0] + "/32"},
+	}, nil
+}
+
 // VaultEgressPeer returns the appropriate NetworkPolicyPeer for Vault egress.
 //
 // If the Vault address resolves to a .svc.cluster.local hostname, a
 // namespaceSelector peer is returned (same-cluster deployment).
 // Otherwise the hostname is resolved to an IP and an ipBlock /32 peer
 // is returned (cross-cluster deployment).
+//
+// This helper performs live DNS for external hostnames and so must only be
+// called from a Reconcile path. Describe paths must use VaultEgressPeerSyntax.
 func VaultEgressPeer(vaultAddress string) (networkingv1.NetworkPolicyPeer, error) {
-	u, err := url.Parse(vaultAddress)
+	host, peer, inCluster, err := parseEgressHost(vaultAddress, "vault")
 	if err != nil {
-		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("parsing vault address: %w", err)
+		return networkingv1.NetworkPolicyPeer{}, err
 	}
-	host := u.Hostname()
-
-	// Same-cluster: hostname ends with .svc.cluster.local
-	if strings.HasSuffix(host, ".svc.cluster.local") {
-		parts := strings.Split(host, ".")
-		// parts: [service, namespace, svc, cluster, local]
-		if len(parts) < 5 {
-			return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("unexpected vault svc hostname: %s", host)
-		}
-		ns := parts[1]
-		nsSelector := &networkingv1.NetworkPolicyPeer{
-			NamespaceSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					kubernetesMetadataNameLabel: ns,
-				},
-			},
-		}
-		return *nsSelector, nil
+	if inCluster {
+		return peer, nil
 	}
+	return resolveExternalPeer(host, "vault")
+}
 
-	// Cross-cluster: resolve to IP and use ipBlock
-	addrs, err := net.LookupHost(host)
+// VaultEgressPeerSyntax is the syntax-only counterpart to VaultEgressPeer for
+// use from Describe paths. For in-cluster .svc.cluster.local addresses it
+// returns the same namespaceSelector peer; for external hostnames it returns
+// a sentinel ipBlock 0.0.0.0/0 instead of performing DNS, so the SubReconciler
+// "Describe must not contact any external service" contract is preserved.
+//
+// The sentinel is acceptable because Describe output is only ever rendered to
+// a human via `ochami-admin describe`; it is never used to apply policies.
+func VaultEgressPeerSyntax(vaultAddress string) (networkingv1.NetworkPolicyPeer, error) {
+	_, peer, inCluster, err := parseEgressHost(vaultAddress, "vault")
 	if err != nil {
-		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("resolving vault host %q: %w", host, err)
+		return networkingv1.NetworkPolicyPeer{}, err
 	}
-	if len(addrs) == 0 {
-		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("vault host %q resolved to no addresses", host)
+	if inCluster {
+		return peer, nil
 	}
-	cidr := addrs[0] + "/32"
 	return networkingv1.NetworkPolicyPeer{
-		IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+		IPBlock: &networkingv1.IPBlock{CIDR: SyntaxOnlyExternalCIDR},
 	}, nil
 }
 
@@ -175,39 +227,32 @@ func VaultEgressPeer(vaultAddress string) (networkingv1.NetworkPolicyPeer, error
 // VersityGW is never deployed by this operator (invariant #1); this helper
 // exists solely so the funicular and boot-service NetworkPolicies can permit
 // egress to whichever location the cluster admin has provisioned.
+//
+// Describe paths must use VersityGWEgressPeerSyntax instead.
 func VersityGWEgressPeer(endpoint string) (networkingv1.NetworkPolicyPeer, error) {
-	u, err := url.Parse(endpoint)
+	host, peer, inCluster, err := parseEgressHost(endpoint, "versitygw")
 	if err != nil {
-		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("parsing versitygw endpoint: %w", err)
+		return networkingv1.NetworkPolicyPeer{}, err
 	}
-	host := u.Hostname()
-
-	if strings.HasSuffix(host, ".svc.cluster.local") {
-		parts := strings.Split(host, ".")
-		// parts: [service, namespace, svc, cluster, local]
-		if len(parts) < 5 {
-			return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("unexpected versitygw svc hostname: %s", host)
-		}
-		ns := parts[1]
-		return networkingv1.NetworkPolicyPeer{
-			NamespaceSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					kubernetesMetadataNameLabel: ns,
-				},
-			},
-		}, nil
+	if inCluster {
+		return peer, nil
 	}
+	return resolveExternalPeer(host, "versitygw")
+}
 
-	addrs, err := net.LookupHost(host)
+// VersityGWEgressPeerSyntax is the syntax-only counterpart to
+// VersityGWEgressPeer for use from Describe paths. See VaultEgressPeerSyntax
+// for the rationale.
+func VersityGWEgressPeerSyntax(endpoint string) (networkingv1.NetworkPolicyPeer, error) {
+	_, peer, inCluster, err := parseEgressHost(endpoint, "versitygw")
 	if err != nil {
-		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("resolving versitygw host %q: %w", host, err)
+		return networkingv1.NetworkPolicyPeer{}, err
 	}
-	if len(addrs) == 0 {
-		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("versitygw host %q resolved to no addresses", host)
+	if inCluster {
+		return peer, nil
 	}
-	cidr := addrs[0] + "/32"
 	return networkingv1.NetworkPolicyPeer{
-		IPBlock: &networkingv1.IPBlock{CIDR: cidr},
+		IPBlock: &networkingv1.IPBlock{CIDR: SyntaxOnlyExternalCIDR},
 	}, nil
 }
 
