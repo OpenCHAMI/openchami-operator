@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -22,7 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -45,7 +44,7 @@ type DatabaseReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *DatabaseReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *DatabaseReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "database")
 	ns := ClusterNamespace(cluster)
 
@@ -96,8 +95,43 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, cluster *openahamiv1
 		if err := r.Client.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, fmt.Errorf("creating post-init job: %w", err)
 		}
+		// Newly created job — wait for it to run.
+		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               conditions.ConditionDatabaseReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonProvisioning,
+			Message:            "post-init job created; awaiting completion",
+			ObservedGeneration: cluster.Generation,
+		})
+		return ctrl.Result{RequeueAfter: databaseRequeueAfter}, nil
 	case err != nil:
 		return ctrl.Result{}, fmt.Errorf("checking post-init job: %w", err)
+	}
+
+	// Job exists — gate Ready=True on its terminal state. If it failed,
+	// surface that as a Warning Event so an operator notices instead of
+	// silently flipping back to Ready next reconcile.
+	switch {
+	case existing.Status.Failed > 0:
+		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               conditions.ConditionDatabaseReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonError,
+			Message:            fmt.Sprintf("post-init job %s failed; check job logs and re-create after fixing", existing.Name),
+			ObservedGeneration: cluster.Generation,
+		})
+		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+			conditions.ReasonError, "Database post-init job failed")
+		return ctrl.Result{RequeueAfter: databaseRequeueAfter}, nil
+	case existing.Status.Succeeded == 0:
+		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               conditions.ConditionDatabaseReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonProvisioning,
+			Message:            "post-init job in flight; awaiting completion",
+			ObservedGeneration: cluster.Generation,
+		})
+		return ctrl.Result{RequeueAfter: databaseRequeueAfter}, nil
 	}
 
 	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
@@ -110,7 +144,7 @@ func (r *DatabaseReconciler) Reconcile(ctx context.Context, cluster *openahamiv1
 	return ctrl.Result{}, nil
 }
 
-func (r *DatabaseReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *DatabaseReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	credsName := "openchami-" + cluster.Spec.ClusterName + "-db-credentials"
 	return []client.Object{
 		r.buildCNPGCluster(cluster, credsName),
@@ -118,7 +152,7 @@ func (r *DatabaseReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluste
 	}, nil
 }
 
-func (r *DatabaseReconciler) buildCNPGCluster(cluster *openahamiv1alpha1.OpenCHAMICluster, credsName string) *cnpgv1.Cluster {
+func (r *DatabaseReconciler) buildCNPGCluster(cluster *openchamiv1alpha1.OpenCHAMICluster, credsName string) *cnpgv1.Cluster {
 	instances := int(cluster.Spec.Database.Instances)
 	if instances == 0 {
 		instances = 3
@@ -153,7 +187,7 @@ func (r *DatabaseReconciler) buildCNPGCluster(cluster *openahamiv1alpha1.OpenCHA
 	}
 }
 
-func (r *DatabaseReconciler) buildPostInitJob(cluster *openahamiv1alpha1.OpenCHAMICluster) *batchv1.Job {
+func (r *DatabaseReconciler) buildPostInitJob(cluster *openchamiv1alpha1.OpenCHAMICluster) *batchv1.Job {
 	rwService := "openchami-" + cluster.Spec.ClusterName + "-postgres-rw"
 	one := int32(1)
 	script := `set -euo pipefail

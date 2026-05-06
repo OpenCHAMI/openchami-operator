@@ -1,136 +1,133 @@
 # openchami-operator
-// TODO(user): Add simple overview of use/purpose
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes operator that deploys and manages the [OpenCHAMI](https://openchami.org) HPC provisioning stack as a single, namespaced custom resource.
 
-## Getting Started
+## What it does
 
-### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+Each `OpenCHAMICluster` custom resource produces a self-contained, namespace-isolated OpenCHAMI deployment:
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- **Stateful services** — SMD, tokensmith, boot-service, metadata-service, fru-tracker, power-control — backed by a CloudNativePG-managed Postgres cluster.
+- **Network services** — CoreDHCP for PXE, Magellan for BMC discovery — pinned to nodes that pass a configurable network probe.
+- **Object storage** — boot images and Parquet logs land in an external VersityGW (or any S3-compatible endpoint).
+- **Auth + secrets** — service-to-service tokens and credentials flow through an external Vault, surfaced into the namespace via the Vault Secrets Operator.
+- **Gateway** — TLS-terminated, OIDC-protected access via Envoy Gateway HTTPRoute.
+- **Observability** — Prometheus ServiceMonitors, structured logs, runbook-linked Events on every condition.
 
-```sh
-make docker-build docker-push IMG=<some-registry>/openchami-operator:tag
-```
+The operator never deploys Vault or VersityGW; both are external prerequisites. See [docs/external-dependencies.md](docs/external-dependencies.md).
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+## Documentation
 
-**Install the CRDs into the cluster:**
+The full documentation tree lives under [`docs/`](docs/README.md). Start with:
 
-```sh
-make install
-```
+- **[Quickstart](docs/quickstart.md)** — local dev cluster + first reconcile in under 15 minutes.
+- **[Architecture](docs/architecture.md)** — controller, sub-reconcilers, reconcile order.
+- **[CRD reference](docs/crd-reference.md)** — every `OpenCHAMICluster` field.
+- **[Invariants](docs/invariants.md)** — the 10 absolute rules.
+- **[Troubleshooting](docs/troubleshooting.md)** — common failure modes with fixes.
+- **[Contributing](docs/contributing.md)** — adding a sub-reconciler / CRD field / webhook.
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+## Quick start
 
 ```sh
-make deploy IMG=<some-registry>/openchami-operator:tag
+# Prereqs (one-time)
+make install-tools
+make dev-up                       # docker-compose Vault+LocalStack, kind cluster, prereq CRDs
+
+# Apply a test cluster
+kubectl apply -f test/fixtures/minimal-cluster.yaml
+kubectl get openchamicluster testcluster -w
+
+# Run the operator locally against the dev cluster
+make dev-run
+
+# Tear down
+make dev-down
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
+See [docs/quickstart.md](docs/quickstart.md) for the full walkthrough and [docs/dev-loop.md](docs/dev-loop.md) for every make target.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+## Development
 
 ```sh
-kubectl apply -k config/samples/
+make generate manifests fmt vet lint test
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+All four must pass before pushing. `make validate-invariants` runs in CI to catch the most common invariant violations.
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
+For end-to-end testing against a real kind cluster:
 ```sh
-kubectl delete -k config/samples/
+make dev-up
+make e2e
+make dev-down
 ```
 
-**Delete the APIs(CRDs) from the cluster:**
+For service-level testing without involving Kubernetes (PR builds, cross-service flows), use the [OpenCHAMI integration sandbox](https://github.com/OpenCHAMI/integration-sandbox). See [`docs/relationship-to-integration-sandbox.md`](docs/relationship-to-integration-sandbox.md) for the short version of the boundary.
 
-```sh
-make uninstall
+## Project metadata
+
+| Item | Value |
+|---|---|
+| Go module | `github.com/openchami/openchami-operator` |
+| CRD group/version | `openchami.openchami.org/v1alpha1` |
+| Primary resource | `OpenCHAMICluster` |
+| Operator image | `ghcr.io/openchami/openchami-operator` |
+| Admin CLI | `ochami-admin` |
+| Kubebuilder | v4 |
+| Go | 1.24.6+ |
+| Kubernetes target | 1.29+ |
+
+## Project layout
+
+```
+openchami-operator/
+├── api/v1alpha1/                   CRD types, webhooks, conversions
+├── cmd/
+│   ├── operator/                   manager binary
+│   ├── ochami-admin/               CLI: init / describe / backup / restore / logs
+│   └── probe/                      network-probe DaemonSet binary
+├── config/                         controller-gen output: CRD, RBAC, webhook manifests
+├── docs/                           full documentation tree (start here)
+├── hack/local-dev/                 docker-compose, kind config, Vault seed
+├── internal/
+│   ├── controller/                 top-level controller + reconcile loop
+│   ├── reconcilers/                one file per concern (Namespace, Vault, SMD, ...)
+│   ├── conditions/                 condition Type/Reason constants
+│   ├── logging/                    log enrichment helpers (invariant 8)
+│   ├── status/                     post-reconcile aggregator + Prometheus metrics
+│   ├── vault/                      Vault client interface + AppRole auth
+│   ├── s3/                         S3 client interface
+│   └── version/                    operator semver and image tag config
+├── test/
+│   ├── e2e/                        Ginkgo end-to-end tests
+│   └── fixtures/                   minimal-cluster.yaml, dual-cluster.yaml, full-cluster.yaml
+├── SERVICES.md                     pinned default service images for the current release
+├── UPGRADE.md                      release-to-release upgrade notes
+├── CLAUDE.md                       agent-specific guidance
+├── AGENTS.md                       sub-agent collaboration rules
+└── bugs.md                         known issues, severity-tagged
 ```
 
-**UnDeploy the controller from the cluster:**
+## Project rules
 
-```sh
-make undeploy
-```
+If you're contributing code or AI-assisted edits, [docs/invariants.md](docs/invariants.md) is the contract. The shortest version:
 
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/openchami-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/openchami-operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+1. Vault and VersityGW are external. Configure them; never deploy them.
+2. Per-cluster namespace isolation. Everything for cluster `foo` lives in `openchami-foo`.
+3. Vault path isolation. All KV paths under `openchami/{clusterName}/`.
+4. DHCP node exclusivity. No two clusters target the same node when probes are off.
+5. Idempotent reconciliation. Server-side apply only.
+6. Status is always written last.
+7. No secrets in the CRD spec.
+8. Structured logging on every line.
+9. Every Event includes a runbook URL.
+10. The operator has no HPC domain knowledge. (The "quadlet test" — read [docs/invariants.md](docs/invariants.md#10-the-operator-has-no-hpc-domain-knowledge).)
 
 ## License
 
-Copyright 2026 OpenCHAMI Authors.
+MIT — see [`LICENSE`](LICENSE).
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-
+The repository is [REUSE](https://reuse.software/) compliant. License
+metadata for every file is recorded via SPDX headers (or via
+[`REUSE.toml`](REUSE.toml) for files that cannot carry a header), and the
+`REUSE Compliance Check` GitHub Action verifies this on every PR. Run
+`reuse lint` locally before sending changes.

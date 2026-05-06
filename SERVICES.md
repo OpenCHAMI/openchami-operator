@@ -10,7 +10,7 @@
 | Tokensmith | `ghcr.io/openchami/tokensmith:latest` | `defaultTokensmithImage` (internal/reconcilers/tokensmith.go) |
 | Boot service | `ghcr.io/openchami/boot-service:latest` | `defaultBootServiceImage` (internal/reconcilers/boot_service.go) |
 | Metadata service | `ghcr.io/openchami/metadata-service:latest` | `defaultMetadataServiceImage` (internal/reconcilers/metadata_service.go) |
-| CoreDHCP | `ghcr.io/openchami/coresmd:latest` | `defaultCoreDHCPImage` (internal/reconcilers/coredhcp.go) |
+| CoreDHCP | `ghcr.io/openchami/coredhcp:latest` | `defaultCoreDHCPImage` (internal/reconcilers/coredhcp.go) |
 | Magellan | `ghcr.io/openchami/magellan:latest` | `defaultMagellanImage` (internal/reconcilers/magellan.go) |
 | Funicular collector | `ghcr.io/openchami/funicular-collector:latest` | `defaultFunicularImage` (internal/reconcilers/funicular.go) |
 | Network probe | `ghcr.io/openchami/openchami-operator:latest` | hard-coded in internal/reconcilers/networkprobe.go |

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -19,10 +18,10 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
-func newTokensmithCluster() *openahamiv1alpha1.OpenCHAMICluster {
+func newTokensmithCluster() *openchamiv1alpha1.OpenCHAMICluster {
 	cluster := newCluster("alpha")
 	cluster.Spec.Services.Tokensmith.Enabled = true
 	return cluster

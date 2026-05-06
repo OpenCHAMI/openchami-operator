@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -22,7 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -55,11 +54,11 @@ type TokensmithReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *TokensmithReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *TokensmithReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "tokensmith")
 
-	if !cluster.Spec.Services.Tokensmith.Enabled {
-		log.Info("tokensmith disabled, skipping")
+	if !ServiceDeployedInCluster(cluster, ServiceTokensmith) {
+		log.Info("tokensmith not operator-managed (disabled or external), skipping deployment")
 		return ctrl.Result{}, nil
 	}
 
@@ -117,9 +116,9 @@ func (r *TokensmithReconciler) Reconcile(ctx context.Context, cluster *openahami
 	}
 
 	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openahamiv1alpha1.ServiceStatus{}
+		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
-	cluster.Status.Services[ServiceTokensmith] = openahamiv1alpha1.ServiceStatus{
+	cluster.Status.Services[ServiceTokensmith] = openchamiv1alpha1.ServiceStatus{
 		Ready:    ready,
 		Endpoint: endpoint,
 		Message:  message,
@@ -131,7 +130,7 @@ func (r *TokensmithReconciler) Reconcile(ctx context.Context, cluster *openahami
 	return ctrl.Result{}, nil
 }
 
-func (r *TokensmithReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *TokensmithReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{
 		r.buildPVC(cluster),
 		r.buildDeployment(cluster),
@@ -141,7 +140,7 @@ func (r *TokensmithReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMIClus
 }
 
 // podLabels returns the canonical label set for tokensmith pods.
-func tokensmithPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func tokensmithPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceTokensmith,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -149,7 +148,7 @@ func tokensmithPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string
 	}
 }
 
-func (r *TokensmithReconciler) buildPVC(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.PersistentVolumeClaim {
+func (r *TokensmithReconciler) buildPVC(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -171,7 +170,7 @@ func (r *TokensmithReconciler) buildPVC(cluster *openahamiv1alpha1.OpenCHAMIClus
 	}
 }
 
-func (r *TokensmithReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
+func (r *TokensmithReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
 	labels := tokensmithPodLabels(cluster)
 	// Replicas always 1 — tokensmith holds key material, never scaled.
 	replicas := int32(1)
@@ -305,7 +304,7 @@ func (r *TokensmithReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCH
 	}
 }
 
-func (r *TokensmithReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.Service {
+func (r *TokensmithReconciler) buildService(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Service {
 	labels := tokensmithPodLabels(cluster)
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: "Service"},
@@ -327,7 +326,7 @@ func (r *TokensmithReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAMI
 	}
 }
 
-func (r *TokensmithReconciler) buildPDB(cluster *openahamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
+func (r *TokensmithReconciler) buildPDB(cluster *openchamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
 	labels := tokensmithPodLabels(cluster)
 	minAvail := intstr.FromInt32(1)
 	return &policyv1.PodDisruptionBudget{

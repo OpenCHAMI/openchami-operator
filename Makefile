@@ -118,43 +118,153 @@ dev-up: ## Start local development environment
 	@echo "Starting Vault dev + localstack..."
 	docker compose -f hack/local-dev/docker-compose.yaml up -d
 	@echo "Creating kind cluster..."
-	kind create cluster --config hack/local-dev/kind-config.yaml --name openchami-dev 2>/dev/null || \
-	  echo "Cluster already exists"
+	@if kind get clusters 2>/dev/null | grep -qx openchami-dev; then \
+	  echo "Cluster openchami-dev already exists; ensuring kubeconfig is exported."; \
+	  kind export kubeconfig --name openchami-dev; \
+	else \
+	  kind create cluster --config hack/local-dev/kind-config.yaml --name openchami-dev; \
+	fi
+	@echo "Waiting for control-plane API to become reachable..."
+	@for i in $$(seq 1 30); do \
+	  kubectl --context kind-openchami-dev get --raw=/livez >/dev/null 2>&1 && break; \
+	  sleep 2; \
+	done; kubectl --context kind-openchami-dev get --raw=/livez >/dev/null
 	@echo "Installing prerequisites..."
 	$(MAKE) dev-install-prereqs
+	@echo "Installing OpenCHAMI CRDs..."
+	$(MAKE) install
 	@echo "Seeding Vault..."
 	hack/local-dev/seed-vault.sh
 	@echo ""
-	@echo "Dev environment ready."
-	@echo "Apply a test cluster: kubectl apply -f test/fixtures/minimal-cluster.yaml"
-	@echo "Watch it:            kubectl get openchamicluster testcluster -w"
+	@echo "Dev environment ready. The CRDs are installed; the operator is NOT running yet."
+	@echo "Pick one:"
+	@echo "  make dev-run                # run the operator on your laptop against the kind cluster"
+	@echo "  make dev-deploy             # build + load + deploy the operator INTO the kind cluster"
+	@echo ""
+	@echo "Then apply a test cluster:"
+	@echo "  kubectl apply -f test/fixtures/minimal-cluster.yaml"
+	@echo "  kubectl get openchamicluster testcluster -w"
 
 dev-down: ## Tear down local development environment
 	kind delete cluster --name openchami-dev 2>/dev/null || true
 	docker compose -f hack/local-dev/docker-compose.yaml down -v
 
+CNPG_VERSION ?= 1.29.0
+ENVOY_GATEWAY_VERSION ?= v1.5.1
+
 dev-install-prereqs: ## Install operator prerequisites into dev cluster
 	@echo "Installing cert-manager..."
 	kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
-	@echo "Installing CloudNativePG..."
-	kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/main/releases/cnpg-latest.yaml
+	@echo "Installing CloudNativePG $(CNPG_VERSION)..."
+	kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-$(basename $(CNPG_VERSION))/releases/cnpg-$(CNPG_VERSION).yaml
 	@echo "Installing Vault Secrets Operator..."
 	helm repo add hashicorp https://helm.releases.hashicorp.com 2>/dev/null || true
 	helm upgrade --install vault-secrets-operator hashicorp/vault-secrets-operator \
 	  --namespace vault-secrets-operator-system --create-namespace \
 	  --set defaultVaultConnection.enabled=false
-	@echo "Installing Envoy Gateway..."
-	helm repo add envoy-gateway https://charts.envoyproxy.io 2>/dev/null || true
-	helm upgrade --install envoy-gateway envoy-gateway/gateway-helm \
+	@echo "Installing Envoy Gateway $(ENVOY_GATEWAY_VERSION)..."
+	helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+	  --version $(ENVOY_GATEWAY_VERSION) \
 	  --namespace envoy-gateway-system --create-namespace
 	@echo "Prerequisites installed."
 
-dev-run: build ## Run operator locally against dev cluster
+##@ Cluster install (kustomize)
+
+# IMG is the container image the in-cluster Deployment runs. Override on the
+# CLI for releases: `make deploy IMG=ghcr.io/openchami/openchami-operator:v1.2.3`.
+IMG ?= controller:latest
+
+install: manifests ## Install operator CRDs into the current kubectl context
+	kubectl apply --server-side -k config/crd
+
+uninstall: ## Remove operator CRDs from the current kubectl context
+	kubectl delete --ignore-not-found -k config/crd
+
+deploy: manifests ## Install CRDs + RBAC + manager Deployment into the current context (uses IMG)
+	@# Apply with kubectl's built-in kustomize (no external `kustomize` CLI
+	@# required), then rewrite the manager image to $(IMG) on the live
+	@# Deployment. The two-step approach matters because the kubebuilder
+	@# scaffold leaves `image: controller:latest` in config/manager/manager.yaml
+	@# as a placeholder — historically rewritten by a `kustomize edit set
+	@# image` pre-apply step that silently no-ops when the kustomize CLI
+	@# isn't installed, leaving the cluster pulling a non-existent image.
+	@# `kubectl set image` works regardless of which CLI is available.
+	@# --force-conflicts because every invocation of `kubectl set image` below
+	@# claims field-manager ownership of the container image. On the next
+	@# `make deploy` the SSA apply contends with that ownership; without
+	@# --force the apply fails with a conflict and the user has to clean up
+	@# the field manager by hand. Forcing is the right call here: this
+	@# Makefile target is the authoritative source for the deployment.
+	kubectl apply --server-side --force-conflicts -k config/default
+	kubectl -n openchami-operator-system set image deploy/openchami-operator-controller-manager manager=$(IMG)
+	kubectl -n openchami-operator-system rollout status deploy/openchami-operator-controller-manager --timeout=120s
+
+undeploy: ## Remove CRDs + RBAC + manager Deployment from the current context
+	kubectl delete --ignore-not-found -k config/default
+
+dev-deploy: docker-build ## Build operator image, load into kind, and deploy in-cluster against the dev compose stack
+	@# Ensure the dev compose containers (vault + localstack) are reachable
+	@# from inside the kind network. Without this, the operator Pod can't
+	@# resolve the Vault/S3 endpoints by container name. Errors are non-fatal
+	@# (already-attached returns non-zero); the `||true` keeps re-runs idempotent.
+	-docker network connect kind openchami-vault-dev 2>/dev/null
+	-docker network connect kind openchami-localstack-dev 2>/dev/null
+	kind load docker-image $(IMG) --name openchami-dev
+	$(MAKE) deploy IMG=$(IMG)
+	@# `make deploy` already does kubectl set image + rollout-status. Inject
+	@# the dev-only env vars on top so the in-cluster operator reaches Vault
+	@# and LocalStack via container DNS instead of 127.0.0.1 (which would
+	@# resolve to the Pod's own loopback). Production deployments override
+	@# these via a normal kustomize overlay or external-secrets injection.
+	kubectl -n openchami-operator-system set env deploy/openchami-operator-controller-manager \
+	  VAULT_ADDR=http://openchami-vault-dev:8200 \
+	  VAULT_TOKEN=dev-root-token \
+	  VAULT_AUTH_METHOD=token \
+	  AWS_ENDPOINT_URL=http://openchami-localstack-dev:4566 \
+	  AWS_ACCESS_KEY_ID=test \
+	  AWS_SECRET_ACCESS_KEY=test \
+	  AWS_REGION=us-east-1
+	@# Restart unconditionally: when IMG keeps the same tag across rebuilds
+	@# (the common dev case — `:VERSION-dirty` is stable until the commit
+	@# changes), `kubectl set image` is a no-op because the spec already
+	@# references that tag, so kubelet keeps the old container running with
+	@# the previously-loaded image content. `kind load docker-image` updates
+	@# the tag-to-digest mapping, but only a Pod restart re-resolves it.
+	@# Restart-then-rollout-status guarantees the new code is actually live.
+	kubectl -n openchami-operator-system rollout restart deploy/openchami-operator-controller-manager
+	kubectl -n openchami-operator-system rollout status deploy/openchami-operator-controller-manager --timeout=120s
+	@echo ""
+	@echo "Operator deployed. Trigger a reconcile or apply a fixture:"
+	@echo "  kubectl apply -f test/fixtures/minimal-cluster.yaml"
+	@echo "  kubectl get openchamicluster testcluster -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'"
+
+dev-run: build install ## Run operator locally against dev cluster (installs CRDs first)
+	@# Notes on the env vars below:
+	@# - ENABLE_WEBHOOKS=false: the webhook server expects TLS certs at
+	@#   /tmp/k8s-webhook-server/serving-certs/ that cert-manager provisions
+	@#   only for the in-cluster Deployment. Off-cluster runs skip webhook
+	@#   setup; admission policies are exercised by `make dev-deploy`.
+	@# - VAULT_*: matches what `hack/local-dev/seed-vault.sh` writes. Without
+	@#   these the vault sub-reconciler reports VaultConfigured=False/Error
+	@#   and the dependent paths (db creds, OIDC) never materialise.
+	@# - AWS_*: points the bucket reconcilers at LocalStack (the dev S3
+	@#   gateway brought up by `hack/local-dev/docker-compose.yaml`). The
+	@#   keys are the LocalStack defaults; AWS_S3_TLS_INSECURE is unset
+	@#   because LocalStack serves plain HTTP on 4566.
+	ENABLE_WEBHOOKS=false \
+	VAULT_ADDR=http://127.0.0.1:8200 \
+	VAULT_TOKEN=dev-root-token \
+	VAULT_AUTH_METHOD=token \
+	AWS_ENDPOINT_URL=http://127.0.0.1:4566 \
+	AWS_ACCESS_KEY_ID=test \
+	AWS_SECRET_ACCESS_KEY=test \
+	AWS_REGION=us-east-1 \
 	OPENCHAMI_DRY_RUN=false \
 	KUBECONFIG=~/.kube/config \
 	$(OPERATOR_BIN) --zap-encoder=json
 
-dev-run-dry: build ## Run operator in dry-run mode
+dev-run-dry: build install ## Run operator in dry-run mode
+	ENABLE_WEBHOOKS=false \
 	OPENCHAMI_DRY_RUN=true \
 	KUBECONFIG=~/.kube/config \
 	$(OPERATOR_BIN) --zap-encoder=json
@@ -187,8 +297,7 @@ envtest:
 
 install-tools: controller-gen envtest ## Install all required tools
 	@which golangci-lint > /dev/null || \
-	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
-	  sh -s -- -b $$(go env GOPATH)/bin
+	  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.12.1
 	@which goimports > /dev/null || go install golang.org/x/tools/cmd/goimports@latest
 	@which kind > /dev/null || go install sigs.k8s.io/kind@latest
 	@echo "All tools installed."

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -18,7 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -39,7 +38,7 @@ type MagellanReconciler struct {
 }
 
 // Reconcile applies the Magellan CronJob and reports MagellanReady.
-func (r *MagellanReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *MagellanReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "magellan")
 
 	if !cluster.Spec.Services.Magellan.Enabled {
@@ -80,7 +79,7 @@ func (r *MagellanReconciler) Reconcile(ctx context.Context, cluster *openahamiv1
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when Magellan is disabled.
-func (r *MagellanReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *MagellanReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	if !cluster.Spec.Services.Magellan.Enabled {
 		return []client.Object{}, nil
 	}
@@ -88,7 +87,7 @@ func (r *MagellanReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluste
 }
 
 // magellanPodLabels returns the canonical label set for magellan pods.
-func magellanPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func magellanPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceMagellan,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -98,7 +97,7 @@ func magellanPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]s
 
 // magellanImage resolves the container image, preferring per-cluster spec
 // override, falling back to defaultMagellanImage.
-func magellanImage(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func magellanImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	img := cluster.Spec.Services.Magellan.Image
 	if img == nil {
 		return defaultMagellanImage
@@ -116,7 +115,7 @@ func magellanImage(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 	}
 }
 
-func (r *MagellanReconciler) buildCronJob(cluster *openahamiv1alpha1.OpenCHAMICluster) *batchv1.CronJob {
+func (r *MagellanReconciler) buildCronJob(cluster *openchamiv1alpha1.OpenCHAMICluster) *batchv1.CronJob {
 	labels := magellanPodLabels(cluster)
 	tmpVol, tmpMount := TmpVolume()
 	mag := cluster.Spec.Services.Magellan

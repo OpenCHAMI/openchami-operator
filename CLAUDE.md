@@ -14,7 +14,7 @@ All four must pass before proceeding.
 | Go module | `github.com/openchami/openchami-operator` |
 | Operator image | `ghcr.io/openchami/openchami-operator` |
 | Admin CLI | `ochami-admin` |
-| CRD group/version | `openchami.org/v1alpha1` |
+| CRD group/version | `openchami.openchami.org/v1alpha1` |
 | Primary resource | `OpenCHAMICluster` |
 | Kubebuilder | v4 |
 | Go | 1.23+ |

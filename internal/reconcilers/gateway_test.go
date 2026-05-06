@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -19,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -54,7 +53,7 @@ func TestGatewayReconciler_AwaitsCertificates(t *testing.T) {
 // reconcileWithCertsValid runs the GatewayReconciler against a cluster that
 // has CertificatesValid=True pre-set. It returns the resulting fake client so
 // individual tests can assert on the produced objects.
-func reconcileWithCertsValid(t *testing.T, cluster *openahamiv1alpha1.OpenCHAMICluster) client.Client {
+func reconcileWithCertsValid(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMICluster) client.Client {
 	t.Helper()
 	scheme := newScheme(t)
 	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{

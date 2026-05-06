@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -18,7 +17,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -88,7 +87,7 @@ func TestMagellanReconciler_AppliesCronJob(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
 	cluster.Spec.NetworkProbe.Enabled = false
-	cluster.Spec.Services.Magellan = openahamiv1alpha1.MagellanSpec{
+	cluster.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
 		Enabled:           true,
 		NodeSelector:      map[string]string{testNodeRoleKey: testNodeRoleBMC},
 		Schedule:          "*/15 * * * *",
@@ -145,7 +144,7 @@ func TestMagellanReconciler_ReadyOnceCreated(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
 	cluster.Spec.NetworkProbe.Enabled = false
-	cluster.Spec.Services.Magellan = openahamiv1alpha1.MagellanSpec{
+	cluster.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
 		Enabled:           true,
 		NodeSelector:      map[string]string{testNodeRoleKey: testNodeRoleBMC},
 		Schedule:          "*/30 * * * *",

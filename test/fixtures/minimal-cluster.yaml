@@ -1,4 +1,4 @@
-apiVersion: openchami.org/v1alpha1
+apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: testcluster
@@ -42,7 +42,7 @@ spec:
     coreDHCP:
       enabled: true
       nodeSelector:
-        openchami.org/testcluster/provision-network-ready: "true"
+        openchami.org/testcluster-provision-network-ready: "true"
       leaseRanges:
         - subnet: 192.168.100.0/24
           start: 192.168.100.100
@@ -51,7 +51,7 @@ spec:
       enabled: true
       bmcSubnet: 192.168.200.0/24
       nodeSelector:
-        openchami.org/testcluster/bmc-network-ready: "true"
+        openchami.org/testcluster-bmc-network-ready: "true"
       schedule: "0 * * * *"   # hourly in dev
 
   networking:
@@ -64,7 +64,12 @@ spec:
     storageSize: 5Gi
 
   logging:
-    enabled: true
+    # Disabled in dev: the upstream funicular-collector image
+    # (`ghcr.io/openchami/funicular-collector`) is not yet published on
+    # ghcr.io. To enable, set enabled: true AND supply a working image
+    # under spec.logging.image (Repository + Tag) — e.g. a fluent-bit /
+    # vector / otel-collector build configured for the funicular schema.
+    enabled: false
     logBucket: testcluster-logs
     retentionDays: 7
     flushIntervalSeconds: 30

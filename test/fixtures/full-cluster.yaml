@@ -1,6 +1,6 @@
 # Full-featured cluster with network probing enabled.
 # Represents a production-like configuration.
-apiVersion: openchami.org/v1alpha1
+apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: venado-prod

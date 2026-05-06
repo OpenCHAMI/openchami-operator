@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -23,7 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -65,7 +64,7 @@ type CertificatesReconciler struct {
 
 // Reconcile applies the Certificate resource and reports CertificatesValid
 // based on the NotAfter timestamp parsed from the resulting TLS secret.
-func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "certificates")
 
 	cert := r.buildCertificate(cluster)
@@ -158,14 +157,14 @@ func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *openaha
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.
-func (r *CertificatesReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *CertificatesReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{r.buildCertificate(cluster)}, nil
 }
 
 // GatewayTLSSecretName returns the resolved name of the TLS Secret that
 // cert-manager populates for the gateway. Exported because the controller's
 // Secret-to-cluster watcher uses it to gate enqueues.
-func GatewayTLSSecretName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func GatewayTLSSecretName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	if name := cluster.Spec.Networking.TLS.SecretName; name != "" {
 		return name
 	}
@@ -173,7 +172,7 @@ func GatewayTLSSecretName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 }
 
 // gatewayTLSIssuer returns the resolved cert-manager ClusterIssuer name.
-func gatewayTLSIssuer(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func gatewayTLSIssuer(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	if iss := cluster.Spec.Networking.TLS.Issuer; iss != "" {
 		return iss
 	}
@@ -181,11 +180,11 @@ func gatewayTLSIssuer(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 }
 
 // gatewayCertificateName returns the cert-manager Certificate object name.
-func gatewayCertificateName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func gatewayCertificateName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	return cluster.Spec.ClusterName + "-" + gatewayTLSSuffix
 }
 
-func (r *CertificatesReconciler) buildCertificate(cluster *openahamiv1alpha1.OpenCHAMICluster) *cmv1.Certificate {
+func (r *CertificatesReconciler) buildCertificate(cluster *openchamiv1alpha1.OpenCHAMICluster) *cmv1.Certificate {
 	labels := map[string]string{
 		labelAppName:   "gateway",
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,

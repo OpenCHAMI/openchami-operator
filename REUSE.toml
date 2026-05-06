@@ -1,0 +1,78 @@
+# Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+#
+# SPDX-License-Identifier: MIT
+
+version = 1
+SPDX-PackageName = "openchami-operator"
+SPDX-PackageDownloadLocation = "https://github.com/OpenCHAMI/openchami-operator"
+
+# All Go source files are MIT.
+[[annotations]]
+path = "**/**.go"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Generated, vendored or kustomize manifests under config/.
+[[annotations]]
+path = "config/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Module + lock files (no header support).
+[[annotations]]
+path = ["go.mod", "go.sum"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Repo-root metadata files (PROJECT, .gitignore, .dockerignore, etc.).
+[[annotations]]
+path = [
+  "PROJECT",
+  ".gitignore",
+  ".dockerignore",
+  ".golangci.yml",
+  ".custom-gcl.yml",
+  "Dockerfile",
+  "Makefile",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# All Markdown documentation in the repo.
+[[annotations]]
+path = "**.md"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Test fixtures (YAML/JSON without headers).
+[[annotations]]
+path = "test/fixtures/**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Local-dev helpers (compose, kind config, shell scripts).
+[[annotations]]
+path = ["hack/**", "tools/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Devcontainer + editor + Claude scratch files.
+[[annotations]]
+path = [".devcontainer/**", ".claude/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC"
+SPDX-License-Identifier = "MIT"
+
+# Built artefacts checked in for tests; treat as public-domain CC0.
+[[annotations]]
+path = "testbin/**"
+precedence = "override"
+SPDX-FileCopyrightText = "NONE"
+SPDX-License-Identifier = "CC0-1.0"

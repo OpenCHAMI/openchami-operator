@@ -64,6 +64,12 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
         image: controller:latest
+        # IfNotPresent (rather than the kubebuilder default `Always` derived
+        # from a `:latest` tag) so that `make dev-deploy` can use a kind-loaded
+        # image without kubelet trying to fetch it from a registry. For
+        # production deployments override this in your overlay if you want
+        # tagged-image revalidation on every pod restart.
+        imagePullPolicy: IfNotPresent
         name: manager
         ports:
         - containerPort: 8081

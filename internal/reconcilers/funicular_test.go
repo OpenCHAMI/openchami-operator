@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -18,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -145,10 +145,53 @@ func assertFunicularSecretRef(t *testing.T, envs map[string]corev1.EnvVar, wantS
 	}
 }
 
+// TestFunicularReconciler_ImageNotConfigured pins the operator's behaviour
+// when logging is enabled but no image override is provided. The default
+// `ghcr.io/openchami/funicular-collector` image is not published; rather
+// than schedule a DaemonSet that will land in ImagePullBackOff with no
+// hint at the cause, the reconciler reports
+// LogCollectorReady=False/Reason=ImageNotConfigured. This test fails if
+// anyone re-enables auto-scheduling without a valid default image.
+func TestFunicularReconciler_ImageNotConfigured(t *testing.T) {
+	scheme := newScheme(t)
+	cluster := newCluster("alpha")
+	cluster.Spec.Logging.Enabled = true
+	// deliberately leave Image nil
+	cluster.Spec.Logging.Image = nil
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &FunicularReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+
+	res, err := r.Reconcile(context.Background(), cluster)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected requeue while waiting for image config, got %+v", res)
+	}
+
+	ds := &appsv1.DaemonSet{}
+	err = c.Get(context.Background(), types.NamespacedName{
+		Namespace: ClusterNamespace(cluster),
+		Name:      ServiceFunicular,
+	}, ds)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected DaemonSet NOT to be applied when image is unset, got err=%v", err)
+	}
+
+	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogCollectorReady)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != reasonImageNotConfigured {
+		t.Fatalf("expected LogCollectorReady=False/ImageNotConfigured, got %+v", cond)
+	}
+}
+
 func TestFunicularReconciler_AppliesDaemonSet(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
 	cluster.Spec.Logging.Enabled = true
+	// Empty ImageSpec satisfies the "image required" gate while still
+	// resolving to defaultFunicularImage via funicularImage().
+	cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
 	cluster.Spec.Logging.RetentionDays = 90
 	cluster.Spec.Logging.FlushIntervalSeconds = 60
 	cluster.Spec.Logging.IncludeServices = []string{"smd", "boot-service"}
@@ -205,6 +248,7 @@ func TestFunicularReconciler_ReadyWhenNumberReady(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
 	cluster.Spec.Logging.Enabled = true
+	cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
 	cluster.Spec.Logging.RetentionDays = 30
 	cluster.Spec.Logging.FlushIntervalSeconds = 30
 
@@ -248,6 +292,7 @@ func TestFunicularReconciler_RequeuesUntilReady(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
 	cluster.Spec.Logging.Enabled = true
+	cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
 	cluster.Spec.Logging.RetentionDays = 30
 	cluster.Spec.Logging.FlushIntervalSeconds = 60
 
@@ -287,6 +332,7 @@ func TestFunicularReconciler_TwoClustersIsolated(t *testing.T) {
 	for _, name := range []string{testClusterRed, testClusterBlue} {
 		cluster := newCluster(name)
 		cluster.Spec.Logging.Enabled = true
+		cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
 		cluster.Spec.Logging.RetentionDays = 7
 		cluster.Spec.Logging.FlushIntervalSeconds = 15
 

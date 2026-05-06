@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -19,7 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 	"github.com/openchami/openchami-operator/internal/s3"
@@ -42,7 +41,7 @@ type LogBucketReconciler struct {
 // Reconcile waits for VSO to materialise the log-credentials Secret, then
 // ensures the log bucket and its delete-after-N-days lifecycle rule exist.
 // Idempotent: every call produces the same end state.
-func (r *LogBucketReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *LogBucketReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "logbucket")
 
 	if !cluster.Spec.Logging.Enabled {
@@ -130,6 +129,6 @@ func (r *LogBucketReconciler) Reconcile(ctx context.Context, cluster *openahamiv
 
 // Describe returns no Kubernetes objects: the log bucket is provisioned
 // directly against VersityGW (S3) and has no in-cluster representation.
-func (r *LogBucketReconciler) Describe(_ *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *LogBucketReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{}, nil
 }

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package status
 
@@ -22,7 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/reconcilers"
 )
@@ -30,10 +29,10 @@ import (
 // newTestCluster returns a cluster with all four status-tracked services
 // enabled so detectServiceRegressions and the all-services-ready check have
 // something to inspect.
-func newTestCluster(name string) *openahamiv1alpha1.OpenCHAMICluster {
-	c := &openahamiv1alpha1.OpenCHAMICluster{
+func newTestCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
+	c := &openchamiv1alpha1.OpenCHAMICluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
-		Spec: openahamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
 			ClusterName: name,
 			Domain:      name + ".test.local",
 		},
@@ -47,8 +46,8 @@ func newTestCluster(name string) *openahamiv1alpha1.OpenCHAMICluster {
 
 // allServicesReady marks every enabled service as Ready in the cluster
 // status, mirroring the post-reconcile state the controller would produce.
-func allServicesReady(c *openahamiv1alpha1.OpenCHAMICluster) {
-	c.Status.Services = map[string]openahamiv1alpha1.ServiceStatus{
+func allServicesReady(c *openchamiv1alpha1.OpenCHAMICluster) {
+	c.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{
 		reconcilers.ServiceSMD:             {Ready: true, Endpoint: "http://smd"},
 		reconcilers.ServiceTokensmith:      {Ready: true, Endpoint: "http://tokensmith"},
 		reconcilers.ServiceBootService:     {Ready: true, Endpoint: "http://boot"},
@@ -57,7 +56,7 @@ func allServicesReady(c *openahamiv1alpha1.OpenCHAMICluster) {
 }
 
 // addCondition is a small helper to set a single condition on a cluster.
-func addCondition(c *openahamiv1alpha1.OpenCHAMICluster, t string, status metav1.ConditionStatus, reason string) {
+func addCondition(c *openchamiv1alpha1.OpenCHAMICluster, t string, status metav1.ConditionStatus, reason string) {
 	apimeta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 		Type:               t,
 		Status:             status,
@@ -69,7 +68,7 @@ func addCondition(c *openahamiv1alpha1.OpenCHAMICluster, t string, status metav1
 
 // addAllConditionsTrue stamps every condition the reporter looks at as True
 // so the happy path can flip a single one to False per test.
-func addAllConditionsTrue(c *openahamiv1alpha1.OpenCHAMICluster) {
+func addAllConditionsTrue(c *openchamiv1alpha1.OpenCHAMICluster) {
 	conds := []string{
 		conditions.ConditionReconcileActive,
 		conditions.ConditionNamespaceReady,
@@ -96,7 +95,7 @@ func TestReporter_AllConditionsTrueAndServicesReady(t *testing.T) {
 	r := &Reporter{Recorder: record.NewFakeRecorder(8)}
 	r.ComputeAndSetPhase(c)
 
-	if c.Status.Phase != openahamiv1alpha1.PhaseReady {
+	if c.Status.Phase != openchamiv1alpha1.PhaseReady {
 		t.Fatalf("expected PhaseReady, got %q", c.Status.Phase)
 	}
 }
@@ -110,7 +109,7 @@ func TestReporter_CertificatesValidFalseDegrades(t *testing.T) {
 	r := &Reporter{Recorder: record.NewFakeRecorder(8)}
 	r.ComputeAndSetPhase(c)
 
-	if c.Status.Phase != openahamiv1alpha1.PhaseDegraded {
+	if c.Status.Phase != openchamiv1alpha1.PhaseDegraded {
 		t.Fatalf("expected PhaseDegraded, got %q", c.Status.Phase)
 	}
 }
@@ -121,10 +120,10 @@ func TestReporter_ServiceFlipsReadyToNotReady(t *testing.T) {
 	allServicesReady(c)
 	// Previous reconcile had reached Ready; this is what unlocks the
 	// regression detection in detectServiceRegressions.
-	c.Status.Phase = openahamiv1alpha1.PhaseReady
+	c.Status.Phase = openchamiv1alpha1.PhaseReady
 
 	// SMD has just dropped its Ready flag.
-	c.Status.Services[reconcilers.ServiceSMD] = openahamiv1alpha1.ServiceStatus{
+	c.Status.Services[reconcilers.ServiceSMD] = openchamiv1alpha1.ServiceStatus{
 		Ready:   false,
 		Message: "rolling restart",
 	}
@@ -133,7 +132,7 @@ func TestReporter_ServiceFlipsReadyToNotReady(t *testing.T) {
 	r := &Reporter{Recorder: rec}
 	r.ComputeAndSetPhase(c)
 
-	if c.Status.Phase != openahamiv1alpha1.PhaseDegraded {
+	if c.Status.Phase != openchamiv1alpha1.PhaseDegraded {
 		t.Fatalf("expected PhaseDegraded after Ready→NotReady, got %q", c.Status.Phase)
 	}
 
@@ -160,7 +159,7 @@ func TestReporter_NetworkProbeNoEligibleNodes(t *testing.T) {
 	r := &Reporter{Recorder: rec}
 	r.ComputeAndSetPhase(c)
 
-	if c.Status.Phase != openahamiv1alpha1.PhaseDegraded {
+	if c.Status.Phase != openchamiv1alpha1.PhaseDegraded {
 		t.Fatalf("expected PhaseDegraded for NoEligibleNodes, got %q", c.Status.Phase)
 	}
 	select {
@@ -184,7 +183,7 @@ func TestReporter_ProvisioningReason(t *testing.T) {
 	r := &Reporter{Recorder: record.NewFakeRecorder(8)}
 	r.ComputeAndSetPhase(c)
 
-	if c.Status.Phase != openahamiv1alpha1.PhaseProvisioning {
+	if c.Status.Phase != openchamiv1alpha1.PhaseProvisioning {
 		t.Fatalf("expected PhaseProvisioning, got %q", c.Status.Phase)
 	}
 }
@@ -198,7 +197,7 @@ func TestReporter_ErrorReasonFails(t *testing.T) {
 	r := &Reporter{Recorder: record.NewFakeRecorder(8)}
 	r.ComputeAndSetPhase(c)
 
-	if c.Status.Phase != openahamiv1alpha1.PhaseFailed {
+	if c.Status.Phase != openchamiv1alpha1.PhaseFailed {
 		t.Fatalf("expected PhaseFailed, got %q", c.Status.Phase)
 	}
 }
@@ -215,7 +214,7 @@ func TestReporter_PrecedenceLadder(t *testing.T) {
 
 	r := &Reporter{Recorder: record.NewFakeRecorder(8)}
 	r.ComputeAndSetPhase(c)
-	if c.Status.Phase != openahamiv1alpha1.PhaseFailed {
+	if c.Status.Phase != openchamiv1alpha1.PhaseFailed {
 		t.Fatalf("expected Failed to outrank Degraded/Provisioning, got %q", c.Status.Phase)
 	}
 
@@ -223,7 +222,7 @@ func TestReporter_PrecedenceLadder(t *testing.T) {
 	addCondition(c, conditions.ConditionVaultConfigured, metav1.ConditionTrue, conditions.ReasonReady)
 	c.Status.Phase = ""
 	r.ComputeAndSetPhase(c)
-	if c.Status.Phase != openahamiv1alpha1.PhaseDegraded {
+	if c.Status.Phase != openchamiv1alpha1.PhaseDegraded {
 		t.Fatalf("expected Degraded to outrank Provisioning, got %q", c.Status.Phase)
 	}
 
@@ -231,7 +230,7 @@ func TestReporter_PrecedenceLadder(t *testing.T) {
 	addCondition(c, conditions.ConditionCertificatesValid, metav1.ConditionTrue, conditions.ReasonReady)
 	c.Status.Phase = ""
 	r.ComputeAndSetPhase(c)
-	if c.Status.Phase != openahamiv1alpha1.PhaseProvisioning {
+	if c.Status.Phase != openchamiv1alpha1.PhaseProvisioning {
 		t.Fatalf("expected Provisioning over Ready, got %q", c.Status.Phase)
 	}
 }

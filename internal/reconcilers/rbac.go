@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -16,7 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -45,7 +44,7 @@ type RBACReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *RBACReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *RBACReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "rbac")
 	ns := ClusterNamespace(cluster)
 
@@ -81,7 +80,7 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alph
 	return ctrl.Result{}, nil
 }
 
-func (r *RBACReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *RBACReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	ns := ClusterNamespace(cluster)
 	objs := make([]client.Object, 0, len(serviceAccountNames)+3)
 	for _, name := range serviceAccountNames {
@@ -108,7 +107,7 @@ func (r *RBACReconciler) buildServiceAccount(ns, name string) *corev1.ServiceAcc
 	}
 }
 
-func (r *RBACReconciler) buildConfigReaderRole(cluster *openahamiv1alpha1.OpenCHAMICluster) *rbacv1.Role {
+func (r *RBACReconciler) buildConfigReaderRole(cluster *openchamiv1alpha1.OpenCHAMICluster) *rbacv1.Role {
 	ns := ClusterNamespace(cluster)
 	return &rbacv1.Role{
 		TypeMeta: metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "Role"},
@@ -125,7 +124,7 @@ func (r *RBACReconciler) buildConfigReaderRole(cluster *openahamiv1alpha1.OpenCH
 	}
 }
 
-func (r *RBACReconciler) buildConfigReaderRoleBinding(cluster *openahamiv1alpha1.OpenCHAMICluster) *rbacv1.RoleBinding {
+func (r *RBACReconciler) buildConfigReaderRoleBinding(cluster *openchamiv1alpha1.OpenCHAMICluster) *rbacv1.RoleBinding {
 	ns := ClusterNamespace(cluster)
 	return &rbacv1.RoleBinding{
 		TypeMeta: metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "RoleBinding"},
@@ -146,7 +145,7 @@ func (r *RBACReconciler) buildConfigReaderRoleBinding(cluster *openahamiv1alpha1
 	}
 }
 
-func (r *RBACReconciler) buildNetworkProbeClusterRole(cluster *openahamiv1alpha1.OpenCHAMICluster) *rbacv1.ClusterRole {
+func (r *RBACReconciler) buildNetworkProbeClusterRole(cluster *openchamiv1alpha1.OpenCHAMICluster) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		TypeMeta: metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "ClusterRole"},
 		ObjectMeta: metav1.ObjectMeta{

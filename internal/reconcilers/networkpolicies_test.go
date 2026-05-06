@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -52,7 +51,7 @@ const (
 //
 // Production code never hits this path: real apiservers do not depend on the
 // fake client's converter wiring.
-func newNetworkPolicyClient(scheme *runtime.Scheme, cluster *openahamiv1alpha1.OpenCHAMICluster) client.Client {
+func newNetworkPolicyClient(scheme *runtime.Scheme, cluster *openchamiv1alpha1.OpenCHAMICluster) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(cluster).
@@ -62,7 +61,7 @@ func newNetworkPolicyClient(scheme *runtime.Scheme, cluster *openahamiv1alpha1.O
 
 // newInClusterNetworkPolicyCluster returns a cluster wired for in-cluster
 // Vault and VersityGW so the namespaceSelector code path is exercised.
-func newInClusterNetworkPolicyCluster(name string) *openahamiv1alpha1.OpenCHAMICluster {
+func newInClusterNetworkPolicyCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
 	c := newCluster(name)
 	c.Spec.Platform.Vault.Address = testInClusterVaultAddr
 	c.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr

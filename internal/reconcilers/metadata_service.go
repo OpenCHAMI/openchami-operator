@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -41,11 +40,11 @@ type MetadataServiceReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *MetadataServiceReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *MetadataServiceReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "metadata-service")
 
-	if !cluster.Spec.Services.MetadataService.Enabled {
-		log.Info("metadata-service disabled, skipping")
+	if !ServiceDeployedInCluster(cluster, ServiceMetadataService) {
+		log.Info("metadata-service not operator-managed (disabled or external), skipping deployment")
 		return ctrl.Result{}, nil
 	}
 
@@ -87,9 +86,9 @@ func (r *MetadataServiceReconciler) Reconcile(ctx context.Context, cluster *open
 	}
 
 	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openahamiv1alpha1.ServiceStatus{}
+		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
-	cluster.Status.Services[ServiceMetadataService] = openahamiv1alpha1.ServiceStatus{
+	cluster.Status.Services[ServiceMetadataService] = openchamiv1alpha1.ServiceStatus{
 		Ready:    ready,
 		Endpoint: endpoint,
 		Message:  message,
@@ -101,7 +100,7 @@ func (r *MetadataServiceReconciler) Reconcile(ctx context.Context, cluster *open
 	return ctrl.Result{}, nil
 }
 
-func (r *MetadataServiceReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *MetadataServiceReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{
 		r.buildDeployment(cluster),
 		r.buildService(cluster),
@@ -110,7 +109,7 @@ func (r *MetadataServiceReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAM
 }
 
 // metadataServicePodLabels returns the canonical label set for metadata-service pods.
-func metadataServicePodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func metadataServicePodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceMetadataService,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -118,7 +117,7 @@ func metadataServicePodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[s
 	}
 }
 
-func (r *MetadataServiceReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
+func (r *MetadataServiceReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
 	labels := metadataServicePodLabels(cluster)
 
 	replicas := max(cluster.Spec.Services.MetadataService.Replicas, 1)
@@ -142,13 +141,10 @@ func (r *MetadataServiceReconciler) buildDeployment(cluster *openahamiv1alpha1.O
 	tmpVol, tmpMount := TmpVolume()
 
 	ns := ClusterNamespace(cluster)
-	smdURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:27779", ServiceSMD, ns)
-	jwksURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/.well-known/jwks.json", ServiceTokensmith, ns)
-
 	env := []corev1.EnvVar{
 		{Name: "METADATA_CLUSTER_NAME", Value: cluster.Spec.ClusterName},
-		{Name: "METADATA_SMD_URL", Value: smdURL},
-		{Name: "METADATA_JWKS_URL", Value: jwksURL},
+		{Name: "METADATA_SMD_URL", Value: ServiceURL(cluster, ServiceSMD)},
+		{Name: "METADATA_JWKS_URL", Value: ServiceURL(cluster, ServiceTokensmith) + "/.well-known/jwks.json"},
 	}
 
 	probe := func(period, failures int32) *corev1.Probe {
@@ -226,7 +222,7 @@ func (r *MetadataServiceReconciler) buildDeployment(cluster *openahamiv1alpha1.O
 	}
 }
 
-func (r *MetadataServiceReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.Service {
+func (r *MetadataServiceReconciler) buildService(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Service {
 	labels := metadataServicePodLabels(cluster)
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: "Service"},
@@ -248,7 +244,7 @@ func (r *MetadataServiceReconciler) buildService(cluster *openahamiv1alpha1.Open
 	}
 }
 
-func (r *MetadataServiceReconciler) buildPDB(cluster *openahamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
+func (r *MetadataServiceReconciler) buildPDB(cluster *openchamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
 	labels := metadataServicePodLabels(cluster)
 	minAvail := intstr.FromInt32(1)
 	return &policyv1.PodDisruptionBudget{

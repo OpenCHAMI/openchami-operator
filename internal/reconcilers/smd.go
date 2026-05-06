@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -21,7 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -33,10 +32,9 @@ const (
 	// ImageConfig; until then this constant is the only source of truth.
 	defaultSMDImage = "ghcr.io/openchami/smd:latest"
 
-	smdPort         int32 = 27779
-	smdPortName           = "http"
-	smdHealthPath         = "/hsm/v2/service/ready"
-	smdJWKSPortName       = "8080"
+	smdPort       int32 = 27779
+	smdPortName         = "http"
+	smdHealthPath       = "/hsm/v2/service/ready"
 
 	// Common label/key strings extracted to constants to satisfy goconst.
 	labelAppName    = "app.kubernetes.io/name"
@@ -66,11 +64,14 @@ type SMDReconciler struct {
 
 // Reconcile applies the SMD Deployment, Service, and PDB. It records readiness
 // in cluster.Status.Services["smd"]. The aggregator owns ConditionServicesReady.
-func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "smd")
 
-	if !cluster.Spec.Services.SMD.Enabled {
-		log.Info("smd disabled, skipping")
+	if !ServiceDeployedInCluster(cluster, ServiceSMD) {
+		// Either SMD is disabled, or the site has supplied an external
+		// endpoint via spec.services.smd.externalEndpoint — in either case
+		// the operator must not produce in-cluster objects for it.
+		log.Info("smd not operator-managed (disabled or external), skipping deployment")
 		return ctrl.Result{}, nil
 	}
 
@@ -119,9 +120,9 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha
 	}
 
 	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openahamiv1alpha1.ServiceStatus{}
+		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
-	cluster.Status.Services[ServiceSMD] = openahamiv1alpha1.ServiceStatus{
+	cluster.Status.Services[ServiceSMD] = openchamiv1alpha1.ServiceStatus{
 		Ready:    ready,
 		Endpoint: endpoint,
 		Message:  msg,
@@ -135,7 +136,7 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha
 
 // Describe returns the Kubernetes objects this reconciler would apply, in
 // apply order, without contacting any external service.
-func (r *SMDReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *SMDReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{
 		r.buildDeployment(cluster),
 		r.buildService(cluster),
@@ -144,7 +145,7 @@ func (r *SMDReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([
 }
 
 // podLabels returns the canonical pod selector labels for the SMD Deployment.
-func smdPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func smdPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceSMD,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -154,7 +155,7 @@ func smdPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string
 
 // smdImage resolves the container image for the SMD container, preferring the
 // per-cluster spec override, falling back to defaultSMDImage.
-func smdImage(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func smdImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	img := cluster.Spec.Services.SMD.Image
 	if img == nil {
 		return defaultSMDImage
@@ -174,7 +175,7 @@ func smdImage(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 	}
 }
 
-func (r *SMDReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
+func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
 	ns := ClusterNamespace(cluster)
 	labels := smdPodLabels(cluster)
 	replicas := cluster.Spec.Services.SMD.Replicas
@@ -188,8 +189,7 @@ func (r *SMDReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCHAMIClus
 
 	dbHost := fmt.Sprintf("openchami-%s-postgres-rw.%s.svc.cluster.local",
 		cluster.Spec.ClusterName, ns)
-	jwksURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%s/.well-known/jwks.json",
-		ServiceTokensmith, ns, smdJWKSPortName)
+	jwksURL := ServiceURL(cluster, ServiceTokensmith) + "/.well-known/jwks.json"
 	dbCredsSecret := SecretName(cluster, SuffixDBCredentials)
 
 	container := corev1.Container{
@@ -290,7 +290,7 @@ func (r *SMDReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCHAMIClus
 	}
 }
 
-func (r *SMDReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.Service {
+func (r *SMDReconciler) buildService(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Service {
 	labels := smdPodLabels(cluster)
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindService},
@@ -312,7 +312,7 @@ func (r *SMDReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAMICluster
 	}
 }
 
-func (r *SMDReconciler) buildPDB(cluster *openahamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
+func (r *SMDReconciler) buildPDB(cluster *openchamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
 	labels := smdPodLabels(cluster)
 	minAvailable := intstr.FromInt32(1)
 	return &policyv1.PodDisruptionBudget{

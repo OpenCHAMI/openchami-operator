@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -19,7 +18,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -64,16 +63,16 @@ func TestNetworkProbeReconciler_DisabledTriviallyReady(t *testing.T) {
 func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe = openahamiv1alpha1.NetworkProbeSpec{
+	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:         true,
 		IntervalSeconds: 60,
-		ProvisionNetwork: &openahamiv1alpha1.NetworkProbeTarget{
+		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{
 			Subnet:          testProvisionSubnet,
 			ValidateHost:    "10.0.0.1",
 			ValidatePort:    80,
 			ValidateTimeout: "3s",
 		},
-		BMCNetwork: &openahamiv1alpha1.NetworkProbeTarget{
+		BMCNetwork: &openchamiv1alpha1.NetworkProbeTarget{
 			Subnet: testBMCSubnet,
 		},
 	}
@@ -155,10 +154,10 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 func TestNetworkProbeReconciler_NoEligibleNodes(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe = openahamiv1alpha1.NetworkProbeSpec{
+	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:          true,
-		ProvisionNetwork: &openahamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
-		BMCNetwork:       &openahamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
+		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
+		BMCNetwork:       &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
 	}
 
 	// Pre-create a DaemonSet whose status reports two pods Ready, but no
@@ -214,10 +213,10 @@ func TestNetworkProbeReconciler_NoEligibleNodes(t *testing.T) {
 func TestNetworkProbeReconciler_PopulatesProbeStatus(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe = openahamiv1alpha1.NetworkProbeSpec{
+	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:          true,
-		ProvisionNetwork: &openahamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
-		BMCNetwork:       &openahamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
+		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
+		BMCNetwork:       &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
 	}
 
 	existingDS := &appsv1.DaemonSet{

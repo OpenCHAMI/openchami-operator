@@ -1,21 +1,9 @@
 //go:build e2e
 // +build e2e
 
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package e2e
 
@@ -94,7 +82,7 @@ func observabilityKubectlDelete(args ...string) {
 // observabilityApplyVenadoCluster applies the venado test cluster YAML with
 // logging enabled and the specified TLS Secret reference.
 func observabilityApplyVenadoCluster() error {
-	manifest := fmt.Sprintf(`apiVersion: openchami.org/v1alpha1
+	manifest := fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: %s
@@ -415,11 +403,26 @@ var _ = Describe("Observability", Ordered, func() {
 					observabilityExpectedFlushSecs)
 			}).Should(Succeed())
 
-			// TODO(phase-15): assert that Parquet objects appear in the log
-			// bucket after 2x flush interval. The funicular-collector's actual
-			// log-uploading behavior is owned by an external project and is
-			// not deterministic in CI today. Re-enable when the collector
-			// image gains a synchronous flush hook usable from tests.
+			// Parquet-presence assertion is gated on E2E_PARQUET_PRESENCE=1.
+			// The funicular-collector's flush behaviour is owned upstream and
+			// is not deterministic in CI, so unset = skip-with-warning rather
+			// than silently green. Set E2E_PARQUET_PRESENCE=1 in environments
+			// that have a synchronous flush hook wired up.
+			if os.Getenv("E2E_PARQUET_PRESENCE") == "1" {
+				By("waiting for parquet objects in the log bucket")
+				Eventually(func(g Gomega) {
+					out, err := observabilityS3LS(observabilityVenadoLogBucket)
+					g.Expect(err).NotTo(HaveOccurred(),
+						"listing log bucket %s for parquet check",
+						observabilityVenadoLogBucket)
+					g.Expect(strings.ToLower(out)).To(ContainSubstring(".parquet"),
+						"no .parquet objects found in %s",
+						observabilityVenadoLogBucket)
+				}).WithTimeout(2 * time.Minute).Should(Succeed())
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter,
+					"E2E-13: skipping parquet-presence assertion (set E2E_PARQUET_PRESENCE=1 to enable)\n")
+			}
 		})
 	})
 
@@ -485,14 +488,28 @@ var _ = Describe("Observability", Ordered, func() {
 					observabilityVenadoNamespace)
 			}).Should(Succeed())
 
-			// TODO(phase-15): assert that backup artifacts also appear in
-			// localstack at s3://<observabilityVenadoBackupBucket>/<cluster>/.
-			// The current `ochami-admin backup` implementation only writes
-			// artifacts to the local --output-prefix directory and prints
-			// copy-paste-ready upload instructions on stderr (see
-			// internal/admin/backup.go printManualSteps). Once the upload is
-			// automated (or the e2e harness shells out to `aws s3 cp` itself),
-			// re-enable the localstack-presence half of this test.
+			// Backup-presence assertion is gated on E2E_BACKUP_PRESENCE=1.
+			// `ochami-admin backup` currently only writes artifacts to the
+			// local --output-prefix directory and prints upload instructions
+			// on stderr (see internal/admin/backup.go printManualSteps).
+			// When that command grows automated upload — or the harness shells
+			// out to `aws s3 cp` itself — set E2E_BACKUP_PRESENCE=1 to enable
+			// the localstack-presence half of this test.
+			if os.Getenv("E2E_BACKUP_PRESENCE") == "1" {
+				By("listing backup artifacts in the localstack backup bucket")
+				Eventually(func(g Gomega) {
+					out, err := observabilityS3LS(observabilityVenadoBackupBucket)
+					g.Expect(err).NotTo(HaveOccurred(),
+						"listing backup bucket %s",
+						observabilityVenadoBackupBucket)
+					g.Expect(strings.TrimSpace(out)).NotTo(BeEmpty(),
+						"backup bucket %s is empty after backup",
+						observabilityVenadoBackupBucket)
+				}).WithTimeout(2 * time.Minute).Should(Succeed())
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter,
+					"E2E-14: skipping localstack backup-presence assertion (set E2E_BACKUP_PRESENCE=1 to enable)\n")
+			}
 		})
 	})
 })

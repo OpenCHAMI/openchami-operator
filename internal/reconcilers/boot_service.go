@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -41,10 +40,10 @@ const (
 	s3AccessKeyKey = "access_key"
 	s3SecretKeyKey = "secret_key"
 
-	// In-cluster service host templates. The "%s" is the cluster name.
+	// In-cluster Postgres host template. The "%s" placeholders are the
+	// cluster name. Service URLs are resolved via ServiceURL() in helpers.go
+	// so that spec.services.<svc>.externalEndpoint overrides are honoured.
 	postgresRWHostTemplate = "openchami-%s-postgres-rw.openchami-%s.svc.cluster.local"
-	smdHostTemplate        = "http://smd.openchami-%s.svc.cluster.local:27779"
-	tokensmithJWKSTemplate = "http://tokensmith.openchami-%s.svc.cluster.local:8080/.well-known/jwks.json"
 )
 
 // BootServiceReconciler ensures the boot-service Deployment, Service, and PDB exist.
@@ -53,11 +52,11 @@ type BootServiceReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *BootServiceReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *BootServiceReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "boot-service")
 
-	if !cluster.Spec.Services.BootService.Enabled {
-		log.Info("boot-service disabled, skipping")
+	if !ServiceDeployedInCluster(cluster, ServiceBootService) {
+		log.Info("boot-service not operator-managed (disabled or external), skipping deployment")
 		return ctrl.Result{}, nil
 	}
 
@@ -99,9 +98,9 @@ func (r *BootServiceReconciler) Reconcile(ctx context.Context, cluster *openaham
 	}
 
 	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openahamiv1alpha1.ServiceStatus{}
+		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
-	cluster.Status.Services[ServiceBootService] = openahamiv1alpha1.ServiceStatus{
+	cluster.Status.Services[ServiceBootService] = openchamiv1alpha1.ServiceStatus{
 		Ready:    ready,
 		Endpoint: endpoint,
 		Message:  message,
@@ -113,7 +112,7 @@ func (r *BootServiceReconciler) Reconcile(ctx context.Context, cluster *openaham
 	return ctrl.Result{}, nil
 }
 
-func (r *BootServiceReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *BootServiceReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{
 		r.buildDeployment(cluster),
 		r.buildService(cluster),
@@ -122,7 +121,7 @@ func (r *BootServiceReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMIClu
 }
 
 // bootServicePodLabels returns the canonical label set for boot-service pods.
-func bootServicePodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func bootServicePodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceBootService,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -130,7 +129,7 @@ func bootServicePodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[strin
 	}
 }
 
-func (r *BootServiceReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
+func (r *BootServiceReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
 	labels := bootServicePodLabels(cluster)
 	bs := cluster.Spec.Services.BootService
 	replicas := bs.Replicas
@@ -169,8 +168,8 @@ func (r *BootServiceReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenC
 				},
 			},
 		},
-		{Name: "BOOT_SERVICE_SMD_URL", Value: fmt.Sprintf(smdHostTemplate, name)},
-		{Name: "BOOT_SERVICE_JWKS_URL", Value: fmt.Sprintf(tokensmithJWKSTemplate, name)},
+		{Name: "BOOT_SERVICE_SMD_URL", Value: ServiceURL(cluster, ServiceSMD)},
+		{Name: "BOOT_SERVICE_JWKS_URL", Value: ServiceURL(cluster, ServiceTokensmith) + "/.well-known/jwks.json"},
 		{Name: "BOOT_SERVICE_S3_ENDPOINT", Value: cluster.Spec.Platform.ObjectStorage.Endpoint},
 		{Name: "BOOT_SERVICE_S3_BUCKET", Value: BootBucketName(cluster)},
 		{
@@ -268,7 +267,7 @@ func (r *BootServiceReconciler) buildDeployment(cluster *openahamiv1alpha1.OpenC
 	}
 }
 
-func (r *BootServiceReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.Service {
+func (r *BootServiceReconciler) buildService(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Service {
 	labels := bootServicePodLabels(cluster)
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindService},
@@ -290,7 +289,7 @@ func (r *BootServiceReconciler) buildService(cluster *openahamiv1alpha1.OpenCHAM
 	}
 }
 
-func (r *BootServiceReconciler) buildPDB(cluster *openahamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
+func (r *BootServiceReconciler) buildPDB(cluster *openchamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
 	labels := bootServicePodLabels(cluster)
 	minAvail := intstr.FromInt32(1)
 	return &policyv1.PodDisruptionBudget{

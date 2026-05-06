@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -22,7 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -48,7 +47,11 @@ const (
 
 	// probeNetworkReadyLabelFmt is the label key written by the probe binary
 	// onto each node. Format args are clusterName, probeType ("provision"|"bmc").
-	probeNetworkReadyLabelFmt = "openchami.org/%s/%s-network-ready"
+	//
+	// Kubernetes label keys allow at most one '/' (prefix/name), so the
+	// cluster name and probe type are joined into the qualified-name
+	// segment: openchami.org/<cluster>-<probe>-network-ready.
+	probeNetworkReadyLabelFmt = "openchami.org/%s-%s-network-ready"
 	// probeLabelValueTrue is the "passes probe" value of the probe-applied label.
 	probeLabelValueTrue = "true"
 
@@ -73,7 +76,7 @@ type NetworkProbeReconciler struct {
 
 // Reconcile applies the probe DaemonSet (if probing is enabled), reads back
 // node labels written by the probe binary, and sets ConditionNetworkProbeReady.
-func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "networkprobe")
 
 	if !cluster.Spec.NetworkProbe.Enabled {
@@ -150,7 +153,7 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *openaha
 	bmcOK := !bmcConfigured || len(bmcNodes) > 0
 	probeReady := provisionOK && bmcOK
 
-	cluster.Status.NetworkProbe = &openahamiv1alpha1.NetworkProbeStatus{
+	cluster.Status.NetworkProbe = &openchamiv1alpha1.NetworkProbeStatus{
 		NodesWithProvisionAccess: provisionNodes,
 		NodesWithBMCAccess:       bmcNodes,
 		ProbeReady:               probeReady,
@@ -194,7 +197,7 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *openaha
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when the probe is disabled so callers
 // can iterate without nil checks.
-func (r *NetworkProbeReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *NetworkProbeReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	if !cluster.Spec.NetworkProbe.Enabled {
 		return []client.Object{}, nil
 	}
@@ -202,7 +205,7 @@ func (r *NetworkProbeReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICl
 }
 
 // networkProbePodLabels returns the canonical label set for probe pods.
-func networkProbePodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func networkProbePodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceNetworkProbe,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -223,7 +226,7 @@ func fieldRefEnv(name, fieldPath string) corev1.EnvVar {
 // targetEnvVars expands a NetworkProbeTarget into four PROBE_<prefix>_*
 // environment variables. Always emits all four (empty when target is nil)
 // so the probe binary sees a deterministic env shape.
-func targetEnvVars(prefix string, t *openahamiv1alpha1.NetworkProbeTarget) []corev1.EnvVar {
+func targetEnvVars(prefix string, t *openchamiv1alpha1.NetworkProbeTarget) []corev1.EnvVar {
 	subnet, host, port, timeout := "", "", "", ""
 	if t != nil {
 		subnet = t.Subnet
@@ -241,7 +244,7 @@ func targetEnvVars(prefix string, t *openahamiv1alpha1.NetworkProbeTarget) []cor
 	}
 }
 
-func (r *NetworkProbeReconciler) buildDaemonSet(cluster *openahamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
+func (r *NetworkProbeReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
 	labels := networkProbePodLabels(cluster)
 	tmpVol, tmpMount := TmpVolume()
 

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 // Package main implements the openchami network probe.
 //
@@ -18,8 +17,8 @@ Licensed under the Apache License, Version 2.0.
 //
 //  3. Patches the local Node object with two labels per cluster:
 //
-//     openchami.org/{cluster}/provision-network-ready = "true" | "false"
-//     openchami.org/{cluster}/bmc-network-ready       = "true" | "false"
+//     openchami.org/{cluster}-provision-network-ready = "true" | "false"
+//     openchami.org/{cluster}-bmc-network-ready       = "true" | "false"
 //
 //     using the in-cluster ServiceAccount (network-probe ClusterRole grants
 //     get;patch on nodes) and a strategic-merge patch.
@@ -171,7 +170,7 @@ func (r *probeRunner) checkTarget(kind string, t *targetConfig) bool {
 }
 
 func probeLabelKey(cluster, kind string) string {
-	return fmt.Sprintf("openchami.org/%s/%s-network-ready", cluster, kind)
+	return fmt.Sprintf("openchami.org/%s-%s-network-ready", cluster, kind)
 }
 
 func boolStr(b bool) string {

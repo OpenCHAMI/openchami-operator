@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -25,7 +24,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	s3pkg "github.com/openchami/openchami-operator/internal/s3"
 	vaultfake "github.com/openchami/openchami-operator/internal/vault/fake"
@@ -34,7 +33,7 @@ import (
 // faultS3CredsSecret returns a Secret matching what VSO would sync from the
 // cluster's s3-credentials Vault path, so BucketReconciler progresses past
 // the "wait for creds" stage.
-func faultS3CredsSecret(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.Secret {
+func faultS3CredsSecret(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SecretName(cluster, SuffixS3Credentials),
@@ -416,10 +415,10 @@ func TestF05_ConcurrentReconciles_NoRaces(t *testing.T) {
 func TestF06_NetworkProbeNoEligibleNodes(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster(testClusterAlpha)
-	cluster.Spec.NetworkProbe = openahamiv1alpha1.NetworkProbeSpec{
+	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:          true,
-		ProvisionNetwork: &openahamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
-		BMCNetwork:       &openahamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
+		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
+		BMCNetwork:       &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
 	}
 
 	// Pre-create a probe DaemonSet showing pods are running, plus a couple

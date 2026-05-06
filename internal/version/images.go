@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package version
 
@@ -32,7 +31,7 @@ func DefaultImages() ImageConfig {
 		Tokensmith:      envOr("OPENCHAMI_IMAGE_TOKENSMITH", "ghcr.io/openchami/tokensmith:latest"),
 		BootService:     envOr("OPENCHAMI_IMAGE_BOOT_SERVICE", "ghcr.io/openchami/boot-service:latest"),
 		MetadataService: envOr("OPENCHAMI_IMAGE_METADATA_SERVICE", "ghcr.io/openchami/metadata-service:latest"),
-		CoreDHCP:        envOr("OPENCHAMI_IMAGE_COREDHCP", "ghcr.io/openchami/coresmd:latest"),
+		CoreDHCP:        envOr("OPENCHAMI_IMAGE_COREDHCP", "ghcr.io/openchami/coredhcp:latest"),
 		Magellan:        envOr("OPENCHAMI_IMAGE_MAGELLAN", "ghcr.io/openchami/magellan:latest"),
 		NetworkProbe:    envOr("OPENCHAMI_IMAGE_NETWORK_PROBE", operatorImage),
 		Funicular:       envOr("OPENCHAMI_IMAGE_FUNICULAR", "ghcr.io/openchami/legendary-funicular:latest"),

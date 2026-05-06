@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -22,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/vault"
 )
@@ -36,7 +35,7 @@ func fixedNow(t time.Time) func() time.Time {
 
 // newTopologyClient mirrors newNetworkPolicyClient: SSA against the fake
 // client requires the deduced converter for ConfigMap apply patches.
-func newTopologyClient(t *testing.T, cluster *openahamiv1alpha1.OpenCHAMICluster) client.Client {
+func newTopologyClient(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMICluster) client.Client {
 	t.Helper()
 	scheme := newScheme(t)
 	return fake.NewClientBuilder().
@@ -47,7 +46,7 @@ func newTopologyClient(t *testing.T, cluster *openahamiv1alpha1.OpenCHAMICluster
 }
 
 // fetchTopology reads the topology ConfigMap and parses topology.json.
-func fetchTopology(t *testing.T, c client.Client, cluster *openahamiv1alpha1.OpenCHAMICluster) (*corev1.ConfigMap, TopologySpec) {
+func fetchTopology(t *testing.T, c client.Client, cluster *openchamiv1alpha1.OpenCHAMICluster) (*corev1.ConfigMap, TopologySpec) {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
 	key := types.NamespacedName{
@@ -220,7 +219,7 @@ func TestTopologyReconciler_HashChangesOnSpecChange(t *testing.T) {
 
 func TestTopologyReconciler_ServiceReadyReflectsStatus(t *testing.T) {
 	cluster := newCluster(testClusterAlpha)
-	cluster.Status.Services = map[string]openahamiv1alpha1.ServiceStatus{
+	cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{
 		ServiceSMD: {Ready: true, Endpoint: "ignored"},
 	}
 	c := newTopologyClient(t, cluster)

@@ -4,14 +4,19 @@ name: openchami-dev
 nodes:
   - role: control-plane
     # Pre-label the node for network probe tests.
+    #
     # In a real deployment these labels are applied by the probe DaemonSet.
-    # In tests we set them directly so CoreDHCP and Magellan can schedule.
+    # In tests we set them up front so CoreDHCP and Magellan can schedule
+    # without waiting for a probe pass. The labels are per-clusterName, so
+    # any cluster fixture used by the test suite needs its name added here.
+    # Today: testcluster (minimal-cluster.yaml), venado + frontier
+    # (dual-cluster.yaml), and venado-prod (full-cluster.yaml).
     kubeadmConfigPatches:
       - |
         kind: InitConfiguration
         nodeRegistration:
           kubeletExtraArgs:
-            node-labels: "openchami.org/testcluster/provision-network-ready=true,openchami.org/testcluster/bmc-network-ready=true"
+            node-labels: "openchami.org/testcluster-provision-network-ready=true,openchami.org/testcluster-bmc-network-ready=true,openchami.org/venado-provision-network-ready=true,openchami.org/venado-bmc-network-ready=true,openchami.org/frontier-provision-network-ready=true,openchami.org/frontier-bmc-network-ready=true,openchami.org/venado-prod-provision-network-ready=true,openchami.org/venado-prod-bmc-network-ready=true"
     extraPortMappings:
       - containerPort: 80
         hostPort: 8080

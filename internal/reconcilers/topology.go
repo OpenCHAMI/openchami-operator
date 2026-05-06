@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 	"github.com/openchami/openchami-operator/internal/vault"
@@ -69,7 +68,7 @@ type TopologyReconciler struct {
 
 // Reconcile builds the topology document, applies it as a ConfigMap, and
 // records the content hash in cluster.Status.TopologyVersion.
-func (r *TopologyReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *TopologyReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "topology")
 
 	spec := r.buildTopology(cluster)
@@ -137,7 +136,7 @@ func (r *TopologyReconciler) Reconcile(ctx context.Context, cluster *openahamiv1
 // Describe returns the ConfigMap this reconciler would apply. The version and
 // generatedAt fields are populated so the rendered JSON is stable enough for
 // `ochami-admin describe` to round-trip through `kubectl apply`.
-func (r *TopologyReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *TopologyReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	spec := r.buildTopology(cluster)
 	hash, err := computeTopologyHash(spec)
 	if err != nil {
@@ -163,7 +162,7 @@ func (r *TopologyReconciler) now() time.Time {
 // buildTopology assembles the TopologySpec from cluster spec and per-service
 // status. The version and generatedAt fields are intentionally left blank
 // here; the caller fills them in after computing the content hash.
-func (r *TopologyReconciler) buildTopology(cluster *openahamiv1alpha1.OpenCHAMICluster) TopologySpec {
+func (r *TopologyReconciler) buildTopology(cluster *openchamiv1alpha1.OpenCHAMICluster) TopologySpec {
 	ns := ClusterNamespace(cluster)
 	clusterName := cluster.Spec.ClusterName
 	paths := vault.Paths(clusterName)
@@ -220,7 +219,7 @@ func (r *TopologyReconciler) buildTopology(cluster *openahamiv1alpha1.OpenCHAMIC
 }
 
 // buildConfigMap returns the operator-managed topology ConfigMap.
-func (r *TopologyReconciler) buildConfigMap(cluster *openahamiv1alpha1.OpenCHAMICluster, payload string) *corev1.ConfigMap {
+func (r *TopologyReconciler) buildConfigMap(cluster *openchamiv1alpha1.OpenCHAMICluster, payload string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindConfigMap},
 		ObjectMeta: metav1.ObjectMeta{
@@ -240,7 +239,7 @@ func (r *TopologyReconciler) buildConfigMap(cluster *openahamiv1alpha1.OpenCHAMI
 
 // topologyConfigMapName returns the canonical ConfigMap name for the cluster
 // topology document.
-func topologyConfigMapName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func topologyConfigMapName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	return "openchami-" + cluster.Spec.ClusterName + "-topology"
 }
 
@@ -259,7 +258,7 @@ func postgresEndpoint(clusterName, namespace, role string) string {
 
 // serviceReady reports whether the named service has reported Ready in the
 // cluster status. Absent or not-yet-ready services map to false.
-func serviceReady(cluster *openahamiv1alpha1.OpenCHAMICluster, name string) bool {
+func serviceReady(cluster *openchamiv1alpha1.OpenCHAMICluster, name string) bool {
 	st, ok := cluster.Status.Services[name]
 	return ok && st.Ready
 }

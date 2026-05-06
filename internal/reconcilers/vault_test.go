@@ -1,13 +1,13 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/vault"
 	vaultfake "github.com/openchami/openchami-operator/internal/vault/fake"
@@ -59,7 +59,7 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("adding clientgo scheme: %v", err)
 	}
-	if err := openahamiv1alpha1.AddToScheme(scheme); err != nil {
+	if err := openchamiv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("adding openchami scheme: %v", err)
 	}
 	if err := vsov1beta1.AddToScheme(scheme); err != nil {
@@ -80,23 +80,38 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func newCluster(name string) *openahamiv1alpha1.OpenCHAMICluster {
-	return &openahamiv1alpha1.OpenCHAMICluster{
+func newCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
+	return &openchamiv1alpha1.OpenCHAMICluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
-		Spec: openahamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
 			ClusterName: name,
 			Domain:      name + ".test.local",
-			Platform: openahamiv1alpha1.PlatformSpec{
-				Vault: openahamiv1alpha1.VaultSpec{
+			Platform: openchamiv1alpha1.PlatformSpec{
+				Vault: openchamiv1alpha1.VaultSpec{
 					Address:    "http://vault.test:8200",
-					AuthMethod: openahamiv1alpha1.VaultAuthMethodKubernetes,
+					AuthMethod: openchamiv1alpha1.VaultAuthMethodKubernetes,
 				},
-				ObjectStorage: openahamiv1alpha1.ObjectStorageSpec{
+				ObjectStorage: openchamiv1alpha1.ObjectStorageSpec{
 					Endpoint: testS3Endpoint,
 				},
 			},
-			Services: openahamiv1alpha1.ServicesSpec{
-				Tokensmith: openahamiv1alpha1.TokensmithSpec{OIDCProvider: "vault"},
+			// Mirror the post-admission default-enabled state so reconciler
+			// unit tests reflect what the API server hands the controller in
+			// production. Tests that want a service disabled override this.
+			Services: openchamiv1alpha1.ServicesSpec{
+				SMD: openchamiv1alpha1.SMDSpec{
+					ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true},
+				},
+				Tokensmith: openchamiv1alpha1.TokensmithSpec{
+					ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true},
+					OIDCProvider:    "vault",
+				},
+				BootService: openchamiv1alpha1.BootServiceSpec{
+					ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true},
+				},
+				MetadataService: openchamiv1alpha1.MetadataServiceSpec{
+					ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true},
+				},
 			},
 		},
 	}
@@ -130,6 +145,38 @@ func TestVaultReconciler_HappyPath(t *testing.T) {
 	}
 	if cluster.Status.VaultPathPrefix != paths.SecretPrefix {
 		t.Errorf("expected VaultPathPrefix=%q, got %q", paths.SecretPrefix, cluster.Status.VaultPathPrefix)
+	}
+}
+
+// TestVaultReconciler_OIDCIssuerHasNoPath is a regression test for the bug
+// fixed on 2026-05-04: the reconciler used to build
+// `https://<domain>/oidc/<clusterName>` and pass it to Vault's
+// identity/oidc/config, which Vault rejects with
+// "invalid issuer, which must include only a scheme, host, and optional port".
+// Vault hosts the issuer at `<base>/v1/identity/oidc/...` itself, so the
+// operator must pass only the base URL. The cluster-name partition is carried
+// by the OIDC key (`openchami-<clusterName>`), not the issuer URL.
+func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
+	scheme := newScheme(t)
+	cluster := newCluster("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	issuer, ok := v.OIDCConfigs[cluster.Spec.ClusterName]
+	if !ok {
+		t.Fatalf("expected OIDCConfig recorded for cluster %q, got %+v", cluster.Spec.ClusterName, v.OIDCConfigs)
+	}
+	want := "https://" + cluster.Spec.Domain
+	if issuer != want {
+		t.Errorf("expected issuer = %q (scheme + host only), got %q", want, issuer)
+	}
+	if strings.Contains(strings.TrimPrefix(issuer, "https://"), "/") {
+		t.Errorf("issuer URL must not contain a path component (Vault rejects it), got %q", issuer)
 	}
 }
 
@@ -200,4 +247,50 @@ func TestVaultReconciler_TwoClustersIsolated(t *testing.T) {
 	if v.Secrets[red.DBCredentials][VaultKeySMDPassword] == v.Secrets[blue.DBCredentials][VaultKeySMDPassword] {
 		t.Errorf("expected distinct random passwords across clusters")
 	}
+}
+
+// TestVaultStaticSecretSuffixesAllResolveToNonEmptyPaths is a regression test
+// for the parallel-list bug fixed on 2026-05-04: vssNames and pathByName were
+// two separate sources of truth, so adding a suffix to one without the other
+// silently produced a VaultStaticSecret with an empty `path:` field.
+//
+// vssEntries is now the single source of truth and this test asserts every
+// entry's PathFn returns a non-empty path under a sample cluster's Paths.
+func TestVaultStaticSecretSuffixesAllResolveToNonEmptyPaths(t *testing.T) {
+	paths := vault.Paths("audit-cluster")
+	if len(vssEntries) == 0 {
+		t.Fatal("vssEntries is empty — at least DBCredentials must be present")
+	}
+	seen := make(map[string]struct{}, len(vssEntries))
+	for _, e := range vssEntries {
+		if _, dup := seen[e.Suffix]; dup {
+			t.Errorf("duplicate suffix %q in vssEntries", e.Suffix)
+		}
+		seen[e.Suffix] = struct{}{}
+
+		got := e.PathFn(paths)
+		if got == "" {
+			t.Errorf("PathFn for suffix %q returned empty path", e.Suffix)
+		}
+		// Every cluster-scoped path must include the cluster name to honour
+		// invariant 3 (Vault path isolation).
+		if got != "" && !strings.Contains(got, "audit-cluster") {
+			t.Errorf("PathFn for suffix %q returned %q which does not include the cluster name (invariant 3)", e.Suffix, got)
+		}
+	}
+}
+
+// TestBuildVaultStaticSecret_UnknownSuffixPanics asserts that a typo in a
+// caller passing an unrecognised suffix is caught loudly rather than silently
+// producing an empty-path VSS. The runtime panic is the safety net behind
+// vssEntries being the single source of truth.
+func TestBuildVaultStaticSecret_UnknownSuffixPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for unknown suffix")
+		}
+	}()
+	r := &VaultReconciler{}
+	cluster := newCluster("audit-cluster")
+	_ = r.buildVaultStaticSecret(cluster, "no-such-suffix", vault.Paths("audit-cluster"))
 }

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 	"github.com/openchami/openchami-operator/internal/vault"
@@ -35,12 +34,34 @@ const (
 	vsoKindVaultStaticSecret = "VaultStaticSecret"
 )
 
-// vssNames lists the suffixes of every VaultStaticSecret produced by the vault sub-reconciler.
-var vssNames = []string{
-	SuffixDBCredentials,
-	SuffixS3Credentials,
-	SuffixLogCredentials,
-	SuffixTokensmithOIDC,
+// vssEntries lists every VaultStaticSecret produced by this reconciler and
+// the function that returns its full Vault path. Adding a new entry here is
+// the single source of truth — the suffix-only list, the path-by-suffix map,
+// and the produced VSS objects all derive from this slice. A test
+// (TestVaultStaticSecretSuffixesAllResolveToNonEmptyPaths) asserts that every
+// entry's pathFn returns a non-empty path for a sample cluster, so a future
+// addition to vault.VaultPaths cannot silently produce a VSS with an empty
+// `path:`.
+type vssEntry struct {
+	Suffix string
+	PathFn func(vault.VaultPaths) string
+}
+
+var vssEntries = []vssEntry{
+	{SuffixDBCredentials, func(p vault.VaultPaths) string { return p.DBCredentials }},
+	{SuffixS3Credentials, func(p vault.VaultPaths) string { return p.S3Credentials }},
+	{SuffixLogCredentials, func(p vault.VaultPaths) string { return p.LogCredentials }},
+	{SuffixTokensmithOIDC, func(p vault.VaultPaths) string { return p.TokensmithOIDC }},
+}
+
+// vssNames returns just the suffixes — used by callers that only need names
+// (e.g. metric/log enumeration of expected secrets).
+func vssNames() []string {
+	out := make([]string, len(vssEntries))
+	for i, e := range vssEntries {
+		out[i] = e.Suffix
+	}
+	return out
 }
 
 // VaultReconciler ensures Vault paths, policies, and VSO resources exist.
@@ -50,7 +71,7 @@ type VaultReconciler struct {
 	VaultClient vault.Client
 }
 
-func (r *VaultReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *VaultReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "vault")
 	log.Info("reconciling vault configuration")
 
@@ -94,7 +115,7 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alp
 	}
 
 	switch cluster.Spec.Platform.Vault.AuthMethod {
-	case openahamiv1alpha1.VaultAuthMethodAppRole:
+	case openchamiv1alpha1.VaultAuthMethodAppRole:
 		if _, err := r.VaultClient.EnsureAppRole(ctx, paths.AppRoleServices, vault.AppRoleConfig{
 			Policies:    []string{paths.PolicyServices},
 			TokenTTL:    "15m",
@@ -115,7 +136,12 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alp
 	}
 
 	if cluster.Spec.Services.Tokensmith.OIDCProvider == "vault" {
-		issuer := fmt.Sprintf("https://%s/oidc/%s", cluster.Spec.Domain, cluster.Spec.ClusterName)
+		// Vault rejects issuer URLs that contain a path: it accepts only
+		// scheme + host (+ optional port) and appends the OIDC provider
+		// path itself. The cluster-name partition is carried by the OIDC
+		// key (`openchami-<clusterName>`) created inside EnsureOIDCConfig,
+		// not by the issuer URL.
+		issuer := fmt.Sprintf("https://%s", cluster.Spec.Domain)
 		if err := r.VaultClient.EnsureOIDCConfig(ctx, cluster.Spec.ClusterName, issuer); err != nil {
 			return r.fail(cluster, fmt.Errorf("ensuring oidc config: %w", err))
 		}
@@ -136,17 +162,17 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alp
 	return ctrl.Result{}, nil
 }
 
-func (r *VaultReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *VaultReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	paths := vault.Paths(cluster.Spec.ClusterName)
-	objs := make([]client.Object, 0, 2+len(vssNames))
+	objs := make([]client.Object, 0, 2+len(vssEntries))
 	objs = append(objs, r.buildVaultConnection(cluster), r.buildVaultAuth(cluster))
-	for _, name := range vssNames {
-		objs = append(objs, r.buildVaultStaticSecret(cluster, name, paths))
+	for _, e := range vssEntries {
+		objs = append(objs, r.buildVaultStaticSecret(cluster, e.Suffix, paths))
 	}
 	return objs, nil
 }
 
-func (r *VaultReconciler) fail(cluster *openahamiv1alpha1.OpenCHAMICluster, err error) (ctrl.Result, error) {
+func (r *VaultReconciler) fail(cluster *openchamiv1alpha1.OpenCHAMICluster, err error) (ctrl.Result, error) {
 	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionVaultConfigured,
 		Status:             metav1.ConditionFalse,
@@ -185,11 +211,11 @@ func (r *VaultReconciler) ensureClusterSecrets(ctx context.Context, paths vault.
 	return nil
 }
 
-func (r *VaultReconciler) applyVSOResources(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster, paths vault.VaultPaths) error {
-	objs := make([]client.Object, 0, 2+len(vssNames))
+func (r *VaultReconciler) applyVSOResources(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster, paths vault.VaultPaths) error {
+	objs := make([]client.Object, 0, 2+len(vssEntries))
 	objs = append(objs, r.buildVaultConnection(cluster), r.buildVaultAuth(cluster))
-	for _, name := range vssNames {
-		objs = append(objs, r.buildVaultStaticSecret(cluster, name, paths))
+	for _, e := range vssEntries {
+		objs = append(objs, r.buildVaultStaticSecret(cluster, e.Suffix, paths))
 	}
 
 	for _, obj := range objs {
@@ -202,7 +228,7 @@ func (r *VaultReconciler) applyVSOResources(ctx context.Context, cluster *openah
 	return nil
 }
 
-func (r *VaultReconciler) buildVaultConnection(cluster *openahamiv1alpha1.OpenCHAMICluster) *vsov1beta1.VaultConnection {
+func (r *VaultReconciler) buildVaultConnection(cluster *openchamiv1alpha1.OpenCHAMICluster) *vsov1beta1.VaultConnection {
 	return &vsov1beta1.VaultConnection{
 		TypeMeta: metav1.TypeMeta{APIVersion: vsoAPIVersion, Kind: vsoKindVaultConnection},
 		ObjectMeta: metav1.ObjectMeta{
@@ -215,7 +241,7 @@ func (r *VaultReconciler) buildVaultConnection(cluster *openahamiv1alpha1.OpenCH
 	}
 }
 
-func (r *VaultReconciler) buildVaultAuth(cluster *openahamiv1alpha1.OpenCHAMICluster) *vsov1beta1.VaultAuth {
+func (r *VaultReconciler) buildVaultAuth(cluster *openchamiv1alpha1.OpenCHAMICluster) *vsov1beta1.VaultAuth {
 	paths := vault.Paths(cluster.Spec.ClusterName)
 	connRef := "openchami-" + cluster.Spec.ClusterName
 	auth := &vsov1beta1.VaultAuth{
@@ -228,7 +254,7 @@ func (r *VaultReconciler) buildVaultAuth(cluster *openahamiv1alpha1.OpenCHAMIClu
 			VaultConnectionRef: connRef,
 		},
 	}
-	if cluster.Spec.Platform.Vault.AuthMethod == openahamiv1alpha1.VaultAuthMethodAppRole {
+	if cluster.Spec.Platform.Vault.AuthMethod == openchamiv1alpha1.VaultAuthMethodAppRole {
 		auth.Spec.Method = "appRole"
 		auth.Spec.Mount = "approle"
 		ref := ""
@@ -250,17 +276,19 @@ func (r *VaultReconciler) buildVaultAuth(cluster *openahamiv1alpha1.OpenCHAMIClu
 	return auth
 }
 
-func (r *VaultReconciler) buildVaultStaticSecret(cluster *openahamiv1alpha1.OpenCHAMICluster, suffix string, paths vault.VaultPaths) *vsov1beta1.VaultStaticSecret {
-	pathByName := map[string]string{
-		"db-credentials":  paths.DBCredentials,
-		"s3-credentials":  paths.S3Credentials,
-		"log-credentials": paths.LogCredentials,
-		"tokensmith-oidc": paths.TokensmithOIDC,
+func (r *VaultReconciler) buildVaultStaticSecret(cluster *openchamiv1alpha1.OpenCHAMICluster, suffix string, paths vault.VaultPaths) *vsov1beta1.VaultStaticSecret {
+	for _, e := range vssEntries {
+		if e.Suffix == suffix {
+			return r.buildVaultStaticSecretAt(cluster, suffix, paths.KVMount, e.PathFn(paths))
+		}
 	}
-	return r.buildVaultStaticSecretAt(cluster, suffix, paths.KVMount, pathByName[suffix])
+	// Caller passed a suffix not in vssEntries — fail loudly rather than
+	// silently returning a VSS with an empty path. The unit test
+	// TestVaultStaticSecretSuffixesAllResolveToNonEmptyPaths catches this in CI.
+	panic(fmt.Sprintf("buildVaultStaticSecret: unknown suffix %q (add to vssEntries in vault.go)", suffix))
 }
 
-func (r *VaultReconciler) buildVaultStaticSecretAt(cluster *openahamiv1alpha1.OpenCHAMICluster, suffix, mount, fullPath string) *vsov1beta1.VaultStaticSecret {
+func (r *VaultReconciler) buildVaultStaticSecretAt(cluster *openchamiv1alpha1.OpenCHAMICluster, suffix, mount, fullPath string) *vsov1beta1.VaultStaticSecret {
 	// fullPath includes the mount; VSO expects mount and sub-path separately.
 	sub := fullPath
 	if len(fullPath) > len(mount)+1 {

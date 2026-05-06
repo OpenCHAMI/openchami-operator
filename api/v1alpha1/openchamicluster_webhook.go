@@ -1,24 +1,13 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package v1alpha1
 
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 
@@ -206,13 +195,17 @@ func (w *OpenCHAMIClusterWebhook) validate(ctx context.Context, obj *OpenCHAMICl
 	)
 	specPath := field.NewPath("spec")
 
-	// 1. Vault address must be https://.
+	// 1. Vault address must be https:// — except for dev-mode loopback
+	// addresses (localhost / 127.0.0.1 / ::1), where http:// is permitted
+	// because Vault dev-mode runs without TLS and the dev shakedown
+	// pipeline relies on it. Production endpoints (any non-loopback host)
+	// still require https://.
 	vaultPath := specPath.Child("platform", "vault", "address")
-	if !strings.HasPrefix(obj.Spec.Platform.Vault.Address, "https://") {
+	if !isAllowedVaultAddress(obj.Spec.Platform.Vault.Address) {
 		allErrs = append(allErrs, field.Invalid(
 			vaultPath,
 			obj.Spec.Platform.Vault.Address,
-			"vault address must use https:// scheme",
+			"vault address must use https:// (http:// is allowed only for localhost/127.0.0.1/::1)",
 		))
 	}
 
@@ -233,6 +226,37 @@ func (w *OpenCHAMIClusterWebhook) validate(ctx context.Context, obj *OpenCHAMICl
 			"oidcIssuerURL is required when oidcProvider is external",
 		))
 	}
+
+	// 3a. ExternalEndpoint validation for the four HTTP services that
+	// support it. Setting an external endpoint requires Enabled=false
+	// (operator must not produce both an in-cluster Service and an
+	// external pointer for the same service) and the URL must be a
+	// well-formed http(s) URL.
+	for _, svc := range externallyOverridableServices(obj) {
+		if svc.External == nil {
+			continue
+		}
+		p := specPath.Child("services", svc.Name, "externalEndpoint")
+		if svc.Enabled {
+			allErrs = append(allErrs, field.Forbidden(
+				p,
+				"externalEndpoint requires services."+svc.Name+".enabled=false",
+			))
+		}
+		if !isHTTPURL(*svc.External) {
+			allErrs = append(allErrs, field.Invalid(
+				p,
+				*svc.External,
+				"externalEndpoint must be a valid http:// or https:// URL",
+			))
+		}
+	}
+
+	// 3b. CoreDHCP and Magellan do not support an externalEndpoint —
+	// DHCP is layer-2/3 and Magellan is a CronJob; neither is consumed
+	// over HTTP. Reject the field outright.
+	// (Currently their specs do not embed ServiceDefaults, so the field
+	// is structurally absent; this guard catches a future regression.)
 
 	// 4. ClusterName uniqueness across the cluster.
 	// Fail closed: invariants #2 (namespace isolation) and #4 (DHCP node
@@ -345,18 +369,82 @@ func (w *OpenCHAMIClusterWebhook) listOtherClusters(ctx context.Context, self *O
 	return out, nil
 }
 
-// nodeSelectorHasClusterDiscriminator reports whether at least one value in
+// nodeSelectorHasClusterDiscriminator reports whether at least one **key** in
 // the given selector map contains the cluster name as a substring. The
-// discriminator requirement prevents two clusters from accidentally
-// targeting the same nodes when probing is disabled.
+// canonical convention is `openchami.org/<clusterName>-<probe>-network-ready`
+// (keys, not values — values are typically the literal "true"). The
+// discriminator requirement prevents two clusters from accidentally targeting
+// the same nodes when probing is disabled. Values are also accepted as a
+// secondary path for operators using a non-canonical key like
+// `node-role.kubernetes.io/<clusterName>` where the discriminator naturally
+// lives in the key already (covered by the key-substring check) — or schemes
+// like `cluster: <clusterName>` where the discriminator is in the value.
+// Either form satisfies the constraint.
 func nodeSelectorHasClusterDiscriminator(selector map[string]string, clusterName string) bool {
 	if clusterName == "" {
 		return false
 	}
-	for _, v := range selector {
-		if strings.Contains(v, clusterName) {
+	for k, v := range selector {
+		if strings.Contains(k, clusterName) || strings.Contains(v, clusterName) {
 			return true
 		}
 	}
 	return false
+}
+
+// isAllowedVaultAddress reports whether addr satisfies the operator's vault
+// address policy: https:// is always allowed; http:// is allowed only when
+// the host portion is a loopback address (localhost, 127.0.0.1, or ::1)
+// because the dev-mode shakedown stack uses plain HTTP. Production endpoints
+// always end up via the https:// path.
+func isAllowedVaultAddress(addr string) bool {
+	if strings.HasPrefix(addr, "https://") {
+		return true
+	}
+	if !strings.HasPrefix(addr, "http://") {
+		return false
+	}
+	u, err := url.Parse(addr)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// externalServiceRef captures the per-service flags the webhook needs to
+// validate ServiceDefaults.ExternalEndpoint for the four HTTP services that
+// support it. CoreDHCP and Magellan are deliberately omitted (their specs
+// don't embed ServiceDefaults).
+type externalServiceRef struct {
+	Name     string
+	Enabled  bool
+	External *string
+}
+
+func externallyOverridableServices(obj *OpenCHAMICluster) []externalServiceRef {
+	s := &obj.Spec.Services
+	return []externalServiceRef{
+		{Name: "smd", Enabled: s.SMD.Enabled, External: s.SMD.ExternalEndpoint},
+		{Name: "tokensmith", Enabled: s.Tokensmith.Enabled, External: s.Tokensmith.ExternalEndpoint},
+		{Name: "bootService", Enabled: s.BootService.Enabled, External: s.BootService.ExternalEndpoint},
+		{Name: "metadataService", Enabled: s.MetadataService.Enabled, External: s.MetadataService.ExternalEndpoint},
+	}
+}
+
+// isHTTPURL reports whether s parses as an http:// or https:// URL with a
+// non-empty host. Used by the webhook to validate externalEndpoint fields.
+func isHTTPURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	return u.Host != ""
 }

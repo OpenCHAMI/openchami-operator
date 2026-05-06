@@ -2,7 +2,7 @@
 # Used to verify namespace isolation and Vault path isolation.
 # Apply with: kubectl apply -f test/fixtures/dual-cluster.yaml
 ---
-apiVersion: openchami.org/v1alpha1
+apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: venado
@@ -35,7 +35,7 @@ spec:
       replicas: 1
     coreDHCP:
       nodeSelector:
-        openchami.org/venado/provision-network-ready: "true"
+        openchami.org/venado-provision-network-ready: "true"
       leaseRanges:
         - subnet: 10.100.1.0/24
           start: 10.100.1.100
@@ -43,7 +43,7 @@ spec:
     magellan:
       bmcSubnet: 10.100.2.0/24
       nodeSelector:
-        openchami.org/venado/bmc-network-ready: "true"
+        openchami.org/venado-bmc-network-ready: "true"
 
   database:
     instances: 1
@@ -56,7 +56,7 @@ spec:
   operatorChannel: stable
 
 ---
-apiVersion: openchami.org/v1alpha1
+apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: frontier
@@ -90,7 +90,7 @@ spec:
     coreDHCP:
       # Different nodeSelector from venado — no conflict
       nodeSelector:
-        openchami.org/frontier/provision-network-ready: "true"
+        openchami.org/frontier-provision-network-ready: "true"
       leaseRanges:
         - subnet: 10.200.1.0/24
           start: 10.200.1.100
@@ -98,7 +98,7 @@ spec:
     magellan:
       bmcSubnet: 10.200.2.0/24
       nodeSelector:
-        openchami.org/frontier/bmc-network-ready: "true"
+        openchami.org/frontier-bmc-network-ready: "true"
 
   database:
     instances: 1

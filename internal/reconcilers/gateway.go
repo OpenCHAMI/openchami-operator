@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -83,7 +82,7 @@ type GatewayReconciler struct {
 // because the HTTPS listener's certificateRef points at the TLS Secret managed
 // by the certificates reconciler. Without that Secret the gateway will never
 // program its listeners.
-func (r *GatewayReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *GatewayReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "gateway")
 
 	if !apimeta.IsStatusConditionTrue(cluster.Status.Conditions, conditions.ConditionCertificatesValid) {
@@ -150,30 +149,51 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, cluster *openahamiv1a
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.
-func (r *GatewayReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *GatewayReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return r.objectsToApply(cluster), nil
 }
 
 // objectsToApply returns the canonical Gateway, HTTPRoute, SecurityPolicy,
 // and BackendTrafficPolicy set in deterministic apply order.
-func (r *GatewayReconciler) objectsToApply(cluster *openahamiv1alpha1.OpenCHAMICluster) []client.Object {
-	return []client.Object{
+//
+// HTTPRoute backends point at in-namespace Services that the operator
+// produces. When a service has spec.services.<svc>.externalEndpoint set,
+// the operator does not deploy that Service, so we skip the corresponding
+// HTTPRoute and any policies that target it. Sites using externalEndpoint
+// are expected to terminate routing for those services externally.
+func (r *GatewayReconciler) objectsToApply(cluster *openchamiv1alpha1.OpenCHAMICluster) []client.Object {
+	objs := []client.Object{
 		r.buildGateway(cluster),
 		r.buildHTTPRedirectRoute(cluster),
-		r.buildSMDRoute(cluster),
-		r.buildTokensmithRoute(cluster),
-		r.buildBootServiceRoute(cluster),
-		r.buildMetadataPublicRoute(cluster),
-		r.buildMetadataAdminRoute(cluster),
-		r.buildSecurityPolicy(cluster, policyJWTSMD, routeSMD),
-		r.buildSecurityPolicy(cluster, policyJWTBoot, routeBootService),
-		r.buildSecurityPolicy(cluster, policyJWTMetaAdmin, routeMetadataAdmin),
-		r.buildSMDRateLimit(cluster),
 	}
+	if ServiceDeployedInCluster(cluster, ServiceSMD) {
+		objs = append(objs,
+			r.buildSMDRoute(cluster),
+			r.buildSecurityPolicy(cluster, policyJWTSMD, routeSMD),
+			r.buildSMDRateLimit(cluster),
+		)
+	}
+	if ServiceDeployedInCluster(cluster, ServiceTokensmith) {
+		objs = append(objs, r.buildTokensmithRoute(cluster))
+	}
+	if ServiceDeployedInCluster(cluster, ServiceBootService) {
+		objs = append(objs,
+			r.buildBootServiceRoute(cluster),
+			r.buildSecurityPolicy(cluster, policyJWTBoot, routeBootService),
+		)
+	}
+	if ServiceDeployedInCluster(cluster, ServiceMetadataService) {
+		objs = append(objs,
+			r.buildMetadataPublicRoute(cluster),
+			r.buildMetadataAdminRoute(cluster),
+			r.buildSecurityPolicy(cluster, policyJWTMetaAdmin, routeMetadataAdmin),
+		)
+	}
+	return objs
 }
 
 // gatewayLabels returns the canonical labels for gateway-managed resources.
-func gatewayLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func gatewayLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   "gateway",
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -182,22 +202,22 @@ func gatewayLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]strin
 }
 
 // gatewayClassName returns the configured gatewayClass with a sensible default.
-func gatewayClassName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func gatewayClassName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	if gc := cluster.Spec.Networking.GatewayClass; gc != "" {
 		return gc
 	}
 	return "envoy"
 }
 
-// jwksURL returns the in-cluster JWKS URL for tokensmith. SecurityPolicy
-// resources reference this rather than the external gateway URL to avoid a
-// routing loop.
-func jwksURL(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/.well-known/jwks.json",
-		ServiceTokensmith, ClusterNamespace(cluster))
+// jwksURL returns the JWKS URL for tokensmith — by default the in-cluster
+// Service URL, or a site-provided externalEndpoint when set. SecurityPolicy
+// resources reference this directly (rather than the gateway-fronted URL)
+// to avoid a routing loop when tokensmith is operator-managed.
+func jwksURL(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
+	return ServiceURL(cluster, ServiceTokensmith) + "/.well-known/jwks.json"
 }
 
-func (r *GatewayReconciler) buildGateway(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.Gateway {
+func (r *GatewayReconciler) buildGateway(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.Gateway {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	tlsMode := gwapiv1.TLSModeTerminate
 	secretRef := gwapiv1.SecretObjectReference{
@@ -236,7 +256,7 @@ func (r *GatewayReconciler) buildGateway(cluster *openahamiv1alpha1.OpenCHAMIClu
 
 // httpParentRef returns the parentRef pointing at the HTTP listener of the
 // cluster gateway.
-func httpParentRef(cluster *openahamiv1alpha1.OpenCHAMICluster) gwapiv1.ParentReference {
+func httpParentRef(cluster *openchamiv1alpha1.OpenCHAMICluster) gwapiv1.ParentReference {
 	section := gwapiv1.SectionName(listenerHTTP)
 	ns := gwapiv1.Namespace(ClusterNamespace(cluster))
 	return gwapiv1.ParentReference{
@@ -248,7 +268,7 @@ func httpParentRef(cluster *openahamiv1alpha1.OpenCHAMICluster) gwapiv1.ParentRe
 
 // httpsParentRef returns the parentRef pointing at the HTTPS listener of the
 // cluster gateway.
-func httpsParentRef(cluster *openahamiv1alpha1.OpenCHAMICluster) gwapiv1.ParentReference {
+func httpsParentRef(cluster *openchamiv1alpha1.OpenCHAMICluster) gwapiv1.ParentReference {
 	section := gwapiv1.SectionName(listenerHTTPS)
 	ns := gwapiv1.Namespace(ClusterNamespace(cluster))
 	return gwapiv1.ParentReference{
@@ -258,7 +278,7 @@ func httpsParentRef(cluster *openahamiv1alpha1.OpenCHAMICluster) gwapiv1.ParentR
 	}
 }
 
-func (r *GatewayReconciler) buildHTTPRedirectRoute(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
+func (r *GatewayReconciler) buildHTTPRedirectRoute(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	scheme := "https"
 	statusCode := 301
@@ -335,7 +355,7 @@ func exactPathRule(path, backend string, port int32) gwapiv1.HTTPRouteRule {
 	}
 }
 
-func (r *GatewayReconciler) buildSMDRoute(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
+func (r *GatewayReconciler) buildSMDRoute(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	return &gwapiv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{APIVersion: gatewayAPIVersion, Kind: kindHTTPRoute},
@@ -354,7 +374,7 @@ func (r *GatewayReconciler) buildSMDRoute(cluster *openahamiv1alpha1.OpenCHAMICl
 	}
 }
 
-func (r *GatewayReconciler) buildTokensmithRoute(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
+func (r *GatewayReconciler) buildTokensmithRoute(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	return &gwapiv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{APIVersion: gatewayAPIVersion, Kind: kindHTTPRoute},
@@ -377,7 +397,7 @@ func (r *GatewayReconciler) buildTokensmithRoute(cluster *openahamiv1alpha1.Open
 	}
 }
 
-func (r *GatewayReconciler) buildBootServiceRoute(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
+func (r *GatewayReconciler) buildBootServiceRoute(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	return &gwapiv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{APIVersion: gatewayAPIVersion, Kind: kindHTTPRoute},
@@ -396,7 +416,7 @@ func (r *GatewayReconciler) buildBootServiceRoute(cluster *openahamiv1alpha1.Ope
 	}
 }
 
-func (r *GatewayReconciler) buildMetadataPublicRoute(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
+func (r *GatewayReconciler) buildMetadataPublicRoute(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	return &gwapiv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{APIVersion: gatewayAPIVersion, Kind: kindHTTPRoute},
@@ -415,7 +435,7 @@ func (r *GatewayReconciler) buildMetadataPublicRoute(cluster *openahamiv1alpha1.
 	}
 }
 
-func (r *GatewayReconciler) buildMetadataAdminRoute(cluster *openahamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
+func (r *GatewayReconciler) buildMetadataAdminRoute(cluster *openchamiv1alpha1.OpenCHAMICluster) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cluster.Spec.Domain)
 	return &gwapiv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{APIVersion: gatewayAPIVersion, Kind: kindHTTPRoute},
@@ -446,7 +466,7 @@ func httpRouteTargetRef(routeName string) gwapiv1.LocalPolicyTargetReferenceWith
 	}
 }
 
-func (r *GatewayReconciler) buildSecurityPolicy(cluster *openahamiv1alpha1.OpenCHAMICluster, name, route string) *egv1alpha1.SecurityPolicy {
+func (r *GatewayReconciler) buildSecurityPolicy(cluster *openchamiv1alpha1.OpenCHAMICluster, name, route string) *egv1alpha1.SecurityPolicy {
 	target := httpRouteTargetRef(route)
 	return &egv1alpha1.SecurityPolicy{
 		TypeMeta: metav1.TypeMeta{APIVersion: envoyGatewayAPIVersion, Kind: kindSecurityPolicy},
@@ -471,7 +491,7 @@ func (r *GatewayReconciler) buildSecurityPolicy(cluster *openahamiv1alpha1.OpenC
 	}
 }
 
-func (r *GatewayReconciler) buildSMDRateLimit(cluster *openahamiv1alpha1.OpenCHAMICluster) *egv1alpha1.BackendTrafficPolicy {
+func (r *GatewayReconciler) buildSMDRateLimit(cluster *openchamiv1alpha1.OpenCHAMICluster) *egv1alpha1.BackendTrafficPolicy {
 	target := httpRouteTargetRef(routeSMD)
 	headerType := egv1alpha1.HeaderMatchDistinct
 	rateLimitType := egv1alpha1.GlobalRateLimitType

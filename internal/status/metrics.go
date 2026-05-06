@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package status
 
@@ -15,7 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -31,12 +30,12 @@ const (
 // allPhases enumerates every ClusterPhase the reporter writes. The phase
 // gauge sets the current phase to 1.0 and every other phase to 0.0 on each
 // reconcile so dashboards never observe stale 1.0 values from prior phases.
-var allPhases = []openahamiv1alpha1.ClusterPhase{
-	openahamiv1alpha1.PhaseProvisioning,
-	openahamiv1alpha1.PhaseReady,
-	openahamiv1alpha1.PhaseDegraded,
-	openahamiv1alpha1.PhaseDeleting,
-	openahamiv1alpha1.PhaseFailed,
+var allPhases = []openchamiv1alpha1.ClusterPhase{
+	openchamiv1alpha1.PhaseProvisioning,
+	openchamiv1alpha1.PhaseReady,
+	openchamiv1alpha1.PhaseDegraded,
+	openchamiv1alpha1.PhaseDeleting,
+	openchamiv1alpha1.PhaseFailed,
 }
 
 // Metric definitions. Registered against controller-runtime's metrics
@@ -124,11 +123,11 @@ var (
 //
 // The reconcile-duration histogram is updated separately by ObserveReconcile;
 // histograms accumulate observations and are not "set" each pass.
-func (r *Reporter) UpdateMetrics(cluster *openahamiv1alpha1.OpenCHAMICluster) {
+func (r *Reporter) UpdateMetrics(cluster *openchamiv1alpha1.OpenCHAMICluster) {
 	name := cluster.Spec.ClusterName
 
 	// Ready gauge.
-	if cluster.Status.Phase == openahamiv1alpha1.PhaseReady {
+	if cluster.Status.Phase == openchamiv1alpha1.PhaseReady {
 		clusterReady.WithLabelValues(name).Set(1)
 	} else {
 		clusterReady.WithLabelValues(name).Set(0)

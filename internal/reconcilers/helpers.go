@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -17,7 +16,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
 // RunbookURL returns the canonical runbook URL for a given Event reason.
@@ -48,7 +47,7 @@ func RecordConditionEvent(
 // When spec.networkProbe.enabled is false, returns the manually specified
 // NodeSelector from the relevant service spec.
 func EffectiveNodeSelector(
-	cluster *openahamiv1alpha1.OpenCHAMICluster,
+	cluster *openchamiv1alpha1.OpenCHAMICluster,
 	probeType string, // "provision" or "bmc"
 ) map[string]string {
 	if cluster.Spec.NetworkProbe.Enabled {
@@ -66,13 +65,13 @@ func EffectiveNodeSelector(
 }
 
 // ClusterNamespace returns the canonical Kubernetes namespace for a cluster.
-func ClusterNamespace(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func ClusterNamespace(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	return "openchami-" + cluster.Spec.ClusterName
 }
 
 // SecretName returns the canonical name for a per-cluster Kubernetes Secret
 // (also used as the VSO destination Secret name).
-func SecretName(cluster *openahamiv1alpha1.OpenCHAMICluster, suffix string) string {
+func SecretName(cluster *openchamiv1alpha1.OpenCHAMICluster, suffix string) string {
 	return "openchami-" + cluster.Spec.ClusterName + "-" + suffix
 }
 
@@ -103,8 +102,99 @@ const (
 	ServiceFunicular       = "funicular-collector"
 )
 
+// servicePort returns the canonical container port for an HTTP-facing
+// OpenCHAMI service. Used by ServiceURL() to assemble the in-cluster URL
+// when no externalEndpoint override is set. Keep in sync with the per-
+// reconciler port constants (smdPort, tokensmithPort, bootServicePort,
+// metadataServicePort).
+func servicePort(svc string) int32 {
+	switch svc {
+	case ServiceSMD:
+		return 27779
+	case ServiceTokensmith:
+		return 8080
+	case ServiceBootService:
+		return 27778
+	case ServiceMetadataService:
+		return 27770
+	}
+	return 0
+}
+
+// ServiceURL returns the canonical http(s) URL for one of cluster's
+// services. When a site has set spec.services.<svc>.externalEndpoint, that
+// URL is returned verbatim (no path or trailing slash added). Otherwise
+// the operator-managed in-cluster URL is returned:
+//
+//	http://<svc>.openchami-<cluster>.svc.cluster.local:<port>
+//
+// `svc` must be one of the ServiceSMD/Tokensmith/BootService/MetadataService
+// constants; passing any other value returns "" so callers fail loudly.
+//
+// This helper is the single hook every consumer-side reconciler must use to
+// wire upstream URLs into env vars. New consumers must call ServiceURL,
+// never the in-cluster template directly, so that externalEndpoint is
+// honoured uniformly. The unit test
+// TestServiceURL_HonoursExternalEndpoint asserts the override path.
+func ServiceURL(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string) string {
+	if ext := externalEndpointFor(cluster, svc); ext != "" {
+		return ext
+	}
+	port := servicePort(svc)
+	if port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", svc, ClusterNamespace(cluster), port)
+}
+
+// externalEndpointFor returns spec.services.<svc>.externalEndpoint when set,
+// or "" otherwise. Centralised so the per-service spec walking lives in one
+// place; callers must not reach into spec.services themselves.
+func externalEndpointFor(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string) string {
+	s := &cluster.Spec.Services
+	switch svc {
+	case ServiceSMD:
+		if s.SMD.ExternalEndpoint != nil {
+			return *s.SMD.ExternalEndpoint
+		}
+	case ServiceTokensmith:
+		if s.Tokensmith.ExternalEndpoint != nil {
+			return *s.Tokensmith.ExternalEndpoint
+		}
+	case ServiceBootService:
+		if s.BootService.ExternalEndpoint != nil {
+			return *s.BootService.ExternalEndpoint
+		}
+	case ServiceMetadataService:
+		if s.MetadataService.ExternalEndpoint != nil {
+			return *s.MetadataService.ExternalEndpoint
+		}
+	}
+	return ""
+}
+
+// ServiceDeployedInCluster reports whether the given service is being
+// deployed and managed by the operator for this cluster. False when the
+// service is disabled OR when it is provided externally — in either case
+// the sub-reconciler should not create Deployment / Service / etc.
+// objects for it.
+func ServiceDeployedInCluster(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string) bool {
+	s := &cluster.Spec.Services
+	switch svc {
+	case ServiceSMD:
+		return s.SMD.Enabled && s.SMD.ExternalEndpoint == nil
+	case ServiceTokensmith:
+		return s.Tokensmith.Enabled && s.Tokensmith.ExternalEndpoint == nil
+	case ServiceBootService:
+		return s.BootService.Enabled && s.BootService.ExternalEndpoint == nil
+	case ServiceMetadataService:
+		return s.MetadataService.Enabled && s.MetadataService.ExternalEndpoint == nil
+	}
+	return false
+}
+
 // BootBucketName returns the S3 bucket name for boot images.
-func BootBucketName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func BootBucketName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	if cluster.Spec.Platform.ObjectStorage.Bucket != "" {
 		return cluster.Spec.Platform.ObjectStorage.Bucket
 	}
@@ -112,7 +202,7 @@ func BootBucketName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 }
 
 // LogBucketName returns the S3 bucket name for log collection.
-func LogBucketName(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func LogBucketName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	if cluster.Spec.Logging.LogBucket != "" {
 		return cluster.Spec.Logging.LogBucket
 	}

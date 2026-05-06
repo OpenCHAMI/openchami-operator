@@ -1,18 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package main
 
@@ -45,6 +33,7 @@ import (
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/controller"
+	s3client "github.com/openchami/openchami-operator/internal/s3"
 	"github.com/openchami/openchami-operator/internal/status"
 	"github.com/openchami/openchami-operator/internal/vault"
 	"github.com/openchami/openchami-operator/internal/version"
@@ -200,6 +189,11 @@ func main() {
 		setupLog.Error(err, "Failed to build vault client; vault sub-reconciler will report Unreachable")
 	}
 
+	s3c, err := buildS3Client()
+	if err != nil {
+		setupLog.Error(err, "Failed to build s3 client; bucket sub-reconcilers will report Error")
+	}
+
 	//nolint:staticcheck // legacy events API; migration to events.EventRecorder is a future cleanup
 	reporter := &status.Reporter{
 		Client:   mgr.GetClient(),
@@ -212,6 +206,7 @@ func main() {
 		//nolint:staticcheck // legacy events API; migration to events.EventRecorder is a future cleanup
 		Recorder:      mgr.GetEventRecorderFor("openchamicluster-controller"),
 		VaultClient:   vaultClient,
+		S3Client:      s3c,
 		DefaultImages: version.DefaultImages(),
 		DryRun:        os.Getenv("OPENCHAMI_DRY_RUN") == "true",
 		Reporter:      reporter,
@@ -265,5 +260,32 @@ func buildVaultClient() (vault.Client, error) {
 		cfg.AppRoleID = os.Getenv("VAULT_APPROLE_ROLE_ID")
 		cfg.AppRoleSecretID = os.Getenv("VAULT_APPROLE_SECRET_ID")
 	}
+	if cfg.AuthMethod == "token" {
+		cfg.Token = os.Getenv("VAULT_TOKEN")
+	}
 	return vault.NewClient(context.Background(), cfg)
+}
+
+// buildS3Client constructs an s3.Client from environment variables.
+// Returns nil with no error when AWS_ENDPOINT_URL is unset, so the operator
+// can start in environments without VersityGW; the bucket sub-reconcilers
+// will then report `s3 client not configured` until config is provided.
+//
+// AWS_ENDPOINT_URL points at the VersityGW (or LocalStack/MinIO) gateway.
+// Credentials come from the standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+// pair, region from AWS_REGION (defaulting to us-east-1 inside NewClient).
+// AWS_S3_TLS_INSECURE=true disables certificate verification — dev only.
+func buildS3Client() (s3client.Client, error) {
+	endpoint := os.Getenv("AWS_ENDPOINT_URL")
+	if endpoint == "" {
+		return nil, nil
+	}
+	cfg := s3client.Config{
+		Endpoint:    endpoint,
+		AccessKey:   os.Getenv("AWS_ACCESS_KEY_ID"),
+		SecretKey:   os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		Region:      os.Getenv("AWS_REGION"),
+		TLSInsecure: os.Getenv("AWS_S3_TLS_INSECURE") == "true",
+	}
+	return s3client.NewClient(context.Background(), cfg)
 }

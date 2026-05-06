@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package controller
 
@@ -27,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 	"github.com/openchami/openchami-operator/internal/reconcilers"
@@ -46,8 +45,11 @@ const clusterFinalizer = "openchami.org/cluster-protection"
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings;clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments;daemonsets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=configmaps;secrets;services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=cronjobs;jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps;secrets;services;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=secrets.hashicorp.com,resources=vaultconnections;vaultauths;vaultstaticsecrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch;create;update;patch;delete
@@ -73,7 +75,7 @@ type OpenCHAMIClusterReconciler struct {
 }
 
 func (r *OpenCHAMIClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	cluster := &openahamiv1alpha1.OpenCHAMICluster{}
+	cluster := &openchamiv1alpha1.OpenCHAMICluster{}
 	if err := r.Get(ctx, req.NamespacedName, cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -106,7 +108,7 @@ func (r *OpenCHAMIClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	return result, reconcileErr
 }
 
-func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *OpenCHAMIClusterReconciler) reconcileAll(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "controller")
 
 	if cluster.Spec.OperatorChannel == "pinned" && cluster.Spec.PinnedVersion != version.Version {
@@ -202,7 +204,7 @@ func subName(sub reconcilers.SubReconciler) string {
 // readiness reported by each Phase 5 sub-reconciler in cluster.Status.Services.
 // True when every enabled service reports Ready; otherwise False with a list
 // of pending services in the message.
-func (r *OpenCHAMIClusterReconciler) aggregateServicesReady(cluster *openahamiv1alpha1.OpenCHAMICluster) {
+func (r *OpenCHAMIClusterReconciler) aggregateServicesReady(cluster *openchamiv1alpha1.OpenCHAMICluster) {
 	enabled := map[string]bool{
 		reconcilers.ServiceSMD:             cluster.Spec.Services.SMD.Enabled,
 		reconcilers.ServiceTokensmith:      cluster.Spec.Services.Tokensmith.Enabled,
@@ -237,7 +239,7 @@ func (r *OpenCHAMIClusterReconciler) aggregateServicesReady(cluster *openahamiv1
 	apimeta.SetStatusCondition(&cluster.Status.Conditions, cond)
 }
 
-func (r *OpenCHAMIClusterReconciler) reconcileDelete(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *OpenCHAMIClusterReconciler) reconcileDelete(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "controller")
 	log.Info("reconciling deletion")
 
@@ -293,7 +295,7 @@ func (r *OpenCHAMIClusterReconciler) secretToCluster(ctx context.Context, obj cl
 		return nil
 	}
 
-	clusterList := &openahamiv1alpha1.OpenCHAMIClusterList{}
+	clusterList := &openchamiv1alpha1.OpenCHAMIClusterList{}
 	if err := r.List(ctx, clusterList); err != nil {
 		return nil
 	}
@@ -323,7 +325,7 @@ func (r *OpenCHAMIClusterReconciler) nodeToCluster(ctx context.Context, obj clie
 		return nil
 	}
 
-	clusterList := &openahamiv1alpha1.OpenCHAMIClusterList{}
+	clusterList := &openchamiv1alpha1.OpenCHAMIClusterList{}
 	if err := r.List(ctx, clusterList); err != nil {
 		return nil
 	}
@@ -333,13 +335,20 @@ func (r *OpenCHAMIClusterReconciler) nodeToCluster(ctx context.Context, obj clie
 		if !c.Spec.NetworkProbe.Enabled {
 			continue
 		}
-		key := fmt.Sprintf("openchami.org/%s/provision-network-ready", c.Spec.ClusterName)
-		if _, ok := node.Labels[key]; ok {
+		// Either probe type can change independently — a node may pass the
+		// BMC subnet probe but not the provision probe, or vice versa — so
+		// we trigger a reconcile when either label is present on the node.
+		provisionKey := fmt.Sprintf("openchami.org/%s-provision-network-ready", c.Spec.ClusterName)
+		bmcKey := fmt.Sprintf("openchami.org/%s-bmc-network-ready", c.Spec.ClusterName)
+		if _, ok := node.Labels[provisionKey]; ok {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      c.Name,
-					Namespace: c.Namespace,
-				},
+				NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
+			})
+			continue
+		}
+		if _, ok := node.Labels[bmcKey]; ok {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
 			})
 		}
 	}
@@ -349,7 +358,7 @@ func (r *OpenCHAMIClusterReconciler) nodeToCluster(ctx context.Context, obj clie
 // SetupWithManager sets up the controller with the Manager.
 func (r *OpenCHAMIClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&openahamiv1alpha1.OpenCHAMICluster{}).
+		For(&openchamiv1alpha1.OpenCHAMICluster{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&batchv1.CronJob{}).

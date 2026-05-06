@@ -50,7 +50,7 @@ After all succeed: `cluster.Status.ManagedByVersion = version.Version`
 Creates `openchami-{clusterName}` with labels:
 - `kubernetes.io/metadata.name=openchami-{clusterName}`
 - `openchami.org/cluster={clusterName}`
-- `pod-security.kubernetes.io/enforce=restricted`
+- `pod-security.kubernetes.io/enforce=privileged` (with `warn=restricted`, `audit=restricted`). `privileged` is required because three workloads in the namespace require capabilities that PSA `baseline` rejects: `coredhcp` (hostNetwork + hostPort 67), `funicular-collector` (hostPath `/var/log/pods`), and the network-probe DaemonSet (hostNetwork). `baseline` forbids all three; there is no intermediate PSA level. The `warn`/`audit` levels surface any service-tier pod (smd, tokensmith, boot-service, metadata-service) that drifts away from a restricted-fit profile. For per-pod policy inside a privileged namespace, layer on Kyverno or OPA Gatekeeper.
 
 **No OwnerReference** — namespace must outlive the CR.
 

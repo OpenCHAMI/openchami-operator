@@ -1,18 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package v1alpha1
 
@@ -254,6 +242,66 @@ func TestValidateCreate_VaultAddressMustBeHTTPS(t *testing.T) {
 	}
 }
 
+// TestValidateCreate_VaultAddressAllowsLoopbackHTTP locks in the dev-mode
+// exemption: http://localhost / 127.0.0.1 / ::1 are accepted because Vault
+// dev-mode runs without TLS. Production endpoints (any non-loopback host)
+// still require https://.
+func TestValidateCreate_VaultAddressAllowsLoopbackHTTP(t *testing.T) {
+	for _, addr := range []string{
+		"http://localhost:8200",
+		"http://127.0.0.1:8200",
+		"http://[::1]:8200",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.Address = addr
+			if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+				t.Fatalf("expected loopback http:// vault address %q to be accepted, got %v", addr, err)
+			}
+		})
+	}
+}
+
+// TestValidateCreate_VaultAddressRejectsNonLoopbackHTTP keeps the strict
+// rule for non-loopback hosts. Without this, the loopback exemption could
+// drift into a generic "any http://" allow-list.
+func TestValidateCreate_VaultAddressRejectsNonLoopbackHTTP(t *testing.T) {
+	for _, addr := range []string{
+		"http://vault.example.com:8200",
+		"http://10.0.0.5:8200",
+		"http://vault-prod:8200",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.Address = addr
+			_, err := w.ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, "vault.address")
+		})
+	}
+}
+
+// TestValidateCreate_NodeSelectorKeyDiscriminator pins the post-fix
+// behaviour: the canonical convention is keys like
+// `openchami.org/<clusterName>-<probe>-network-ready`, so the validator
+// must accept selectors that carry the cluster name in the *key* with the
+// usual literal `"true"` value. Pre-fix this rejected with
+// "must contain the clusterName" because the check only inspected values.
+func TestValidateCreate_NodeSelectorKeyDiscriminator(t *testing.T) {
+	w := newWebhook(t)
+	c := newFixtureCluster("alpha")
+	c.Spec.NetworkProbe.Enabled = false
+	c.Spec.NetworkProbe.ProvisionNetwork = nil
+	c.Spec.NetworkProbe.BMCNetwork = nil
+	c.Spec.Services.CoreDHCP.NodeSelector = map[string]string{
+		"openchami.org/alpha-provision-network-ready": "true",
+	}
+	if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+		t.Fatalf("expected key-based clusterName discriminator to be accepted, got %v", err)
+	}
+}
+
 func TestValidateCreate_AppRoleRequiresSecretRef(t *testing.T) {
 	w := newWebhook(t)
 	c := newFixtureCluster("a")
@@ -436,3 +484,81 @@ func copySelector(in map[string]string) map[string]string {
 // Touch corev1 and explicit imports so static analysis doesn't trip on
 // unused-import false positives if tests are pruned later.
 var _ = corev1.LocalObjectReference{}
+
+// TestValidateCreate_ExternalEndpointRequiresEnabledFalse asserts the
+// invariant that ExternalEndpoint and Enabled cannot both be true. Sites
+// either run a service in-cluster *or* point at an external one — never
+// both.
+func TestValidateCreate_ExternalEndpointRequiresEnabledFalse(t *testing.T) {
+	w := newWebhook(t)
+	external := "https://smd.platform.example.com"
+	c := newFixtureCluster("a")
+	c.Spec.Services.SMD.Enabled = true
+	c.Spec.Services.SMD.ExternalEndpoint = &external
+
+	_, err := w.ValidateCreate(context.Background(), c)
+	expectInvalid(t, err, "smd")
+	expectInvalid(t, err, "externalEndpoint")
+}
+
+// TestValidateCreate_ExternalEndpointMustBeHTTPURL asserts non-http(s)
+// schemes are rejected at admission. A typo like `smd.example.com` (no
+// scheme) or `tcp://` should fail closed rather than producing env vars
+// that downstream services can't parse.
+func TestValidateCreate_ExternalEndpointMustBeHTTPURL(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"missing scheme", "smd.example.com"},
+		{"unsupported scheme", "tcp://smd.example.com:1234"},
+		{"empty host", "https://"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Services.SMD.Enabled = false
+			c.Spec.Services.SMD.ExternalEndpoint = &tc.url
+			_, err := w.ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, "externalEndpoint")
+		})
+	}
+}
+
+// TestValidateCreate_ExternalEndpointAcceptedForAllFourServices asserts
+// the validation runs over each of the four supported services
+// (smd / tokensmith / bootService / metadataService). A regression that
+// added the field to ServiceDefaults but only enforced one service would
+// pass naive coverage.
+func TestValidateCreate_ExternalEndpointAcceptedForAllFourServices(t *testing.T) {
+	external := "https://service.platform.example.com"
+	mutators := map[string]func(*OpenCHAMICluster){
+		"smd": func(c *OpenCHAMICluster) {
+			c.Spec.Services.SMD.Enabled = false
+			c.Spec.Services.SMD.ExternalEndpoint = &external
+		},
+		"tokensmith": func(c *OpenCHAMICluster) {
+			c.Spec.Services.Tokensmith.Enabled = false
+			c.Spec.Services.Tokensmith.ExternalEndpoint = &external
+		},
+		"bootService": func(c *OpenCHAMICluster) {
+			c.Spec.Services.BootService.Enabled = false
+			c.Spec.Services.BootService.ExternalEndpoint = &external
+		},
+		"metadataService": func(c *OpenCHAMICluster) {
+			c.Spec.Services.MetadataService.Enabled = false
+			c.Spec.Services.MetadataService.ExternalEndpoint = &external
+		},
+	}
+	for svc, mutate := range mutators {
+		t.Run(svc, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			mutate(c)
+			if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+				t.Errorf("%s: ValidateCreate should accept Enabled=false + valid externalEndpoint, got %v", svc, err)
+			}
+		})
+	}
+}

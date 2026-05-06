@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -15,7 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -52,7 +51,7 @@ type ServiceMonitorReconciler struct {
 
 // Reconcile applies a single ServiceMonitor selecting every operator-managed
 // service in the cluster's namespace.
-func (r *ServiceMonitorReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *ServiceMonitorReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "servicemonitor")
 
 	if !cluster.Spec.Observability.PrometheusOperator {
@@ -72,7 +71,7 @@ func (r *ServiceMonitorReconciler) Reconcile(ctx context.Context, cluster *opena
 
 // Describe returns the ServiceMonitor this reconciler would apply, or an
 // empty slice when prometheus-operator integration is disabled.
-func (r *ServiceMonitorReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *ServiceMonitorReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	if !cluster.Spec.Observability.PrometheusOperator {
 		return []client.Object{}, nil
 	}
@@ -82,7 +81,7 @@ func (r *ServiceMonitorReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMI
 // buildServiceMonitor returns the operator-managed ServiceMonitor object for
 // the cluster. Selector labels are scoped to this cluster's instance so
 // neighbouring clusters in the same Prometheus do not cross-scrape.
-func (r *ServiceMonitorReconciler) buildServiceMonitor(cluster *openahamiv1alpha1.OpenCHAMICluster) *monitoringv1.ServiceMonitor {
+func (r *ServiceMonitorReconciler) buildServiceMonitor(cluster *openchamiv1alpha1.OpenCHAMICluster) *monitoringv1.ServiceMonitor {
 	return &monitoringv1.ServiceMonitor{
 		TypeMeta: metav1.TypeMeta{APIVersion: serviceMonitorAPIVersion, Kind: kindServiceMonitor},
 		ObjectMeta: metav1.ObjectMeta{

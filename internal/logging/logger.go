@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 // Package logging provides structured log enrichment for sub-reconcilers.
 // All sub-reconcilers must use these helpers. Direct calls to
@@ -14,14 +13,14 @@ import (
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
 // Enrich returns a logger pre-seeded with standard fields for a sub-reconciler.
 // Call once at the very start of each Reconcile() method:
 //
 //	log := logging.Enrich(ctx, cluster, "vault")
-func Enrich(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster, reconcilerName string) logr.Logger {
+func Enrich(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster, reconcilerName string) logr.Logger {
 	return log.FromContext(ctx).WithValues(
 		"cluster", cluster.Spec.ClusterName,
 		"reconciler", reconcilerName,

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -16,7 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -27,7 +26,7 @@ type NamespaceReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *NamespaceReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *NamespaceReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "namespace")
 
 	ns := r.buildNamespace(cluster)
@@ -57,11 +56,11 @@ func (r *NamespaceReconciler) Reconcile(ctx context.Context, cluster *openahamiv
 	return ctrl.Result{}, nil
 }
 
-func (r *NamespaceReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *NamespaceReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	return []client.Object{r.buildNamespace(cluster)}, nil
 }
 
-func (r *NamespaceReconciler) buildNamespace(cluster *openahamiv1alpha1.OpenCHAMICluster) *corev1.Namespace {
+func (r *NamespaceReconciler) buildNamespace(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Namespace {
 	name := ClusterNamespace(cluster)
 	return &corev1.Namespace{
 		TypeMeta: metav1.TypeMeta{
@@ -71,9 +70,30 @@ func (r *NamespaceReconciler) buildNamespace(cluster *openahamiv1alpha1.OpenCHAM
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 			Labels: map[string]string{
-				kubernetesMetadataNameLabel:          name,
-				"openchami.org/cluster":              cluster.Spec.ClusterName,
-				"pod-security.kubernetes.io/enforce": "restricted",
+				kubernetesMetadataNameLabel: name,
+				"openchami.org/cluster":     cluster.Spec.ClusterName,
+				// PSA enforce=privileged because the namespace hosts three
+				// workloads that PSA `baseline` (the next-stricter floor)
+				// rejects:
+				//   * coredhcp DaemonSet — hostNetwork=true, hostPort 67
+				//     (DHCP is fundamentally a host-network protocol)
+				//   * funicular-collector DaemonSet — hostPath mount of
+				//     /var/log/pods (log collection)
+				//   * network-probe DaemonSet — hostNetwork=true
+				// `baseline` forbids host namespaces, hostPath, and host
+				// ports outright; there is no PSA level between baseline
+				// and privileged that permits any of them. Per-pod
+				// admission (Kyverno, OPA Gatekeeper, ValidatingAdmission-
+				// Policy) is the right tool for fine-grained constraints
+				// inside a privileged namespace; PSA itself cannot express
+				// "this pod yes, that pod no" without splitting namespaces.
+				// warn/audit stay at restricted so the API server still
+				// surfaces pods that drift away from a restricted-fit
+				// profile (smd/tokensmith/boot-service/metadata-service
+				// all fit restricted today).
+				"pod-security.kubernetes.io/enforce": "privileged",
+				"pod-security.kubernetes.io/warn":    "restricted",
+				"pod-security.kubernetes.io/audit":   "restricted",
 			},
 		},
 	}

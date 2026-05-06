@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package vault
 
@@ -18,7 +17,9 @@ import (
 // Config holds connection parameters for a real Vault client.
 type Config struct {
 	Address string
-	// AuthMethod is "kubernetes" or "appRole".
+	// AuthMethod is "kubernetes", "appRole", or "token". The "token"
+	// method is intended for `vault server -dev` style dev clusters
+	// only — production deployments use kubernetes or appRole.
 	AuthMethod string
 	// K8sRole is the Vault Kubernetes auth role to use when AuthMethod=kubernetes.
 	K8sRole string
@@ -29,6 +30,9 @@ type Config struct {
 	AppRoleSecretID string
 	// AppRoleMountPath is the AppRole auth mount path. Defaults to "approle".
 	AppRoleMountPath string
+	// Token is the bearer token used when AuthMethod=token. Reads from
+	// VAULT_TOKEN in the dev-run flow (see Makefile).
+	Token string
 }
 
 // vaultClient implements Client against a real Vault server.
@@ -92,6 +96,17 @@ func (c *vaultClient) authenticate(ctx context.Context) error {
 		if secret == nil || secret.Auth == nil {
 			return fmt.Errorf("approle login returned no token")
 		}
+		return nil
+
+	case "token":
+		// Dev-only path: hand the bearer token to the API client
+		// directly. No login round-trip is required (a token already
+		// embodies the authenticated session). Production must use
+		// kubernetes or appRole — see the Config.AuthMethod doc.
+		if c.cfg.Token == "" {
+			return fmt.Errorf("token auth requires a non-empty token")
+		}
+		c.api.SetToken(c.cfg.Token)
 		return nil
 
 	default:

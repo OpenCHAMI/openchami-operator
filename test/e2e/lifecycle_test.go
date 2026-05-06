@@ -1,26 +1,15 @@
 //go:build e2e
 // +build e2e
 
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package e2e
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -28,6 +17,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// lifecycleDevVaultAddr resolves the dev Vault address, honouring the
+// E2E_VAULT_ADDR env var so non-kind dev loops can point at their own
+// Vault without editing source.
+func lifecycleDevVaultAddr() string {
+	if v := os.Getenv(lifecycleVaultAddrEnvVar); v != "" {
+		return v
+	}
+	return lifecycleDevVaultAddrDefault
+}
 
 // Lifecycle test constants and helpers.
 //
@@ -50,10 +49,12 @@ const (
 	// that don't require full cluster Ready (e.g. VaultConfigured=False).
 	lifecycleConditionTimeout = 2 * time.Minute
 
-	// lifecycleDevVaultAddr is the in-cluster Vault address provided by
-	// `make dev-up` in the kind environment. Tests that need to recover
-	// from an unreachable Vault patch the cluster to this address.
-	lifecycleDevVaultAddr = "https://vault.vault-system.svc.cluster.local:8200"
+	// lifecycleDevVaultAddrDefault is the in-cluster Vault address provided
+	// by `make dev-up` in the kind environment. The active address is
+	// resolved by lifecycleResolveDevVaultAddr() — set the
+	// E2E_VAULT_ADDR env var to override (e.g. for non-kind dev loops).
+	lifecycleDevVaultAddrDefault = "https://vault.vault-system.svc.cluster.local:8200"
+	lifecycleVaultAddrEnvVar     = "E2E_VAULT_ADDR"
 
 	// lifecycleBadVaultAddr is a deliberately unreachable Vault endpoint
 	// used to drive ConditionVaultConfigured=False / Reason=Unreachable.
@@ -78,7 +79,7 @@ func lifecycleClusterYAML(name, vaultAddr, dhcpDiscriminator, operatorChannel, p
 	if operatorChannel == "" {
 		operatorChannel = "stable"
 	}
-	return fmt.Sprintf(`apiVersion: openchami.org/v1alpha1
+	return fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: %[1]s
@@ -254,7 +255,7 @@ var _ = Describe("Lifecycle", Ordered, func() {
 
 		It("deploys, reaches Ready, and cleans up its namespace on delete", func() {
 			By("applying the venado cluster")
-			lifecycleApplyCluster(name, lifecycleDevVaultAddr, name)
+			lifecycleApplyCluster(name, lifecycleDevVaultAddr(), name)
 
 			By("waiting for Ready=True")
 			Eventually(func() bool {
@@ -288,8 +289,8 @@ var _ = Describe("Lifecycle", Ordered, func() {
 
 		It("brings two distinct clusters to Ready independently", func() {
 			By("applying both clusters with disjoint DHCP nodeSelectors")
-			lifecycleApplyCluster(nameA, lifecycleDevVaultAddr, nameA)
-			lifecycleApplyCluster(nameB, lifecycleDevVaultAddr, nameB)
+			lifecycleApplyCluster(nameA, lifecycleDevVaultAddr(), nameA)
+			lifecycleApplyCluster(nameB, lifecycleDevVaultAddr(), nameB)
 
 			By("waiting for venado Ready=True")
 			Eventually(func() bool {
@@ -321,10 +322,10 @@ var _ = Describe("Lifecycle", Ordered, func() {
 
 		It("rejects a second cluster that targets the same DHCP node", func() {
 			By("applying the first cluster with a fixed DHCP nodeSelector")
-			lifecycleApplyCluster(nameA, lifecycleDevVaultAddr, sharedDisc)
+			lifecycleApplyCluster(nameA, lifecycleDevVaultAddr(), sharedDisc)
 
 			By("attempting to apply a second cluster with the same selector")
-			yaml := lifecycleClusterYAML(nameB, lifecycleDevVaultAddr, sharedDisc, "stable", "")
+			yaml := lifecycleClusterYAML(nameB, lifecycleDevVaultAddr(), sharedDisc, "stable", "")
 			output, err := lifecycleApplyYAMLExpectError(yaml)
 			Expect(err).To(HaveOccurred(),
 				"webhook should reject conflicting DHCP nodeSelector; got success: %s", output)
@@ -358,12 +359,11 @@ var _ = Describe("Lifecycle", Ordered, func() {
 				WithPolling(lifecycleClusterPolling).
 				Should(BeTrue(), "VaultConfigured did not transition to False/Unreachable")
 
-			// TODO(e2e): the recovery half assumes Vault is reachable at
-			// lifecycleDevVaultAddr inside the kind cluster (provisioned by
-			// `make dev-up`). If your dev environment uses a different
-			// address, override the constant or skip this assertion.
+			// The recovery half requires a reachable Vault. The default is
+			// the kind dev environment provisioned by `make dev-up`; set
+			// E2E_VAULT_ADDR to override for non-kind dev loops.
 			By("patching to a reachable Vault address")
-			lifecyclePatchVaultAddress(name, lifecycleDevVaultAddr)
+			lifecyclePatchVaultAddress(name, lifecycleDevVaultAddr())
 
 			By("waiting for VaultConfigured=True")
 			Eventually(func() bool {
@@ -386,7 +386,7 @@ var _ = Describe("Lifecycle", Ordered, func() {
 
 		It("disables reconcile when pinned to a mismatched version, then resumes when unpinned", func() {
 			By("applying a cluster pinned to a non-matching operator version")
-			lifecycleApplyClusterWithChannel(name, lifecycleDevVaultAddr, name, "pinned", badPinned)
+			lifecycleApplyClusterWithChannel(name, lifecycleDevVaultAddr(), name, "pinned", badPinned)
 
 			By("waiting for ReconcileActive=False with Reason=VersionPinned")
 			Eventually(func() bool {
@@ -425,7 +425,7 @@ var _ = Describe("Lifecycle", Ordered, func() {
 			lifecycleSkipIfNoRebuildScript(upgradeScript)
 
 			By("applying the unpinned cluster to discover the running operator's version")
-			lifecycleApplyCluster(unpinnedName, lifecycleDevVaultAddr, unpinnedName)
+			lifecycleApplyCluster(unpinnedName, lifecycleDevVaultAddr(), unpinnedName)
 			Eventually(func() bool {
 				return lifecycleClusterReady(unpinnedName)
 			}).WithTimeout(lifecycleClusterTimeout).
@@ -438,7 +438,7 @@ var _ = Describe("Lifecycle", Ordered, func() {
 				"baseline version %q matches upgrade target — pick a different upgradeTo", beforeVersion)
 
 			By("applying the pinned cluster at the current operator version " + beforeVersion)
-			lifecycleApplyClusterWithChannel(pinnedName, lifecycleDevVaultAddr, pinnedName,
+			lifecycleApplyClusterWithChannel(pinnedName, lifecycleDevVaultAddr(), pinnedName,
 				"pinned", beforeVersion)
 			Eventually(func() bool {
 				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionFalse &&

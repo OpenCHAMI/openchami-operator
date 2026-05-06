@@ -1,21 +1,9 @@
 //go:build e2e
 // +build e2e
 
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package e2e
 
@@ -288,7 +276,7 @@ func networkClusterNamespace(clusterName string) string {
 // networkNodeLabel returns the canonical label key the probe binary writes
 // onto each node for a given probe type ("provision" or "bmc").
 func networkNodeLabel(clusterName, probeType string) string {
-	return fmt.Sprintf("openchami.org/%s/%s-network-ready", clusterName, probeType)
+	return fmt.Sprintf("openchami.org/%s-%s-network-ready", clusterName, probeType)
 }
 
 // networkApplyCluster writes the given YAML to a temp file and kubectl applies
@@ -396,7 +384,7 @@ func networkPickKindNode() string {
 // that need them call networkEnableCoreDHCP / networkEnableMagellan to splice
 // in the relevant blocks.
 func networkProbeClusterYAML(clusterName, provisionSubnet, bmcSubnet string) string {
-	return fmt.Sprintf(`apiVersion: openchami.org/v1alpha1
+	return fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMICluster
 metadata:
   name: %[1]s

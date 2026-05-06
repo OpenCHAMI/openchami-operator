@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -19,7 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 	"github.com/openchami/openchami-operator/internal/s3"
@@ -34,7 +33,7 @@ type BucketReconciler struct {
 	S3Client s3.Client
 }
 
-func (r *BucketReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *BucketReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "bucket")
 	log.Info("reconciling boot-images bucket")
 
@@ -91,7 +90,7 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, cluster *openahamiv1al
 	return ctrl.Result{}, nil
 }
 
-func (r *BucketReconciler) Describe(_ *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *BucketReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	// Bucket lives in S3, not Kubernetes — no objects to apply.
 	return nil, nil
 }

@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package status
 
@@ -13,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/reconcilers"
 )
@@ -22,12 +21,12 @@ import (
 // condition True, every service Ready, a NetworkProbe status with non-zero
 // node counts, and a known cert expiry. Each metric assertion in this file
 // touches a different aspect of the resulting state.
-func metricsCluster(name string) *openahamiv1alpha1.OpenCHAMICluster {
+func metricsCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
 	c := newTestCluster(name)
 	addAllConditionsTrue(c)
 	allServicesReady(c)
-	c.Status.Phase = openahamiv1alpha1.PhaseReady
-	c.Status.NetworkProbe = &openahamiv1alpha1.NetworkProbeStatus{
+	c.Status.Phase = openchamiv1alpha1.PhaseReady
+	c.Status.NetworkProbe = &openchamiv1alpha1.NetworkProbeStatus{
 		NodesWithProvisionAccess: []string{"node-a", "node-b", "node-c"},
 		NodesWithBMCAccess:       []string{"node-a"},
 		ProbeReady:               true,
@@ -78,7 +77,7 @@ func TestMetrics_PhaseGauge_OnlyCurrentIsOne(t *testing.T) {
 
 	for _, p := range allPhases {
 		want := 0.0
-		if p == openahamiv1alpha1.PhaseReady {
+		if p == openchamiv1alpha1.PhaseReady {
 			want = 1.0
 		}
 		if got := testutil.ToFloat64(clusterPhase.WithLabelValues("metric-phase", string(p))); got != want {
@@ -88,12 +87,12 @@ func TestMetrics_PhaseGauge_OnlyCurrentIsOne(t *testing.T) {
 
 	// Flip to Degraded; the previous Ready=1 must now read 0 and
 	// Degraded must read 1.
-	c.Status.Phase = openahamiv1alpha1.PhaseDegraded
+	c.Status.Phase = openchamiv1alpha1.PhaseDegraded
 	r.UpdateMetrics(c)
-	if got := testutil.ToFloat64(clusterPhase.WithLabelValues("metric-phase", string(openahamiv1alpha1.PhaseReady))); got != 0 {
+	if got := testutil.ToFloat64(clusterPhase.WithLabelValues("metric-phase", string(openchamiv1alpha1.PhaseReady))); got != 0 {
 		t.Errorf("after transition: phase=Ready should be 0, got %v", got)
 	}
-	if got := testutil.ToFloat64(clusterPhase.WithLabelValues("metric-phase", string(openahamiv1alpha1.PhaseDegraded))); got != 1 {
+	if got := testutil.ToFloat64(clusterPhase.WithLabelValues("metric-phase", string(openchamiv1alpha1.PhaseDegraded))); got != 1 {
 		t.Errorf("after transition: phase=Degraded should be 1, got %v", got)
 	}
 }

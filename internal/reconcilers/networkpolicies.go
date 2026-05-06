@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -18,7 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -87,7 +86,7 @@ type NetworkPoliciesReconciler struct {
 // Reconcile applies every per-cluster NetworkPolicy and reports
 // ConditionNetworkPoliciesReady. Failures are reported as Ready=False with
 // Reason=Error and an Event linking to the standard runbook.
-func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "networkpolicies")
 
 	policies, err := r.buildPolicies(cluster, true)
@@ -143,7 +142,7 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *open
 // allow-vault-egress / allow-versitygw-egress / allow-logs-egress policies
 // reference a sentinel ipBlock 0.0.0.0/0 in place of the resolved /32 peer.
 // Reconcile() resolves the peer for real before applying.
-func (r *NetworkPoliciesReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *NetworkPoliciesReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	policies, err := r.buildPolicies(cluster, false)
 	if err != nil {
 		return []client.Object{}, fmt.Errorf("building network policies: %w", err)
@@ -164,7 +163,7 @@ func (r *NetworkPoliciesReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAM
 // to produce a /32 ipBlock — this is the Reconcile path. When false, the
 // syntax-only helpers substitute a placeholder ipBlock without touching DNS —
 // this is the Describe path.
-func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openahamiv1alpha1.OpenCHAMICluster, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
+func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openchamiv1alpha1.OpenCHAMICluster, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
 	ns := ClusterNamespace(cluster)
 
 	vaultPeerFn := VaultEgressPeerSyntax

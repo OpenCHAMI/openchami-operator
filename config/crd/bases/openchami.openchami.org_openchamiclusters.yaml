@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.16.0
   name: openchamiclusters.openchami.openchami.org
 spec:
   group: openchami.openchami.org
@@ -105,7 +105,13 @@ spec:
                   services — not by the operator.
                 properties:
                   enabled:
-                    default: true
+                    default: false
+                    description: |-
+                      Enabled gates the funicular-collector DaemonSet. Defaults to false
+                      because the upstream `ghcr.io/openchami/funicular-collector` image
+                      is not yet published; deployments that flip this on must also set
+                      .image to point at a working collector. When false, LogCollectorReady
+                      reaches True with reason=Ready/message="logging disabled".
                     type: boolean
                   flushIntervalSeconds:
                     default: 60
@@ -113,6 +119,26 @@ spec:
                       writes Parquet.
                     format: int32
                     type: integer
+                  image:
+                    description: |-
+                      Image overrides the funicular-collector container image. Required in
+                      practice while no public default image exists; the reconciler will
+                      emit LogCollectorReady=False/Reason=ImageNotConfigured when Enabled
+                      is true and Image is unset.
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy describes a policy for if/when to
+                          pull a container image
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                      repository:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
                   includeServices:
                     description: |-
                       IncludeServices limits collection to named services.
@@ -314,6 +340,19 @@ spec:
                       enabled:
                         default: true
                         type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
                       image:
                         description: ImageSpec overrides the default container image
                           for a service.
@@ -676,6 +715,19 @@ spec:
                       enabled:
                         default: true
                         type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
                       image:
                         description: ImageSpec overrides the default container image
                           for a service.
@@ -769,6 +821,19 @@ spec:
                       enabled:
                         default: true
                         type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
                       image:
                         description: ImageSpec overrides the default container image
                           for a service.
@@ -862,6 +927,19 @@ spec:
                       enabled:
                         default: true
                         type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
                       image:
                         description: ImageSpec overrides the default container image
                           for a service.

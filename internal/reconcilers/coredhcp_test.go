@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -20,7 +19,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
@@ -90,10 +89,10 @@ func TestCoreDHCPReconciler_WaitsForProbe(t *testing.T) {
 func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openahamiv1alpha1.CoreDHCPSpec{
+	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled:      true,
 		NodeSelector: map[string]string{testNodeRoleKey: testNodeRoleDHCP},
-		LeaseRanges: []openahamiv1alpha1.DHCPLeaseRange{{
+		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: testProvisionSubnet,
 			Start:  "10.0.0.100",
 			End:    "10.0.0.200",
@@ -173,9 +172,14 @@ func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 func TestCoreDHCPReconciler_ReadyWhenAvailable(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openahamiv1alpha1.CoreDHCPSpec{
+	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled:      true,
 		NodeSelector: map[string]string{testNodeRoleKey: testNodeRoleDHCP},
+		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
+			Subnet: testProvisionSubnet,
+			Start:  "10.0.0.100",
+			End:    "10.0.0.200",
+		}},
 	}
 	cluster.Spec.NetworkProbe.Enabled = false
 
@@ -211,6 +215,11 @@ func TestCoreDHCPReconciler_UsesProbeNodeSelector(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
 	cluster.Spec.Services.CoreDHCP.Enabled = true
+	cluster.Spec.Services.CoreDHCP.LeaseRanges = []openchamiv1alpha1.DHCPLeaseRange{{
+		Subnet: testProvisionSubnet,
+		Start:  "10.0.0.100",
+		End:    "10.0.0.200",
+	}}
 	cluster.Spec.NetworkProbe.Enabled = true
 	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:   conditions.ConditionNetworkProbeReady,

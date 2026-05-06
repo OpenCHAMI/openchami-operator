@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -21,7 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
@@ -32,10 +31,19 @@ const (
 	// defaultCoreDHCPImage is the fallback container image for the CoreDHCP
 	// DaemonSet. Per Phase 13 the operator's ImageConfig will eventually
 	// resolve image overrides; until then this is the only source of truth.
-	defaultCoreDHCPImage = "ghcr.io/openchami/coresmd:latest"
+	defaultCoreDHCPImage = "ghcr.io/openchami/coredhcp:latest"
 
 	coreDHCPPort     int32 = 67
 	coreDHCPPortName       = "dhcp-server"
+
+	// coreDHCPConfigMountPath is where coredhcp's config-search loop looks
+	// for `config.{yml,yaml}`. The upstream binary searches `/`, `/coredhcp`,
+	// `/.coredhcp`, and `/etc/coredhcp` — we mount in the last of those so
+	// the operator-rendered ConfigMap takes precedence over any bundled
+	// defaults the image might ship.
+	coreDHCPConfigMountPath = "/etc/coredhcp"
+	coreDHCPConfigKey       = "config.yml"
+	coreDHCPConfigVolume    = "config"
 )
 
 // CoreDHCPReconciler ensures the CoreDHCP DaemonSet exists on nodes that
@@ -50,7 +58,7 @@ type CoreDHCPReconciler struct {
 // When the network probe is enabled but ConditionNetworkProbeReady is not
 // True, this reconciler defers and requeues; the DaemonSet is only applied
 // once the probe has identified eligible nodes.
-func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openahamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cluster, "coredhcp")
 
 	if !cluster.Spec.Services.CoreDHCP.Enabled {
@@ -78,6 +86,21 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openahamiv1
 	//   2. POST to tokensmith /token endpoint with the coredhcp ServiceAccount
 	//      JWT to receive a scoped SMD-write token.
 	//   3. Server-side apply the resulting token into the Secret above.
+
+	// Apply the rendered config ConfigMap before the DaemonSet so the
+	// pods schedule with the volume already populated. SSA is idempotent
+	// either way, but ordering this first avoids one self-correcting
+	// requeue on the first reconcile.
+	cm, err := r.buildConfigMap(cluster)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("rendering coredhcp config: %w", err)
+	}
+	cmLog := logging.EnrichWithResource(log, kindConfigMap, cm.Name)
+	cmLog.Info("applying coredhcp ConfigMap")
+	if err := r.Client.Patch(ctx, cm, client.Apply, //nolint:staticcheck // SSA via Patch
+		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("applying coredhcp ConfigMap: %w", err)
+	}
 
 	ds := r.buildDaemonSet(cluster)
 	dsLog := logging.EnrichWithResource(log, kindDaemonSet, ds.Name)
@@ -122,15 +145,37 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openahamiv1
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when CoreDHCP is disabled.
-func (r *CoreDHCPReconciler) Describe(cluster *openahamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *CoreDHCPReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
 	if !cluster.Spec.Services.CoreDHCP.Enabled {
 		return []client.Object{}, nil
 	}
-	return []client.Object{r.buildDaemonSet(cluster)}, nil
+	cm, err := r.buildConfigMap(cluster)
+	if err != nil {
+		return nil, err
+	}
+	return []client.Object{cm, r.buildDaemonSet(cluster)}, nil
+}
+
+// buildConfigMap wraps the rendered coredhcp YAML in a ConfigMap suitable
+// for SSA. Lives in the cluster namespace and is mounted into the DS.
+func (r *CoreDHCPReconciler) buildConfigMap(cluster *openchamiv1alpha1.OpenCHAMICluster) (*corev1.ConfigMap, error) {
+	yaml, err := renderCoreDHCPConfig(cluster)
+	if err != nil {
+		return nil, err
+	}
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindConfigMap},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ServiceCoreDHCP + "-config",
+			Namespace: ClusterNamespace(cluster),
+			Labels:    coreDHCPPodLabels(cluster),
+		},
+		Data: map[string]string{coreDHCPConfigKey: yaml},
+	}, nil
 }
 
 // coreDHCPPodLabels returns the canonical label set for coredhcp pods.
-func coreDHCPPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]string {
+func coreDHCPPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceCoreDHCP,
 		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
@@ -140,7 +185,7 @@ func coreDHCPPodLabels(cluster *openahamiv1alpha1.OpenCHAMICluster) map[string]s
 
 // coreDHCPImage resolves the container image, preferring the per-cluster
 // spec override and falling back to defaultCoreDHCPImage.
-func coreDHCPImage(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
+func coreDHCPImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
 	img := cluster.Spec.Services.CoreDHCP.Image
 	if img == nil {
 		return defaultCoreDHCPImage
@@ -150,7 +195,7 @@ func coreDHCPImage(cluster *openahamiv1alpha1.OpenCHAMICluster) string {
 	case repo == "" && tag == "":
 		return defaultCoreDHCPImage
 	case repo == "":
-		return "ghcr.io/openchami/coresmd:" + tag
+		return "ghcr.io/openchami/coredhcp:" + tag
 	case tag == "":
 		return repo + ":latest"
 	default:
@@ -170,7 +215,7 @@ func dhcpSecurityContext() *corev1.SecurityContext {
 	return sc
 }
 
-func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openahamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
+func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
 	labels := coreDHCPPodLabels(cluster)
 	tmpVol, tmpMount := TmpVolume()
 	dhcp := cluster.Spec.Services.CoreDHCP
@@ -203,11 +248,23 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openahamiv1alpha1.OpenCHAMI
 		},
 	}
 
+	configMount := corev1.VolumeMount{
+		Name:      coreDHCPConfigVolume,
+		MountPath: coreDHCPConfigMountPath,
+		ReadOnly:  true,
+	}
+
 	container := corev1.Container{
 		Name:            ServiceCoreDHCP,
 		Image:           coreDHCPImage(cluster),
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		SecurityContext: dhcpSecurityContext(),
+		// No explicit --config flag: the upstream image's ENTRYPOINT is
+		// `tini --` and prepending an arg makes tini try to exec the
+		// flag. Instead we mount the ConfigMap at /etc/coredhcp/, which
+		// is already on the binary's built-in search path
+		// (`/`, `/coredhcp`, `/.coredhcp`, `/etc/coredhcp`), so
+		// auto-discovery picks up our config.yml without needing a flag.
 		Ports: []corev1.ContainerPort{{
 			Name:          coreDHCPPortName,
 			ContainerPort: coreDHCPPort,
@@ -215,7 +272,7 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openahamiv1alpha1.OpenCHAMI
 			Protocol:      corev1.ProtocolUDP,
 		}},
 		Env:          env,
-		VolumeMounts: []corev1.VolumeMount{tmpMount},
+		VolumeMounts: []corev1.VolumeMount{tmpMount, configMount},
 		Lifecycle:    preStop,
 	}
 	if dhcp.Resources != nil {
@@ -242,7 +299,19 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openahamiv1alpha1.OpenCHAMI
 					Tolerations:        dhcp.Tolerations,
 					SecurityContext:    CommonPodSecurityContext(),
 					Containers:         []corev1.Container{container},
-					Volumes:            []corev1.Volume{tmpVol},
+					Volumes: []corev1.Volume{
+						tmpVol,
+						{
+							Name: coreDHCPConfigVolume,
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: ServiceCoreDHCP + "-config",
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},

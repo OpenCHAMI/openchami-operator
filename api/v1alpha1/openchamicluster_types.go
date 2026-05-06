@@ -1,18 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 // v1alpha1 — current storage version. No stability guarantees.
 //
@@ -65,6 +53,20 @@ type ServiceDefaults struct {
 
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ExternalEndpoint, when set, declares that the service is provided
+	// externally (e.g. by a shared platform deployment) rather than by the
+	// operator. Consumer services within this cluster will be wired to the
+	// supplied URL instead of the in-cluster Service DNS.
+	//
+	// Setting ExternalEndpoint requires Enabled=false; the validating
+	// webhook enforces this. The URL must be an http:// or https:// URL.
+	//
+	// Not all services support an external endpoint — DHCP is a layer-2/3
+	// concern and Magellan is a CronJob; both reject this field.
+	//
+	// +optional
+	ExternalEndpoint *string `json:"externalEndpoint,omitempty"`
 }
 
 // DHCPLeaseRange defines a DHCP subnet range to serve.
@@ -300,7 +302,12 @@ type DatabaseSpec struct {
 // Log schema and query patterns are defined by legendary-funicular and the
 // services — not by the operator.
 type LoggingSpec struct {
-	// +kubebuilder:default=true
+	// Enabled gates the funicular-collector DaemonSet. Defaults to false
+	// because the upstream `ghcr.io/openchami/funicular-collector` image
+	// is not yet published; deployments that flip this on must also set
+	// .image to point at a working collector. When false, LogCollectorReady
+	// reaches True with reason=Ready/message="logging disabled".
+	// +kubebuilder:default=false
 	Enabled bool `json:"enabled,omitempty"`
 
 	// LogBucket is the S3 bucket for collected logs.
@@ -322,6 +329,13 @@ type LoggingSpec struct {
 	// Empty means collect from all services in the namespace.
 	// +optional
 	IncludeServices []string `json:"includeServices,omitempty"`
+
+	// Image overrides the funicular-collector container image. Required in
+	// practice while no public default image exists; the reconciler will
+	// emit LogCollectorReady=False/Reason=ImageNotConfigured when Enabled
+	// is true and Image is unset.
+	// +optional
+	Image *ImageSpec `json:"image,omitempty"`
 }
 
 // ObservabilitySpec configures observability integrations.

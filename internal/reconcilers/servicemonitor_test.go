@@ -1,7 +1,6 @@
-/*
-Copyright 2026 OpenCHAMI Authors.
-Licensed under the Apache License, Version 2.0.
-*/
+// Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+//
+// SPDX-License-Identifier: MIT
 
 package reconcilers
 
@@ -18,14 +17,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	openahamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
 // newServiceMonitorClient mirrors the network-policy / topology pattern:
 // the controller-runtime fake client requires the deduced type converter
 // for SSA against ServiceMonitor (status field on the live object is not
 // declared in the apply-config schema).
-func newServiceMonitorClient(t *testing.T, cluster *openahamiv1alpha1.OpenCHAMICluster, extra ...client.Object) client.Client {
+func newServiceMonitorClient(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMICluster, extra ...client.Object) client.Client {
 	t.Helper()
 	scheme := newScheme(t)
 	objs := append([]client.Object{cluster}, extra...)
