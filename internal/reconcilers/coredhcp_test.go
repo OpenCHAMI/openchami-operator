@@ -23,6 +23,11 @@ import (
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
+const (
+	testLeaseStartB = "10.0.0.100"
+	testLeaseEndB   = "10.0.0.200"
+)
+
 func TestCoreDHCPReconciler_DisabledSkips(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
@@ -94,8 +99,8 @@ func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 		NodeSelector: map[string]string{testNodeRoleKey: testNodeRoleDHCP},
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: testProvisionSubnet,
-			Start:  "10.0.0.100",
-			End:    "10.0.0.200",
+			Start:  testLeaseStartB,
+			End:    testLeaseEndB,
 		}},
 		UnknownLeaseDuration: "5m",
 		KnownLeaseDuration:   "1h",
@@ -177,8 +182,8 @@ func TestCoreDHCPReconciler_ReadyWhenAvailable(t *testing.T) {
 		NodeSelector: map[string]string{testNodeRoleKey: testNodeRoleDHCP},
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: testProvisionSubnet,
-			Start:  "10.0.0.100",
-			End:    "10.0.0.200",
+			Start:  testLeaseStartB,
+			End:    testLeaseEndB,
 		}},
 	}
 	cluster.Spec.NetworkProbe.Enabled = false
@@ -217,8 +222,8 @@ func TestCoreDHCPReconciler_UsesProbeNodeSelector(t *testing.T) {
 	cluster.Spec.Services.CoreDHCP.Enabled = true
 	cluster.Spec.Services.CoreDHCP.LeaseRanges = []openchamiv1alpha1.DHCPLeaseRange{{
 		Subnet: testProvisionSubnet,
-		Start:  "10.0.0.100",
-		End:    "10.0.0.200",
+		Start:  testLeaseStartB,
+		End:    testLeaseEndB,
 	}}
 	cluster.Spec.NetworkProbe.Enabled = true
 	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{

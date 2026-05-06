@@ -476,4 +476,3 @@ vsov1beta1.VaultStaticSecret{Spec: vsov1beta1.VaultStaticSecretSpec{
     },
 }}
 ```
-

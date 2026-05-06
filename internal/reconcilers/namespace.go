@@ -20,6 +20,8 @@ import (
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
+const psaLevelRestricted = "restricted"
+
 // NamespaceReconciler ensures the per-cluster namespace exists with correct labels.
 type NamespaceReconciler struct {
 	Client   client.Client
@@ -92,8 +94,8 @@ func (r *NamespaceReconciler) buildNamespace(cluster *openchamiv1alpha1.OpenCHAM
 				// profile (smd/tokensmith/boot-service/metadata-service
 				// all fit restricted today).
 				"pod-security.kubernetes.io/enforce": "privileged",
-				"pod-security.kubernetes.io/warn":    "restricted",
-				"pod-security.kubernetes.io/audit":   "restricted",
+				"pod-security.kubernetes.io/warn":    psaLevelRestricted,
+				"pod-security.kubernetes.io/audit":   psaLevelRestricted,
 			},
 		},
 	}

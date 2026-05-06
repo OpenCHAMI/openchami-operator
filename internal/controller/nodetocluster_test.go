@@ -17,6 +17,8 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
+const testLabelValueTrue = "true"
+
 // TestNodeToCluster_TriggersOnEitherProbeLabel is the regression test for the
 // 2026-05-04 watch-handler bug: nodeToCluster only checked the provision
 // label, so a node that flipped only its bmc-network-ready value (e.g. a
@@ -54,25 +56,25 @@ func TestNodeToCluster_TriggersOnEitherProbeLabel(t *testing.T) {
 		},
 		{
 			name:   "provision label present — enqueue",
-			labels: map[string]string{"openchami.org/venado-provision-network-ready": "true"},
+			labels: map[string]string{"openchami.org/venado-provision-network-ready": testLabelValueTrue},
 			want:   1,
 		},
 		{
 			name:   "bmc label present — enqueue (regression)",
-			labels: map[string]string{"openchami.org/venado-bmc-network-ready": "true"},
+			labels: map[string]string{"openchami.org/venado-bmc-network-ready": testLabelValueTrue},
 			want:   1,
 		},
 		{
 			name: "both labels present — exactly one enqueue (no double-fire)",
 			labels: map[string]string{
-				"openchami.org/venado-provision-network-ready": "true",
-				"openchami.org/venado-bmc-network-ready":       "true",
+				"openchami.org/venado-provision-network-ready": testLabelValueTrue,
+				"openchami.org/venado-bmc-network-ready":       testLabelValueTrue,
 			},
 			want: 1,
 		},
 		{
 			name:   "wrong cluster's label — no enqueue",
-			labels: map[string]string{"openchami.org/frontier-provision-network-ready": "true"},
+			labels: map[string]string{"openchami.org/frontier-provision-network-ready": testLabelValueTrue},
 			want:   0,
 		},
 	}
@@ -111,7 +113,7 @@ func TestNodeToCluster_IgnoresClustersWithProbeDisabled(t *testing.T) {
 
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
 		Name:   "n1",
-		Labels: map[string]string{"openchami.org/frontier-provision-network-ready": "true"},
+		Labels: map[string]string{"openchami.org/frontier-provision-network-ready": testLabelValueTrue},
 	}}
 	got := r.nodeToCluster(context.Background(), node)
 	if len(got) != 0 {

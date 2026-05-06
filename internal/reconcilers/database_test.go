@@ -24,6 +24,8 @@ import (
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
+const alphaDBInitJobName = "openchami-alpha-db-init"
+
 func newDBScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := newScheme(t)
@@ -33,8 +35,8 @@ func newDBScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func cnpgClusterName(clusterName string) string {
-	return "openchami-" + clusterName + "-postgres"
+func cnpgClusterName() string {
+	return "openchami-alpha-postgres"
 }
 
 func newDBCredsSecret(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Secret {
@@ -84,7 +86,7 @@ func TestDatabaseReconciler_CreatesCNPGCluster(t *testing.T) {
 	got := &cnpgv1.Cluster{}
 	key := types.NamespacedName{
 		Namespace: ClusterNamespace(cluster),
-		Name:      cnpgClusterName("alpha"),
+		Name:      cnpgClusterName(),
 	}
 	if err := c.Get(context.Background(), key, got); err != nil {
 		t.Fatalf("getting cnpg cluster: %v", err)
@@ -110,7 +112,7 @@ func TestDatabaseReconciler_DegradedWhileNotHealthy(t *testing.T) {
 	creds := newDBCredsSecret(cluster)
 	cnpg := &cnpgv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cnpgClusterName("alpha"),
+			Name:      cnpgClusterName(),
 			Namespace: ClusterNamespace(cluster),
 		},
 		Status: cnpgv1.ClusterStatus{Phase: "Setting up primary"},
@@ -138,7 +140,7 @@ func TestDatabaseReconciler_DegradedWhileNotHealthy(t *testing.T) {
 	job := &batchv1.Job{}
 	err = c.Get(context.Background(), types.NamespacedName{
 		Namespace: ClusterNamespace(cluster),
-		Name:      "openchami-alpha-db-init",
+		Name:      alphaDBInitJobName,
 	}, job)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("expected post-init job to be absent, got err=%v", err)
@@ -164,7 +166,7 @@ func TestDatabaseReconciler_PostInitJobCreatesAndGatesReady(t *testing.T) {
 	creds := newDBCredsSecret(cluster)
 	cnpg := &cnpgv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cnpgClusterName("alpha"),
+			Name:      cnpgClusterName(),
 			Namespace: ClusterNamespace(cluster),
 		},
 		Status: cnpgv1.ClusterStatus{Phase: cnpgv1.PhaseHealthy},
@@ -185,7 +187,7 @@ func TestDatabaseReconciler_PostInitJobCreatesAndGatesReady(t *testing.T) {
 	}
 
 	job := &batchv1.Job{}
-	jobName := types.NamespacedName{Namespace: ClusterNamespace(cluster), Name: "openchami-alpha-db-init"}
+	jobName := types.NamespacedName{Namespace: ClusterNamespace(cluster), Name: alphaDBInitJobName}
 	if err := c.Get(context.Background(), jobName, job); err != nil {
 		t.Fatalf("expected post-init job to exist: %v", err)
 	}
@@ -223,7 +225,7 @@ func TestDatabaseReconciler_PostInitJobFailedSurfacesError(t *testing.T) {
 	creds := newDBCredsSecret(cluster)
 	cnpg := &cnpgv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      cnpgClusterName("alpha"),
+			Name:      cnpgClusterName(),
 			Namespace: ClusterNamespace(cluster),
 		},
 		Status: cnpgv1.ClusterStatus{Phase: cnpgv1.PhaseHealthy},
@@ -231,7 +233,7 @@ func TestDatabaseReconciler_PostInitJobFailedSurfacesError(t *testing.T) {
 	failedJob := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ClusterNamespace(cluster),
-			Name:      "openchami-alpha-db-init",
+			Name:      alphaDBInitJobName,
 		},
 		Status: batchv1.JobStatus{Failed: 1},
 	}

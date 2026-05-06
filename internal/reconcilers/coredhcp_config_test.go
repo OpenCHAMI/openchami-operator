@@ -11,6 +11,11 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
+const (
+	testLeaseStartA = "10.0.0.10"
+	testLeaseEndA   = "10.0.0.20"
+)
+
 // TestRenderCoreDHCPConfig pins the YAML the operator hands to coredhcp.
 // Coredhcp's binary parses this with strict YAML and a documented schema;
 // a regression here would surface as a fatal config-load error in the pod
@@ -58,8 +63,8 @@ func TestRenderCoreDHCPConfig_DefaultsLeaseDurations(t *testing.T) {
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: "10.0.0.0/24",
-			Start:  "10.0.0.10",
-			End:    "10.0.0.20",
+			Start:  testLeaseStartA,
+			End:    testLeaseEndA,
 		}},
 	}
 	got, err := renderCoreDHCPConfig(cluster)
@@ -90,8 +95,8 @@ func TestRenderCoreDHCPConfig_RejectsInvalidSubnet(t *testing.T) {
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: "not-a-cidr",
-			Start:  "10.0.0.10",
-			End:    "10.0.0.20",
+			Start:  testLeaseStartA,
+			End:    testLeaseEndA,
 		}},
 	}
 	if _, err := renderCoreDHCPConfig(cluster); err == nil {
@@ -104,7 +109,7 @@ func TestRenderCoreDHCPConfig_NotesIgnoredAdditionalRanges(t *testing.T) {
 	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{
-			{Subnet: "10.0.0.0/24", Start: "10.0.0.10", End: "10.0.0.20"},
+			{Subnet: "10.0.0.0/24", Start: testLeaseStartA, End: testLeaseEndA},
 			{Subnet: "10.0.1.0/24", Start: "10.0.1.10", End: "10.0.1.20"},
 		},
 	}

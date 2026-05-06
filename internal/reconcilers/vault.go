@@ -54,16 +54,6 @@ var vssEntries = []vssEntry{
 	{SuffixTokensmithOIDC, func(p vault.VaultPaths) string { return p.TokensmithOIDC }},
 }
 
-// vssNames returns just the suffixes — used by callers that only need names
-// (e.g. metric/log enumeration of expected secrets).
-func vssNames() []string {
-	out := make([]string, len(vssEntries))
-	for i, e := range vssEntries {
-		out[i] = e.Suffix
-	}
-	return out
-}
-
 // VaultReconciler ensures Vault paths, policies, and VSO resources exist.
 type VaultReconciler struct {
 	Client      client.Client

@@ -14,6 +14,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+const testNamespaceAlpha = "openchami-alpha"
+
 // TestNamespaceReconciler_PSALabelsPermitHostNetworkWorkloads pins the PSA
 // label set the operator writes onto each cluster namespace.
 //
@@ -41,16 +43,16 @@ func TestNamespaceReconciler_PSALabelsPermitHostNetworkWorkloads(t *testing.T) {
 	}
 
 	ns := &corev1.Namespace{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "openchami-alpha"}, ns); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: testNamespaceAlpha}, ns); err != nil {
 		t.Fatalf("getting namespace: %v", err)
 	}
 
 	cases := []struct{ key, want string }{
 		{"pod-security.kubernetes.io/enforce", "privileged"},
-		{"pod-security.kubernetes.io/warn", "restricted"},
-		{"pod-security.kubernetes.io/audit", "restricted"},
+		{"pod-security.kubernetes.io/warn", psaLevelRestricted},
+		{"pod-security.kubernetes.io/audit", psaLevelRestricted},
 		{"openchami.org/cluster", "alpha"},
-		{"kubernetes.io/metadata.name", "openchami-alpha"},
+		{"kubernetes.io/metadata.name", testNamespaceAlpha},
 	}
 	for _, tc := range cases {
 		if got := ns.Labels[tc.key]; got != tc.want {

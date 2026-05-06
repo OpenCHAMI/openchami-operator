@@ -10,6 +10,8 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
+const testClusterNameAlpha = "alpha"
+
 // TestServiceURL_HonoursExternalEndpoint confirms ServiceURL returns the
 // site-supplied externalEndpoint verbatim when set, and the in-cluster
 // Service URL otherwise. This is the single hook used by every consumer
@@ -27,7 +29,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 	}{
 		{
 			name: "default — in-cluster URL for SMD",
-			spec: testCluster("alpha", openchamiv1alpha1.ServicesSpec{
+			spec: testCluster(openchamiv1alpha1.ServicesSpec{
 				SMD: openchamiv1alpha1.SMDSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceSMD,
@@ -35,7 +37,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "externalEndpoint set — passthrough",
-			spec: testCluster("alpha", openchamiv1alpha1.ServicesSpec{
+			spec: testCluster(openchamiv1alpha1.ServicesSpec{
 				SMD: openchamiv1alpha1.SMDSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{
 					Enabled: false, ExternalEndpoint: &external,
 				}},
@@ -45,7 +47,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "tokensmith default — in-cluster URL",
-			spec: testCluster("alpha", openchamiv1alpha1.ServicesSpec{
+			spec: testCluster(openchamiv1alpha1.ServicesSpec{
 				Tokensmith: openchamiv1alpha1.TokensmithSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceTokensmith,
@@ -53,7 +55,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "boot-service default — in-cluster URL",
-			spec: testCluster("alpha", openchamiv1alpha1.ServicesSpec{
+			spec: testCluster(openchamiv1alpha1.ServicesSpec{
 				BootService: openchamiv1alpha1.BootServiceSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceBootService,
@@ -61,7 +63,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "metadata-service default — in-cluster URL",
-			spec: testCluster("alpha", openchamiv1alpha1.ServicesSpec{
+			spec: testCluster(openchamiv1alpha1.ServicesSpec{
 				MetadataService: openchamiv1alpha1.MetadataServiceSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceMetadataService,
@@ -69,7 +71,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "unknown service — empty string",
-			spec: testCluster("alpha", openchamiv1alpha1.ServicesSpec{}),
+			spec: testCluster(openchamiv1alpha1.ServicesSpec{}),
 			svc:  "no-such-service",
 			want: "",
 		},
@@ -104,7 +106,7 @@ func TestServiceDeployedInCluster(t *testing.T) {
 	for _, svc := range []string{ServiceSMD, ServiceTokensmith, ServiceBootService, ServiceMetadataService} {
 		for _, tc := range cases {
 			t.Run(svc+"/"+tc.name, func(t *testing.T) {
-				cluster := testCluster("alpha", servicesSpecFor(svc, tc.enabled, tc.ext))
+				cluster := testCluster(servicesSpecFor(svc, tc.enabled, tc.ext))
 				if got := ServiceDeployedInCluster(&cluster, svc); got != tc.want {
 					t.Errorf("ServiceDeployedInCluster(%s) = %v, want %v", svc, got, tc.want)
 				}
@@ -113,10 +115,10 @@ func TestServiceDeployedInCluster(t *testing.T) {
 	}
 }
 
-func testCluster(name string, services openchamiv1alpha1.ServicesSpec) openchamiv1alpha1.OpenCHAMICluster {
+func testCluster(services openchamiv1alpha1.ServicesSpec) openchamiv1alpha1.OpenCHAMICluster {
 	return openchamiv1alpha1.OpenCHAMICluster{
 		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
-			ClusterName: name,
+			ClusterName: testClusterNameAlpha,
 			Services:    services,
 		},
 	}

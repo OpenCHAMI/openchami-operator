@@ -36,7 +36,10 @@ import (
 	"github.com/openchami/openchami-operator/internal/version"
 )
 
-const clusterFinalizer = "openchami.org/cluster-protection"
+const (
+	clusterFinalizer = "openchami.org/cluster-protection"
+	annotationTrue   = "true"
+)
 
 // +kubebuilder:rbac:groups=openchami.openchami.org,resources=openchamiclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=openchami.openchami.org,resources=openchamiclusters/status,verbs=get;update;patch
@@ -252,14 +255,14 @@ func (r *OpenCHAMIClusterReconciler) reconcileDelete(ctx context.Context, cluste
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting namespace: %w", err)
 	}
 
-	if cluster.Annotations["openchami.org/cleanup-vault"] == "true" && r.VaultClient != nil {
+	if cluster.Annotations["openchami.org/cleanup-vault"] == annotationTrue && r.VaultClient != nil {
 		prefix := "openchami/" + cluster.Spec.ClusterName + "/"
 		if err := r.VaultClient.DeleteClusterPaths(ctx, prefix); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting vault paths: %w", err)
 		}
 	}
 
-	if cluster.Annotations["openchami.org/cleanup-s3"] == "true" && r.S3Client != nil {
+	if cluster.Annotations["openchami.org/cleanup-s3"] == annotationTrue && r.S3Client != nil {
 		bucket := reconcilers.BootBucketName(cluster)
 		if err := r.S3Client.DeleteBucket(ctx, bucket); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting s3 bucket: %w", err)

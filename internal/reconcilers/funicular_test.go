@@ -21,6 +21,8 @@ import (
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
+const testFunicularNamespace = "openchami-alpha"
+
 func TestFunicularReconciler_DisabledTriviallyReady(t *testing.T) {
 	scheme := newScheme(t)
 	cluster := newCluster("alpha")
@@ -106,7 +108,7 @@ func assertFunicularEnvValues(t *testing.T, envs map[string]corev1.EnvVar) {
 	t.Helper()
 	cases := map[string]string{
 		"FUNICULAR_CLUSTER_NAME":     "alpha",
-		"FUNICULAR_NAMESPACE":        "openchami-alpha",
+		"FUNICULAR_NAMESPACE":        testFunicularNamespace,
 		"FUNICULAR_S3_ENDPOINT":      testS3Endpoint,
 		"FUNICULAR_S3_BUCKET":        "alpha-logs",
 		"FUNICULAR_FLUSH_INTERVAL":   "60",
