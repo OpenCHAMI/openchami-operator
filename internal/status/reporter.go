@@ -33,7 +33,7 @@ import (
 	"github.com/openchami/openchami-operator/internal/reconcilers"
 )
 
-// Reporter centralises status mutation for an OpenCHAMICluster. Methods on
+// Reporter centralises status mutation for an OpenCHAMIControlPlane. Methods on
 // Reporter mutate the in-memory cluster only; the caller is responsible for
 // patching .status (invariant #6: status is patched last by the controller).
 //
@@ -49,32 +49,32 @@ type Reporter struct {
 // apimeta.SetStatusCondition that exists so future plumbing (event emission,
 // metric annotation) can be added in one place.
 func (r *Reporter) SetCondition(
-	cluster *openchamiv1alpha1.OpenCHAMICluster,
+	cp *openchamiv1alpha1.OpenCHAMIControlPlane,
 	condType string,
 	status metav1.ConditionStatus,
 	reason, message string,
 ) {
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,
 		Reason:             reason,
 		Message:            message,
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 }
 
 // UpdateServiceStatus records readiness, endpoint, and message for a single
 // service in cluster.Status.Services. Initialises the map on first use.
 func (r *Reporter) UpdateServiceStatus(
-	cluster *openchamiv1alpha1.OpenCHAMICluster,
+	cp *openchamiv1alpha1.OpenCHAMIControlPlane,
 	svcName string,
 	ready bool,
 	endpoint, message string,
 ) {
-	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
+	if cp.Status.Services == nil {
+		cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
-	cluster.Status.Services[svcName] = openchamiv1alpha1.ServiceStatus{
+	cp.Status.Services[svcName] = openchamiv1alpha1.ServiceStatus{
 		Ready:    ready,
 		Endpoint: endpoint,
 		Message:  message,
@@ -95,11 +95,11 @@ func (r *Reporter) UpdateServiceStatus(
 //
 // Falls back to the previous phase when none of the rules match (typical case:
 // a transient state where conditions are still being evaluated).
-func (r *Reporter) ComputeAndSetPhase(cluster *openchamiv1alpha1.OpenCHAMICluster) {
-	previous := cluster.Status.Phase
+func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlane) {
+	previous := cp.Status.Phase
 
 	// Detect service Ready→NotReady regressions before we overwrite anything.
-	regressed := r.detectServiceRegressions(cluster, previous)
+	regressed := r.detectServiceRegressions(cp, previous)
 
 	// Walk the conditions once, gathering everything the ladder needs.
 	var (
@@ -109,7 +109,7 @@ func (r *Reporter) ComputeAndSetPhase(cluster *openchamiv1alpha1.OpenCHAMICluste
 		hasProvisioning   bool
 		anyConditionFalse bool
 	)
-	for _, c := range cluster.Status.Conditions {
+	for _, c := range cp.Status.Conditions {
 		if c.Status != metav1.ConditionFalse {
 			continue
 		}
@@ -128,37 +128,37 @@ func (r *Reporter) ComputeAndSetPhase(cluster *openchamiv1alpha1.OpenCHAMICluste
 		}
 	}
 
-	allServicesReady := r.allEnabledServicesReady(cluster)
+	allServicesReady := r.allEnabledServicesReady(cp)
 	allConditionsTrue := !anyConditionFalse
 
 	// Emit warning events for the degraded sub-cases. Done here (not at each
 	// rule branch) so a state that triggers multiple rules still surfaces them.
 	if regressed != "" {
-		reconcilers.RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		reconcilers.RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			"ServiceDegraded",
 			fmt.Sprintf("service %q transitioned Ready→NotReady", regressed))
 	}
 	if hasNoEligible {
-		reconcilers.RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		reconcilers.RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonNoEligibleNodes,
 			"network probe found no eligible nodes; cluster is degraded")
 	}
 
 	switch {
 	case hasFailed:
-		cluster.Status.Phase = openchamiv1alpha1.PhaseFailed
+		cp.Status.Phase = openchamiv1alpha1.PhaseFailed
 	case hasDegradedCert, regressed != "", hasNoEligible:
-		cluster.Status.Phase = openchamiv1alpha1.PhaseDegraded
+		cp.Status.Phase = openchamiv1alpha1.PhaseDegraded
 	case hasProvisioning, !allServicesReady:
-		cluster.Status.Phase = openchamiv1alpha1.PhaseProvisioning
+		cp.Status.Phase = openchamiv1alpha1.PhaseProvisioning
 	case allConditionsTrue && allServicesReady:
-		cluster.Status.Phase = openchamiv1alpha1.PhaseReady
+		cp.Status.Phase = openchamiv1alpha1.PhaseReady
 	default:
 		// Nothing matched; preserve the previous phase rather than blanking it.
 		if previous != "" {
-			cluster.Status.Phase = previous
+			cp.Status.Phase = previous
 		} else {
-			cluster.Status.Phase = openchamiv1alpha1.PhaseProvisioning
+			cp.Status.Phase = openchamiv1alpha1.PhaseProvisioning
 		}
 	}
 }
@@ -168,7 +168,7 @@ func (r *Reporter) ComputeAndSetPhase(cluster *openchamiv1alpha1.OpenCHAMICluste
 // Returns an error when the PEM is missing or malformed; on error the cluster
 // status is not modified.
 func (r *Reporter) UpdateCertExpiry(
-	cluster *openchamiv1alpha1.OpenCHAMICluster,
+	cp *openchamiv1alpha1.OpenCHAMIControlPlane,
 	certSecret *corev1.Secret,
 ) error {
 	if certSecret == nil {
@@ -178,7 +178,7 @@ func (r *Reporter) UpdateCertExpiry(
 	if err != nil {
 		return fmt.Errorf("parsing leaf certificate: %w", err)
 	}
-	cluster.Status.CertExpiryTime = notAfter.UTC().Format(time.RFC3339)
+	cp.Status.CertExpiryTime = notAfter.UTC().Format(time.RFC3339)
 	return nil
 }
 
@@ -191,14 +191,14 @@ func (r *Reporter) UpdateCertExpiry(
 // have happened when the phase was previously Ready (so every enabled service
 // had been observed Ready) and at least one enabled service is now NotReady.
 func (r *Reporter) detectServiceRegressions(
-	cluster *openchamiv1alpha1.OpenCHAMICluster,
+	cp *openchamiv1alpha1.OpenCHAMIControlPlane,
 	previous openchamiv1alpha1.ClusterPhase,
 ) string {
 	if previous != openchamiv1alpha1.PhaseReady {
 		return ""
 	}
-	for _, name := range enabledServiceNames(cluster) {
-		st, ok := cluster.Status.Services[name]
+	for _, name := range enabledServiceNames(cp) {
+		st, ok := cp.Status.Services[name]
 		if !ok || !st.Ready {
 			return name
 		}
@@ -208,9 +208,9 @@ func (r *Reporter) detectServiceRegressions(
 
 // allEnabledServicesReady reports whether every enabled operator-managed
 // service is currently Ready.
-func (r *Reporter) allEnabledServicesReady(cluster *openchamiv1alpha1.OpenCHAMICluster) bool {
-	for _, name := range enabledServiceNames(cluster) {
-		st, ok := cluster.Status.Services[name]
+func (r *Reporter) allEnabledServicesReady(cp *openchamiv1alpha1.OpenCHAMIControlPlane) bool {
+	for _, name := range enabledServiceNames(cp) {
+		st, ok := cp.Status.Services[name]
 		if !ok || !st.Ready {
 			return false
 		}
@@ -221,15 +221,15 @@ func (r *Reporter) allEnabledServicesReady(cluster *openchamiv1alpha1.OpenCHAMIC
 // enabledServiceNames returns the canonical set of enabled, status-tracked
 // services. Mirrors the aggregation set used by the controller's
 // aggregateServicesReady so phase and ServicesReady stay in lockstep.
-func enabledServiceNames(cluster *openchamiv1alpha1.OpenCHAMICluster) []string {
+func enabledServiceNames(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
 	pairs := []struct {
 		name    string
 		enabled bool
 	}{
-		{reconcilers.ServiceSMD, cluster.Spec.Services.SMD.Enabled},
-		{reconcilers.ServiceTokensmith, cluster.Spec.Services.Tokensmith.Enabled},
-		{reconcilers.ServiceBootService, cluster.Spec.Services.BootService.Enabled},
-		{reconcilers.ServiceMetadataService, cluster.Spec.Services.MetadataService.Enabled},
+		{reconcilers.ServiceSMD, cp.Spec.Services.SMD.Enabled},
+		{reconcilers.ServiceTokensmith, cp.Spec.Services.Tokensmith.Enabled},
+		{reconcilers.ServiceBootService, cp.Spec.Services.BootService.Enabled},
+		{reconcilers.ServiceMetadataService, cp.Spec.Services.MetadataService.Enabled},
 	}
 	names := make([]string, 0, len(pairs))
 	for _, p := range pairs {

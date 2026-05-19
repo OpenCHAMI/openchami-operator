@@ -16,7 +16,7 @@ landed change.
 
 **Problem.** `make manifests` runs `controller-gen` against `paths="./api/..."`
 only, so kubebuilder `+kubebuilder:rbac:` markers added on
-`internal/controller/openchamicluster_controller.go` (Phases 7, 8, 11, 12)
+`internal/controller/openchamicontrolplane_controller.go` (Phases 7, 8, 11, 12)
 never make it into `config/rbac/role.yaml`. Production deploys built from
 this Makefile would be missing permissions for: gateway-api Gateways/HTTPRoutes,
 envoy-gateway SecurityPolicies/BackendTrafficPolicies, cert-manager
@@ -212,7 +212,7 @@ covers the parse/condition logic; this is just about the e2e flow.
 2. Un-Skip E2E-11. Test body:
    a. Generate a self-signed cert with `notAfter = now + 1h` (well under 48h).
    b. `kubectl apply -f -` a Secret named `<cluster>-gateway-tls` in `openchami-<cluster>` containing the cert as `tls.crt`/`tls.key`.
-   c. Apply an OpenCHAMICluster CR referencing that secretName via `networking.tls.secretName`.
+   c. Apply an OpenCHAMIControlPlane CR referencing that secretName via `networking.tls.secretName`.
    d. The Phase 7 reconciler will see the existing secret, parse expiry, and (because <48h) emit a Warning Event with reason `ExpirationImminent`.
    e. Poll: `kubectl get events -n openchami-<cluster> --field-selector reason=ExpirationImminent` returns at least one Event of type Warning. Also assert `cluster.Status.CertExpiryTime` is set to a time within the next 1h ± skew.
 3. Cleanup: delete the cluster, secret, fixtures.
@@ -229,7 +229,7 @@ false positives where the regex matches comment text:
 - `internal/reconcilers/reconciler.go` mentions `recorder.Event` and `client.Create` in doc comments listing things sub-reconcilers must NOT do
 - `internal/reconcilers/helpers.go::RecordConditionEvent` is the helper that
   does call `recorder.Event` — by design — and the script flags it
-- Similar comment mentions in `database.go`, `vault.go`, `openchamicluster_types.go`
+- Similar comment mentions in `database.go`, `vault.go`, `openchamicontrolplane_types.go`
 
 **Files**
 - `tools/validate-invariants.sh` — tighten the regex

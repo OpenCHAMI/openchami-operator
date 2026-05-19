@@ -41,47 +41,47 @@ type LogBucketReconciler struct {
 // Reconcile waits for VSO to materialise the log-credentials Secret, then
 // ensures the log bucket and its delete-after-N-days lifecycle rule exist.
 // Idempotent: every call produces the same end state.
-func (r *LogBucketReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "logbucket")
+func (r *LogBucketReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "logbucket")
 
-	if !cluster.Spec.Logging.Enabled {
+	if !cp.Spec.Logging.Enabled {
 		log.Info("logging disabled, skipping log bucket")
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogBucketReady,
 			Status:             metav1.ConditionTrue,
 			Reason:             conditions.ReasonReady,
 			Message:            "logging disabled",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, nil
 	}
 
 	if r.S3Client == nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            "s3 client not configured",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: logBucketRequeueAfter}, nil
 	}
 
-	credsName := SecretName(cluster, SuffixLogCredentials)
+	credsName := SecretName(cp, SuffixLogCredentials)
 	creds := &corev1.Secret{}
 	err := r.Client.Get(ctx, types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      credsName,
 	}, creds)
 	if apierrors.IsNotFound(err) {
 		log.Info("waiting for VSO to sync log credentials Secret",
 			"secret", credsName)
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonProvisioning,
 			Message:            "waiting for VSO to sync log credentials",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: logBucketRequeueAfter}, nil
 	}
@@ -89,46 +89,46 @@ func (r *LogBucketReconciler) Reconcile(ctx context.Context, cluster *openchamiv
 		return ctrl.Result{}, fmt.Errorf("getting log credentials secret: %w", err)
 	}
 
-	bucket := LogBucketName(cluster)
-	retention := cluster.Spec.Logging.RetentionDays
+	bucket := LogBucketName(cp)
+	retention := cp.Spec.Logging.RetentionDays
 	log.Info("ensuring log bucket on VersityGW",
 		"bucket", bucket, "retentionDays", retention)
 
 	if err := r.S3Client.EnsureBucket(ctx, bucket); err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("ensuring log bucket: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, fmt.Errorf("ensuring log bucket %s: %w", bucket, err)
 	}
 
 	if err := r.S3Client.EnsureLifecycleRule(ctx, bucket, retention); err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("ensuring log bucket lifecycle rule: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, fmt.Errorf("ensuring log bucket lifecycle rule on %s: %w", bucket, err)
 	}
 
-	cluster.Status.LogBucket = bucket
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	cp.Status.LogBucket = bucket
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionLogBucketReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            fmt.Sprintf("log bucket %s ready (retention %d days)", bucket, retention),
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
 
 // Describe returns no Kubernetes objects: the log bucket is provisioned
 // directly against VersityGW (S3) and has no in-cluster representation.
-func (r *LogBucketReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *LogBucketReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	return []client.Object{}, nil
 }

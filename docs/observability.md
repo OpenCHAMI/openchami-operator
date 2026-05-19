@@ -23,7 +23,7 @@ Each sub-reconciler owns exactly one or two condition types. Format follows `met
 
 | Type | Owner |
 |---|---|
-| `ReconcileActive` | `internal/controller/openchamicluster_controller.go` (set false when pinned-version mismatch) |
+| `ReconcileActive` | `internal/controller/openchamicontrolplane_controller.go` (set false when pinned-version mismatch) |
 | `NamespaceReady` | `internal/reconcilers/namespace.go` |
 | `RBACReady` | `internal/reconcilers/rbac.go` |
 | `VaultReady` | `internal/reconcilers/vault.go` |
@@ -62,7 +62,7 @@ The list of required conditions is in `internal/conditions/required.go`. Optiona
 
 ## Events
 
-Events are the human-readable trail of what just happened. They show up in `kubectl describe openchamicluster …` and in the Kubernetes events stream.
+Events are the human-readable trail of what just happened. They show up in `kubectl describe openchamicontrolplane …` and in the Kubernetes events stream.
 
 ### Convention (invariant 9)
 
@@ -108,7 +108,7 @@ log.Info("seeding KV path", "path", "openchami/foo/db/credentials")
 
 Output (`--zap-encoder=json`):
 ```json
-{"level":"info","ts":"…","logger":"controllers.openchamicluster","msg":"seeding KV path","cluster":"foo","reconciler":"vault","path":"openchami/foo/db/credentials"}
+{"level":"info","ts":"…","logger":"controllers.openchamicontrolplane","msg":"seeding KV path","cluster":"foo","reconciler":"vault","path":"openchami/foo/db/credentials"}
 ```
 
 For per-resource lines, prefer `EnrichWithResource`:
@@ -121,8 +121,8 @@ dsLog.Info("applying coredhcp DaemonSet")
 
 ## How to debug a stuck cluster
 
-1. `kubectl get openchamicluster <name> -o yaml | yq '.status'` — what's the phase, what's the latest condition, what's the message?
-2. `kubectl describe openchamicluster <name>` — recent Events, with their runbook URLs.
+1. `kubectl get openchamicontrolplane <name> -o yaml | yq '.status'` — what's the phase, what's the latest condition, what's the message?
+2. `kubectl describe openchamicontrolplane <name>` — recent Events, with their runbook URLs.
 3. Open the runbook URL.
 4. If Events don't tell the story: check the operator log for the `cluster=<name>` lines (`kubectl logs -n <op-ns> deploy/openchami-operator-controller-manager | grep cluster=foo`).
 5. For deeper traces, run the operator locally with `make dev-run` and `--zap-log-level=debug`.

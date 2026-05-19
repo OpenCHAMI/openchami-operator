@@ -16,13 +16,13 @@ Code paths: `internal/vault/`, `internal/s3/`, `internal/reconcilers/vault.go`, 
 
 ## 2. Per-cluster namespace isolation
 
-Every resource for `OpenCHAMICluster foo` lives in `openchami-foo`.
+Every resource for `OpenCHAMIControlPlane foo` lives in `openchami-foo`.
 
 - Nothing leaks across cluster boundaries.
 - The Namespace reconciler is the **only** place that creates the namespace.
 - Cross-cluster Secrets, ConfigMaps, etc. are forbidden.
 
-Enforced by: the watch predicate in `internal/controller/openchamicluster_controller.go`'s `SetupWithManager` plus per-resource `client.InNamespace(...)` filters.
+Enforced by: the watch predicate in `internal/controller/openchamicontrolplane_controller.go`'s `SetupWithManager` plus per-resource `client.InNamespace(...)` filters.
 
 ## 3. Vault path isolation
 
@@ -32,16 +32,16 @@ All KV paths are prefixed `openchami/{clusterName}/`.
 - Two clusters cannot share a path.
 - The validating webhook also enforces uniqueness at admission time.
 
-Code paths: `internal/reconcilers/vault.go::validatePathUniqueness`, `api/v1alpha1/openchamicluster_webhook.go::ValidateCreate`.
+Code paths: `internal/reconcilers/vault.go::validatePathUniqueness`, `api/v1alpha1/openchamicontrolplane_webhook.go::ValidateCreate`.
 
 ## 4. DHCP node exclusivity
 
-When network probing is disabled, no two `OpenCHAMICluster` instances may target the same Kubernetes node for CoreDHCP.
+When network probing is disabled, no two `OpenCHAMIControlPlane` instances may target the same Kubernetes node for CoreDHCP.
 
 - The validating webhook enforces this at admission.
 - When network probing is enabled, exclusivity is implicit (the probe labels are per-cluster).
 
-Code path: `api/v1alpha1/openchamicluster_webhook.go`. Look for `ValidateCoreDHCPExclusivity`.
+Code path: `api/v1alpha1/openchamicontrolplane_webhook.go`. Look for `ValidateCoreDHCPExclusivity`.
 
 ## 5. Idempotent reconciliation
 
@@ -61,7 +61,7 @@ Never return from `Reconcile` without patching `.status.conditions`.
 - The status patch is the very last thing the controller does, regardless of `reconcileErr`.
 - If both `reconcileErr` and the patch error, both are joined.
 
-Code path: end of `OpenCHAMIClusterReconciler.Reconcile` in `internal/controller/openchamicluster_controller.go`.
+Code path: end of `OpenCHAMIControlPlaneReconciler.Reconcile` in `internal/controller/openchamicontrolplane_controller.go`.
 
 ## 7. No secrets in the CRD spec
 

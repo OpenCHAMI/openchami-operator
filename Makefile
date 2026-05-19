@@ -129,6 +129,14 @@ dev-up: ## Start local development environment
 	  kubectl --context kind-openchami-dev get --raw=/livez >/dev/null 2>&1 && break; \
 	  sleep 2; \
 	done; kubectl --context kind-openchami-dev get --raw=/livez >/dev/null
+	@# Attach the compose-based Vault and LocalStack containers to the
+	@# 'kind' docker network so pods inside the cluster (VSO,
+	@# operator-managed services) can resolve them by container hostname.
+	@# Without this step, in-cluster traffic to 'http://localhost:8200'
+	@# resolves to the pod itself, not the host's Vault.
+	@echo "Attaching compose containers to kind network..."
+	-docker network connect kind openchami-vault-dev 2>/dev/null
+	-docker network connect kind openchami-localstack-dev 2>/dev/null
 	@echo "Installing prerequisites..."
 	$(MAKE) dev-install-prereqs
 	@echo "Installing OpenCHAMI CRDs..."
@@ -143,7 +151,7 @@ dev-up: ## Start local development environment
 	@echo ""
 	@echo "Then apply a test cluster:"
 	@echo "  kubectl apply -f test/fixtures/minimal-cluster.yaml"
-	@echo "  kubectl get openchamicluster testcluster -w"
+	@echo "  kubectl get openchamicontrolplane testcluster -w"
 
 dev-down: ## Tear down local development environment
 	kind delete cluster --name openchami-dev 2>/dev/null || true
@@ -166,6 +174,55 @@ dev-install-prereqs: ## Install operator prerequisites into dev cluster
 	helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
 	  --version $(ENVOY_GATEWAY_VERSION) \
 	  --namespace envoy-gateway-system --create-namespace
+	@# The Envoy Gateway helm chart installs the controller + CRDs but
+	@# does NOT create a default GatewayClass. The operator's fixtures
+	@# use spec.networking.gatewayClass: envoy, so dev-up materializes a
+	@# GatewayClass of that name pointing at the chart's controller.
+	@# Without this, the Gateway CR stays Programmed=Unknown and
+	@# GatewayReady never reaches True.
+	@echo "Creating envoy GatewayClass..."
+	kubectl --context kind-openchami-dev apply -f hack/local-dev/envoy-gatewayclass.yaml
+	@# selfsigned-dev ClusterIssuer: the dev fixtures
+	@# (test/fixtures/*-cluster.yaml) set spec.networking.tls.issuer to
+	@# 'selfsigned-dev'. cert-manager itself doesn't ship a default
+	@# ClusterIssuer, so without this step the gateway Certificate stays
+	@# in Issuing forever and CertificatesValid never reaches True.
+	@# Production deployments configure their own issuer (e.g. an ACME
+	@# ClusterIssuer pointing at Let's Encrypt); this is dev only.
+	@echo "Waiting for cert-manager webhook to be ready..."
+	@kubectl --context kind-openchami-dev wait --for=condition=Available --timeout=120s \
+	  -n cert-manager deployment/cert-manager-webhook
+	@# Deployment-Available is satisfied as soon as a pod is Ready, but
+	@# the cert-manager-webhook Service endpoints can still be empty —
+	@# kube-proxy and the webhook server's TLS warmup both lag the pod
+	@# readiness probe. Applying a cert-manager resource against an
+	@# empty Endpoints slice surfaces as `connection refused` from the
+	@# kube-apiserver's webhook call. Wait until the Service has at
+	@# least one ready endpoint before proceeding.
+	@echo "Waiting for cert-manager-webhook Service endpoints to populate..."
+	@for i in $$(seq 1 60); do \
+	  if kubectl --context kind-openchami-dev get endpoints -n cert-manager cert-manager-webhook \
+	       -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | grep -q .; then \
+	    break; \
+	  fi; \
+	  sleep 2; \
+	done; kubectl --context kind-openchami-dev get endpoints -n cert-manager cert-manager-webhook \
+	  -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null | grep -q .
+	@echo "Creating selfsigned-dev ClusterIssuer..."
+	@# Even with populated endpoints, the first ValidatingWebhookConfiguration
+	@# call can still race the apiserver's TLS handshake with the webhook.
+	@# A few short retries cover the gap without masking a genuine failure.
+	@for i in $$(seq 1 10); do \
+	  if kubectl --context kind-openchami-dev apply -f hack/local-dev/selfsigned-issuer.yaml 2>/tmp/cm-apply-err; then \
+	    rm -f /tmp/cm-apply-err; \
+	    break; \
+	  fi; \
+	  if [ $$i -eq 10 ]; then \
+	    cat /tmp/cm-apply-err; exit 1; \
+	  fi; \
+	  echo "  selfsigned-issuer apply retry $$i/10..."; \
+	  sleep 3; \
+	done
 	@echo "Prerequisites installed."
 
 ##@ Cluster install (kustomize)
@@ -236,7 +293,7 @@ dev-deploy: docker-build ## Build operator image, load into kind, and deploy in-
 	@echo ""
 	@echo "Operator deployed. Trigger a reconcile or apply a fixture:"
 	@echo "  kubectl apply -f test/fixtures/minimal-cluster.yaml"
-	@echo "  kubectl get openchamicluster testcluster -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'"
+	@echo "  kubectl get openchamicontrolplane testcluster -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'"
 
 dev-run: build install ## Run operator locally against dev cluster (installs CRDs first)
 	@# Notes on the env vars below:
@@ -251,6 +308,13 @@ dev-run: build install ## Run operator locally against dev cluster (installs CRD
 	@#   gateway brought up by `hack/local-dev/docker-compose.yaml`). The
 	@#   keys are the LocalStack defaults; AWS_S3_TLS_INSECURE is unset
 	@#   because LocalStack serves plain HTTP on 4566.
+	@# - OPENCHAMI_BEST_EFFORT_DNS=true: the off-cluster operator can't
+	@#   resolve kind-network or compose-network internal hostnames
+	@#   (e.g. openchami-vault-dev). The NetworkPolicies reconciler
+	@#   downgrades unresolvable Vault/VersityGW hosts to a 0.0.0.0/0
+	@#   placeholder peer when this is set, so the rest of the cluster
+	@#   can reach Ready. Production (in-cluster operator) leaves this
+	@#   unset and stays strict.
 	ENABLE_WEBHOOKS=false \
 	VAULT_ADDR=http://127.0.0.1:8200 \
 	VAULT_TOKEN=dev-root-token \
@@ -259,6 +323,7 @@ dev-run: build install ## Run operator locally against dev cluster (installs CRD
 	AWS_ACCESS_KEY_ID=test \
 	AWS_SECRET_ACCESS_KEY=test \
 	AWS_REGION=us-east-1 \
+	OPENCHAMI_BEST_EFFORT_DNS=true \
 	OPENCHAMI_DRY_RUN=false \
 	KUBECONFIG=~/.kube/config \
 	$(OPERATOR_BIN) --zap-encoder=json
@@ -271,7 +336,7 @@ dev-run-dry: build install ## Run operator in dry-run mode
 
 ##@ Storage version
 
-migrate-storage-version: ## Migrate all OpenCHAMICluster objects to current storage version
+migrate-storage-version: ## Migrate all OpenCHAMIControlPlane objects to current storage version
 	hack/migrate-storage-version.sh
 
 ##@ Phase validation

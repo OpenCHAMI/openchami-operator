@@ -8,7 +8,7 @@ control, BMC discovery (Magellan), DHCP for the provision network, and
 authentication tokens (tokensmith). The **OpenCHAMI Operator** runs all of
 these services on Kubernetes for you.
 
-You manage one object — a `OpenCHAMICluster` — and the operator continuously
+You manage one object — a `OpenCHAMIControlPlane` — and the operator continuously
 reconciles underlying Kubernetes resources to match it.
 
 ## What an "operator" is, in 60 seconds
@@ -19,14 +19,14 @@ the world match what that resource says. Think of it as a robot administrator
 that re-applies your intended state every few seconds and writes status back so
 you can see what's happening.
 
-The CRD here is `OpenCHAMICluster`. You write one YAML file describing the
+The CRD here is `OpenCHAMIControlPlane`. You write one YAML file describing the
 cluster you want; the operator does the rest. Need a second cluster? Apply a
-second `OpenCHAMICluster` — the operator gives it a fully isolated namespace,
+second `OpenCHAMIControlPlane` — the operator gives it a fully isolated namespace,
 its own database, its own Vault paths, its own DHCP server, etc.
 
 ## What the operator manages for you
 
-For each `OpenCHAMICluster` you apply, the operator creates and maintains:
+For each `OpenCHAMIControlPlane` you apply, the operator creates and maintains:
 
 - **Per-cluster namespace** (`openchami-<clusterName>`) with security policies.
 - **PostgreSQL database** (via CloudNativePG operator, separate cluster).
@@ -52,7 +52,7 @@ Day-1 looks like this:
 ```yaml
 # my-cluster.yaml
 apiVersion: openchami.openchami.org/v1alpha1
-kind: OpenCHAMICluster
+kind: OpenCHAMIControlPlane
 metadata:
   name: venado
 spec:
@@ -97,7 +97,7 @@ Apply and watch:
 
 ```sh
 kubectl apply -f my-cluster.yaml
-kubectl get openchamicluster venado -w
+kubectl get openchamicontrolplane venado -w
 ```
 
 Within a few minutes the cluster reaches `READY=True`. At that point the API
@@ -120,7 +120,7 @@ kubectl -n openchami-operator-system set image \
 ```
 
 ### Service upgrade
-Bump the image tag for one service in your `OpenCHAMICluster`:
+Bump the image tag for one service in your `OpenCHAMIControlPlane`:
 
 ```yaml
 services:
@@ -143,7 +143,7 @@ The operator writes its findings into the CR's `.status.conditions`. **Always
 start there.**
 
 ```sh
-kubectl get openchamicluster venado \
+kubectl get openchamicontrolplane venado \
   -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
 ```
 
@@ -179,7 +179,7 @@ detailed playbook than this page can fit.
 
 **The CR shows `Ready=False` and I don't know why.**
 ```sh
-kubectl describe openchamicluster venado
+kubectl describe openchamicontrolplane venado
 ```
 Reads conditions + events in one place.
 
@@ -192,7 +192,7 @@ The operator never modifies pod logs; what's there is the service's own output.
 
 **I want to force a re-reconcile (no-op patch).**
 ```sh
-kubectl patch openchamicluster venado --type=merge -p '{}'
+kubectl patch openchamicontrolplane venado --type=merge -p '{}'
 ```
 The operator picks up the change immediately and runs the full pipeline.
 
@@ -201,7 +201,7 @@ The operator picks up the change immediately and runs the full pipeline.
 Three things to capture before opening a support ticket:
 
 1. The CR YAML and its `.status`:
-   `kubectl get openchamicluster venado -o yaml > /tmp/cr.yaml`
+   `kubectl get openchamicontrolplane venado -o yaml > /tmp/cr.yaml`
 2. Recent operator logs:
    `kubectl logs -n openchami-operator-system deploy/openchami-operator-controller-manager --tail=500`
 3. Cluster-namespace dump:
@@ -214,18 +214,18 @@ needing a live session.
 
 | HPC concept | Maps to in OpenCHAMI |
 |---|---|
-| Site / system | One `OpenCHAMICluster` resource |
+| Site / system | One `OpenCHAMIControlPlane` resource |
 | Provision network | `spec.services.coreDHCP.leaseRanges` + `provisionNetwork` |
 | BMC network | `spec.services.magellan.bmcSubnet` |
 | Service catalog | `spec.services.*` (each microservice toggleable) |
 | Quadlet/systemd unit per service | The Kubernetes Deployment/DaemonSet behind the service |
 | Per-site secrets | Per-cluster Vault paths under `openchami/<clusterName>/` |
 | Site changes / config drift | `kubectl apply` an updated CR; reconcile is automatic |
-| Reading current state | `kubectl get openchamicluster <name> -o yaml` |
+| Reading current state | `kubectl get openchamicontrolplane <name> -o yaml` |
 
 ## Further reading
 
 - `docs/quickstart.md` — full local-dev walkthrough.
 - `docs/troubleshooting.md` — the long-form runbook.
-- `docs/crd-reference.md` — every field in `OpenCHAMICluster`, with defaults.
+- `docs/crd-reference.md` — every field in `OpenCHAMIControlPlane`, with defaults.
 - `docs/architecture.md` — how the operator's reconcilers compose.

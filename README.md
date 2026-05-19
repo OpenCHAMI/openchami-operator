@@ -4,7 +4,7 @@ A Kubernetes operator that deploys and manages the [OpenCHAMI](https://openchami
 
 ## What it does
 
-Each `OpenCHAMICluster` custom resource produces a self-contained, namespace-isolated OpenCHAMI deployment:
+Each `OpenCHAMIControlPlane` custom resource produces a self-contained, namespace-isolated OpenCHAMI deployment:
 
 - **Stateful services** — SMD, tokensmith, boot-service, metadata-service, fru-tracker, power-control — backed by a CloudNativePG-managed Postgres cluster.
 - **Network services** — CoreDHCP for PXE, Magellan for BMC discovery — pinned to nodes that pass a configurable network probe.
@@ -21,7 +21,7 @@ The full documentation tree lives under [`docs/`](docs/README.md). Start with:
 
 - **[Quickstart](docs/quickstart.md)** — local dev cluster + first reconcile in under 15 minutes.
 - **[Architecture](docs/architecture.md)** — controller, sub-reconcilers, reconcile order.
-- **[CRD reference](docs/crd-reference.md)** — every `OpenCHAMICluster` field.
+- **[CRD reference](docs/crd-reference.md)** — every `OpenCHAMIControlPlane` field.
 - **[Invariants](docs/invariants.md)** — the 10 absolute rules.
 - **[Troubleshooting](docs/troubleshooting.md)** — common failure modes with fixes.
 - **[Contributing](docs/contributing.md)** — adding a sub-reconciler / CRD field / webhook.
@@ -35,7 +35,7 @@ make dev-up                       # docker-compose Vault+LocalStack, kind cluste
 
 # Apply a test cluster
 kubectl apply -f test/fixtures/minimal-cluster.yaml
-kubectl get openchamicluster testcluster -w
+kubectl get openchamicontrolplane testcluster -w
 
 # Run the operator locally against the dev cluster
 make dev-run
@@ -69,7 +69,7 @@ For service-level testing without involving Kubernetes (PR builds, cross-service
 |---|---|
 | Go module | `github.com/openchami/openchami-operator` |
 | CRD group/version | `openchami.openchami.org/v1alpha1` |
-| Primary resource | `OpenCHAMICluster` |
+| Primary resource | `OpenCHAMIControlPlane` |
 | Operator image | `ghcr.io/openchami/openchami-operator` |
 | Admin CLI | `ochami-admin` |
 | Kubebuilder | v4 |

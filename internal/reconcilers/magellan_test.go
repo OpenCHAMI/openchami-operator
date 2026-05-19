@@ -23,12 +23,12 @@ import (
 
 func TestMagellanReconciler_DisabledSkips(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.Magellan.Enabled = false
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.Magellan.Enabled = false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &MagellanReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestMagellanReconciler_DisabledSkips(t *testing.T) {
 
 	cj := &batchv1.CronJob{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceMagellan,
 	}, cj)
 	if !apierrors.IsNotFound(getErr) {
@@ -48,19 +48,19 @@ func TestMagellanReconciler_DisabledSkips(t *testing.T) {
 
 func TestMagellanReconciler_WaitsForProbe(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.Magellan.Enabled = true
-	cluster.Spec.NetworkProbe.Enabled = true
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.Magellan.Enabled = true
+	cp.Spec.NetworkProbe.Enabled = true
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:    conditions.ConditionNetworkProbeReady,
 		Status:  metav1.ConditionFalse,
 		Reason:  conditions.ReasonProvisioning,
 		Message: "probe still spinning up",
 	})
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &MagellanReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -70,14 +70,14 @@ func TestMagellanReconciler_WaitsForProbe(t *testing.T) {
 
 	cj := &batchv1.CronJob{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceMagellan,
 	}, cj)
 	if !apierrors.IsNotFound(getErr) {
 		t.Errorf("expected magellan CronJob to be absent while waiting for probe, got err=%v", getErr)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionMagellanReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionMagellanReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonWaitingForProbe {
 		t.Fatalf("expected MagellanReady=False/WaitingForNetworkProbe, got %+v", cond)
 	}
@@ -85,9 +85,9 @@ func TestMagellanReconciler_WaitsForProbe(t *testing.T) {
 
 func TestMagellanReconciler_AppliesCronJob(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe.Enabled = false
-	cluster.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe.Enabled = false
+	cp.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
 		Enabled:           true,
 		NodeSelector:      map[string]string{testNodeRoleKey: testNodeRoleBMC},
 		Schedule:          "*/15 * * * *",
@@ -95,15 +95,15 @@ func TestMagellanReconciler_AppliesCronJob(t *testing.T) {
 		ConcurrencyPolicy: batchv1.ForbidConcurrent,
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &MagellanReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	cj := &batchv1.CronJob{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceMagellan,
 	}, cj); err != nil {
 		t.Fatalf("getting magellan CronJob: %v", err)
@@ -142,9 +142,9 @@ func TestMagellanReconciler_AppliesCronJob(t *testing.T) {
 
 func TestMagellanReconciler_ReadyOnceCreated(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe.Enabled = false
-	cluster.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe.Enabled = false
+	cp.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
 		Enabled:           true,
 		NodeSelector:      map[string]string{testNodeRoleKey: testNodeRoleBMC},
 		Schedule:          "*/30 * * * *",
@@ -152,9 +152,9 @@ func TestMagellanReconciler_ReadyOnceCreated(t *testing.T) {
 		ConcurrencyPolicy: batchv1.ForbidConcurrent,
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &MagellanReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestMagellanReconciler_ReadyOnceCreated(t *testing.T) {
 		t.Errorf("expected no requeue, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionMagellanReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionMagellanReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Fatalf("expected MagellanReady=True, got %+v", cond)
 	}
@@ -170,26 +170,26 @@ func TestMagellanReconciler_ReadyOnceCreated(t *testing.T) {
 
 func TestMagellanReconciler_UsesProbeNodeSelector(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.Magellan.Enabled = true
-	cluster.Spec.Services.Magellan.Schedule = "*/30 * * * *"
-	cluster.Spec.Services.Magellan.ConcurrencyPolicy = batchv1.ForbidConcurrent
-	cluster.Spec.NetworkProbe.Enabled = true
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.Magellan.Enabled = true
+	cp.Spec.Services.Magellan.Schedule = "*/30 * * * *"
+	cp.Spec.Services.Magellan.ConcurrencyPolicy = batchv1.ForbidConcurrent
+	cp.Spec.NetworkProbe.Enabled = true
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:   conditions.ConditionNetworkProbeReady,
 		Status: metav1.ConditionTrue,
 		Reason: conditions.ReasonReady,
 	})
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &MagellanReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	cj := &batchv1.CronJob{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceMagellan,
 	}, cj); err != nil {
 		t.Fatalf("getting magellan CronJob: %v", err)

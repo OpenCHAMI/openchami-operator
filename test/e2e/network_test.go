@@ -27,7 +27,7 @@ import (
 // lifecycle_test.go and observability_test.go.
 
 const (
-	// networkClusterTimeout is the upper bound for an OpenCHAMICluster to
+	// networkClusterTimeout is the upper bound for an OpenCHAMIControlPlane to
 	// progress through provisioning to a stable state in these tests.
 	networkClusterTimeout = 5 * time.Minute
 
@@ -284,7 +284,7 @@ func networkNodeLabel(clusterName, probeType string) string {
 // provisions per-cluster namespaces named openchami-{clusterName}.
 func networkApplyCluster(clusterName, yaml string) {
 	GinkgoHelper()
-	By("applying OpenCHAMICluster " + clusterName)
+	By("applying OpenCHAMIControlPlane " + clusterName)
 	path := filepath.Join(GinkgoT().TempDir(), "network-"+clusterName+".yaml")
 	Expect(os.WriteFile(path, []byte(yaml), 0o644)).To(Succeed(),
 		"failed to write fixture for cluster %s", clusterName)
@@ -297,21 +297,21 @@ func networkApplyCluster(clusterName, yaml string) {
 // resources so cleanup is idempotent across test ordering.
 func networkDeleteCluster(clusterName string) {
 	GinkgoHelper()
-	By("deleting OpenCHAMICluster " + clusterName)
-	cmd := exec.Command("kubectl", "delete", "openchamicluster", clusterName,
+	By("deleting OpenCHAMIControlPlane " + clusterName)
+	cmd := exec.Command("kubectl", "delete", "openchamicontrolplane", clusterName,
 		"--ignore-not-found=true", "--wait=false")
 	_, _ = utils.Run(cmd)
 }
 
 // networkPollCondition extracts the (status, reason) of a status.condition
-// of the given type from an OpenCHAMICluster.
+// of the given type from an OpenCHAMIControlPlane.
 func networkPollCondition(g Gomega, clusterName, conditionType string) (string, string) {
-	statusCmd := exec.Command("kubectl", "get", "openchamicluster", clusterName,
+	statusCmd := exec.Command("kubectl", "get", "openchamicontrolplane", clusterName,
 		"-o", fmt.Sprintf("jsonpath={.status.conditions[?(@.type==\"%s\")].status}", conditionType))
 	statusOut, err := utils.Run(statusCmd)
 	g.Expect(err).NotTo(HaveOccurred(), "kubectl get cluster status failed")
 
-	reasonCmd := exec.Command("kubectl", "get", "openchamicluster", clusterName,
+	reasonCmd := exec.Command("kubectl", "get", "openchamicontrolplane", clusterName,
 		"-o", fmt.Sprintf("jsonpath={.status.conditions[?(@.type==\"%s\")].reason}", conditionType))
 	reasonOut, err := utils.Run(reasonCmd)
 	g.Expect(err).NotTo(HaveOccurred(), "kubectl get cluster reason failed")
@@ -378,14 +378,14 @@ func networkPickKindNode() string {
 	return name
 }
 
-// networkProbeClusterYAML renders an OpenCHAMICluster manifest with network
+// networkProbeClusterYAML renders an OpenCHAMIControlPlane manifest with network
 // probing enabled and only the always-on services (SMD, tokensmith, boot,
 // metadata) configured. CoreDHCP and Magellan are disabled by default; tests
 // that need them call networkEnableCoreDHCP / networkEnableMagellan to splice
 // in the relevant blocks.
 func networkProbeClusterYAML(clusterName, provisionSubnet, bmcSubnet string) string {
 	return fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
-kind: OpenCHAMICluster
+kind: OpenCHAMIControlPlane
 metadata:
   name: %[1]s
   namespace: default

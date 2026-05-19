@@ -78,7 +78,7 @@ func describeSubs() []describeNamedSub {
 
 // DescribeCmd returns the `ochami-admin describe` command.
 //
-// describe loads an OpenCHAMICluster CR YAML from disk (or stdin) and prints
+// describe loads an OpenCHAMIControlPlane CR YAML from disk (or stdin) and prints
 // a human-readable rendering of every Kubernetes object the operator would
 // apply, grouped by sub-reconciler. No Kubernetes connection is required.
 func DescribeCmd() *cobra.Command {
@@ -86,7 +86,7 @@ func DescribeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "describe",
 		Short: "Dry-run view of what the operator would apply for a given cluster manifest",
-		Long: "Dry-run view: reads an OpenCHAMICluster manifest and prints the " +
+		Long: "Dry-run view: reads an OpenCHAMIControlPlane manifest and prints the " +
 			"Kubernetes objects each sub-reconciler would apply, in apply order, " +
 			"grouped by reconciler. Does not connect to a Kubernetes cluster.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -99,7 +99,7 @@ func DescribeCmd() *cobra.Command {
 
 func (o *describeOpts) bindFlags(f *pflag.FlagSet) {
 	f.StringVarP(&o.file, "file", "f", "",
-		"Path to OpenCHAMICluster manifest YAML (use '-' to read from stdin)")
+		"Path to OpenCHAMIControlPlane manifest YAML (use '-' to read from stdin)")
 	f.BoolVar(&o.showDetails, "show-details", false,
 		"Render extra per-object details (env var names, ports, secret references)")
 	_ = cobra.MarkFlagRequired(f, "file")
@@ -117,15 +117,15 @@ func (o *describeOpts) run(in io.Reader, out io.Writer) error {
 		return err
 	}
 
-	cluster := &openchamiv1alpha1.OpenCHAMICluster{}
-	if err := yaml.Unmarshal(data, cluster); err != nil {
+	cp := &openchamiv1alpha1.OpenCHAMIControlPlane{}
+	if err := yaml.Unmarshal(data, cp); err != nil {
 		return fmt.Errorf("parsing manifest: %w", err)
 	}
-	if cluster.Spec.ClusterName == "" {
+	if cp.Spec.ClusterName == "" {
 		return fmt.Errorf("manifest is missing spec.clusterName")
 	}
 
-	return describeRender(out, cluster, o.showDetails)
+	return describeRender(out, cp, o.showDetails)
 }
 
 // describeReadInput returns the raw bytes of the manifest. When file is "-"
@@ -145,22 +145,29 @@ func describeReadInput(in io.Reader, file string) ([]byte, error) {
 	return data, nil
 }
 
-// describeRender writes the formatted dry-run report for cluster.
-func describeRender(w io.Writer, cluster *openchamiv1alpha1.OpenCHAMICluster, details bool) error {
-	ns := reconcilers.ClusterNamespace(cluster)
-	if _, err := fmt.Fprintf(w, "=== Cluster: %s ===\n", cluster.Spec.ClusterName); err != nil {
+// describeRender writes the formatted dry-run report for cp.
+func describeRender(w io.Writer, cp *openchamiv1alpha1.OpenCHAMIControlPlane, details bool) error {
+	ns := reconcilers.ControlPlaneNamespace(cp)
+	if _, err := fmt.Fprintf(w, "=== Control Plane: %s ===\n", cp.Spec.ClusterName); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Domain:    %s\n", cluster.Spec.Domain); err != nil {
+	if _, err := fmt.Fprintf(w, "Domain:    %s\n", cp.Spec.Domain); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "Namespace: %s\n\n", ns); err != nil {
 		return err
 	}
+	// Spec.Notes is free-form markdown. Render verbatim so admins reading
+	// `ochami-admin describe` see site context the author wrote down.
+	if notes := strings.TrimSpace(cp.Spec.Notes); notes != "" {
+		if _, err := fmt.Fprintf(w, "== Notes ==\n%s\n\n", notes); err != nil {
+			return err
+		}
+	}
 
 	total := 0
 	for _, named := range describeSubs() {
-		objs, err := named.Sub.Describe(cluster)
+		objs, err := named.Sub.Describe(cp)
 		if err != nil {
 			return fmt.Errorf("%s: describe: %w", named.Name, err)
 		}

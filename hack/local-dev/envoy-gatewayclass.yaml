@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 OpenCHAMI a Series of LF Projects, LLC
+#
+# SPDX-License-Identifier: MIT
+#
+# Dev-mode Envoy Gateway configuration.
+#
+# Two resources:
+#   1. EnvoyProxy "envoy-dev" — overrides the default Service type from
+#      LoadBalancer (no provider in kind) to ClusterIP. Without this, the
+#      Gateway stays Programmed=False with reason=AddressNotAssigned and
+#      GatewayReady never reaches True.
+#   2. GatewayClass "envoy" — points the operator's fixtures at the Envoy
+#      Gateway controller and parameterizes it via the EnvoyProxy above.
+#
+# Production deployments install their own GatewayClass(es) backed by a
+# real LoadBalancer provider (cloud-provider-kind, MetalLB, or a cloud
+# loadbalancer); they do not import this file.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-dev
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: envoy-dev
+    namespace: envoy-gateway-system

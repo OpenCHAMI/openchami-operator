@@ -24,8 +24,6 @@ import (
 
 const (
 	magellanRequeueAfter = 30 * time.Second
-
-	defaultMagellanImage = "ghcr.io/openchami/magellan:latest"
 )
 
 // MagellanReconciler ensures the Magellan BMC-discovery CronJob exists.
@@ -38,28 +36,28 @@ type MagellanReconciler struct {
 }
 
 // Reconcile applies the Magellan CronJob and reports MagellanReady.
-func (r *MagellanReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "magellan")
+func (r *MagellanReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "magellan")
 
-	if !cluster.Spec.Services.Magellan.Enabled {
+	if !cp.Spec.Services.Magellan.Enabled {
 		log.Info("magellan disabled, skipping")
 		return ctrl.Result{}, nil
 	}
 
-	if cluster.Spec.NetworkProbe.Enabled &&
-		!apimeta.IsStatusConditionTrue(cluster.Status.Conditions, conditions.ConditionNetworkProbeReady) {
+	if cp.Spec.NetworkProbe.Enabled &&
+		!apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionNetworkProbeReady) {
 		log.Info("waiting for network probe before deploying magellan")
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionMagellanReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonWaitingForProbe,
 			Message:            "waiting for NetworkProbeReady before scheduling magellan",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: magellanRequeueAfter}, nil
 	}
 
-	cj := r.buildCronJob(cluster)
+	cj := r.buildCronJob(cp)
 	cjLog := logging.EnrichWithResource(log, kindCronJob, cj.Name)
 	cjLog.Info("applying magellan CronJob")
 	if err := r.Client.Patch(ctx, cj, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -67,68 +65,49 @@ func (r *MagellanReconciler) Reconcile(ctx context.Context, cluster *openchamiv1
 		return ctrl.Result{}, fmt.Errorf("applying magellan CronJob: %w", err)
 	}
 
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionMagellanReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            "magellan CronJob applied",
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when Magellan is disabled.
-func (r *MagellanReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	if !cluster.Spec.Services.Magellan.Enabled {
+func (r *MagellanReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	if !cp.Spec.Services.Magellan.Enabled {
 		return []client.Object{}, nil
 	}
-	return []client.Object{r.buildCronJob(cluster)}, nil
+	return []client.Object{r.buildCronJob(cp)}, nil
 }
 
 // magellanPodLabels returns the canonical label set for magellan pods.
-func magellanPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
+func magellanPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceMagellan,
-		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 		labelManagedBy: managedByValue,
 	}
 }
 
-// magellanImage resolves the container image, preferring per-cluster spec
-// override, falling back to defaultMagellanImage.
-func magellanImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	img := cluster.Spec.Services.Magellan.Image
-	if img == nil {
-		return defaultMagellanImage
-	}
-	repo, tag := img.Repository, img.Tag
-	switch {
-	case repo == "" && tag == "":
-		return defaultMagellanImage
-	case repo == "":
-		return "ghcr.io/openchami/magellan:" + tag
-	case tag == "":
-		return repo + ":latest"
-	default:
-		return repo + ":" + tag
-	}
-}
-
-func (r *MagellanReconciler) buildCronJob(cluster *openchamiv1alpha1.OpenCHAMICluster) *batchv1.CronJob {
-	labels := magellanPodLabels(cluster)
+func (r *MagellanReconciler) buildCronJob(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *batchv1.CronJob {
+	labels := magellanPodLabels(cp)
 	tmpVol, tmpMount := TmpVolume()
-	mag := cluster.Spec.Services.Magellan
+	mag := cp.Spec.Services.Magellan
 
 	env := []corev1.EnvVar{
 		{Name: "MAGELLAN_BMC_SUBNET", Value: mag.BMCSubnet},
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
 	}
 
+	image, pullPolicy := ResolveImage(cp, ServiceMagellan)
 	container := corev1.Container{
 		Name:            ServiceMagellan,
-		Image:           magellanImage(cluster),
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		SecurityContext: CommonSecurityContext(),
 		Env:             env,
 		VolumeMounts:    []corev1.VolumeMount{tmpMount},
@@ -141,7 +120,7 @@ func (r *MagellanReconciler) buildCronJob(cluster *openchamiv1alpha1.OpenCHAMICl
 		TypeMeta: metav1.TypeMeta{APIVersion: batchAPIVersion, Kind: kindCronJob},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceMagellan,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Labels:    labels,
 		},
 		Spec: batchv1.CronJobSpec{
@@ -154,8 +133,9 @@ func (r *MagellanReconciler) buildCronJob(cluster *openchamiv1alpha1.OpenCHAMICl
 						ObjectMeta: metav1.ObjectMeta{Labels: labels},
 						Spec: corev1.PodSpec{
 							ServiceAccountName: ServiceMagellan,
+							EnableServiceLinks: DisableServiceLinks(),
 							RestartPolicy:      corev1.RestartPolicyOnFailure,
-							NodeSelector:       EffectiveNodeSelector(cluster, probeTypeBMC),
+							NodeSelector:       EffectiveNodeSelector(cp, probeTypeBMC),
 							SecurityContext:    CommonPodSecurityContext(),
 							Containers:         []corev1.Container{container},
 							Volumes:            []corev1.Volume{tmpVol},

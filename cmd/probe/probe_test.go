@@ -25,9 +25,9 @@ func quietLogger() *log.Logger {
 
 // newRunner returns a probeRunner pre-wired with no-op hooks so each test
 // can replace whichever hook it needs without re-stating the boilerplate.
-func newRunner(cluster string) *probeRunner {
+func newRunner(cp string) *probeRunner {
 	return &probeRunner{
-		clusterName: cluster,
+		clusterName: cp,
 		nodeName:    "node1",
 		interval:    time.Second,
 		logger:      quietLogger(),

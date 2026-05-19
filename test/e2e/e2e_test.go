@@ -330,12 +330,12 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
 
-		It("should have CA injection for OpenCHAMICluster conversion webhook", func() {
-			By("checking CA injection for OpenCHAMICluster conversion webhook")
+		It("should have CA injection for OpenCHAMIControlPlane conversion webhook", func() {
+			By("checking CA injection for OpenCHAMIControlPlane conversion webhook")
 			verifyCAInjection := func(g Gomega) {
 				cmd := exec.Command("kubectl", "get",
 					"customresourcedefinitions.apiextensions.k8s.io",
-					"openchamiclusters.openchami.openchami.org",
+					"openchamicontrolplanes.openchami.openchami.org",
 					"-o", "go-template={{ .spec.conversion.webhook.clientConfig.caBundle }}")
 				vwhOutput, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())

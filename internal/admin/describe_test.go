@@ -41,18 +41,18 @@ const (
 // describeBuildCluster returns a fully-populated CR object suitable for the
 // happy-path tests. All four core services are enabled; CoreDHCP/Magellan are
 // disabled to keep node-selector requirements out of the fixture.
-func describeBuildCluster(t *testing.T) *openchamiv1alpha1.OpenCHAMICluster {
+func describeBuildCluster(t *testing.T) *openchamiv1alpha1.OpenCHAMIControlPlane {
 	t.Helper()
-	return &openchamiv1alpha1.OpenCHAMICluster{
+	return &openchamiv1alpha1.OpenCHAMIControlPlane{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "openchami.openchami.org/v1alpha1",
-			Kind:       "OpenCHAMICluster",
+			Kind:       "OpenCHAMIControlPlane",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      describeTestClusterName,
 			Namespace: "default",
 		},
-		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
 			ClusterName: describeTestClusterName,
 			Domain:      describeTestDomain,
 			Platform: openchamiv1alpha1.PlatformSpec{
@@ -87,9 +87,9 @@ func describeBuildCluster(t *testing.T) *openchamiv1alpha1.OpenCHAMICluster {
 
 // describeWriteFixture marshals the cluster to YAML, writes it to a temp file,
 // and returns the path. Always uses t.TempDir so cleanup is automatic.
-func describeWriteFixture(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMICluster) string {
+func describeWriteFixture(t *testing.T, cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 	t.Helper()
-	data, err := yaml.Marshal(cluster)
+	data, err := yaml.Marshal(cp)
 	if err != nil {
 		t.Fatalf("marshalling fixture: %v", err)
 	}
@@ -120,15 +120,15 @@ func describeRun(t *testing.T, in string, args ...string) (string, error) {
 }
 
 func TestDescribe_HappyPath(t *testing.T) {
-	cluster := describeBuildCluster(t)
-	path := describeWriteFixture(t, cluster)
+	cp := describeBuildCluster(t)
+	path := describeWriteFixture(t, cp)
 
 	out, err := describeRun(t, "", describeFlagFile, path)
 	if err != nil {
 		t.Fatalf("DescribeCmd returned error: %v\n--- stdout ---\n%s", err, out)
 	}
 
-	mustContain(t, out, "=== Cluster: "+describeTestClusterName+" ===")
+	mustContain(t, out, "=== Control Plane: "+describeTestClusterName+" ===")
 	mustContain(t, out, "Domain:    "+describeTestDomain)
 	mustContain(t, out, "Namespace: "+describeTestNamespace)
 
@@ -153,8 +153,8 @@ func TestDescribe_HappyPath(t *testing.T) {
 }
 
 func TestDescribe_StdinInput(t *testing.T) {
-	cluster := describeBuildCluster(t)
-	data, err := yaml.Marshal(cluster)
+	cp := describeBuildCluster(t)
+	data, err := yaml.Marshal(cp)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestDescribe_StdinInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DescribeCmd from stdin returned error: %v\n--- stdout ---\n%s", err, out)
 	}
-	mustContain(t, out, "=== Cluster: "+describeTestClusterName+" ===")
+	mustContain(t, out, "=== Control Plane: "+describeTestClusterName+" ===")
 	mustContain(t, out, "Total:")
 }
 
@@ -192,8 +192,8 @@ func TestDescribe_InvalidYAML(t *testing.T) {
 }
 
 func TestDescribe_ShowDetails(t *testing.T) {
-	cluster := describeBuildCluster(t)
-	path := describeWriteFixture(t, cluster)
+	cp := describeBuildCluster(t)
+	path := describeWriteFixture(t, cp)
 
 	out, err := describeRun(t, "",
 		describeFlagFile, path,
@@ -207,10 +207,40 @@ func TestDescribe_ShowDetails(t *testing.T) {
 	// container — see internal/reconcilers/smd.go.
 	mustContain(t, out, "SMD_DBHOST")
 
-	// Secret references render as "secretName/key". The SMD password env var
-	// is sourced from a secret keyed by VaultKeySMDPassword ("SMD_DB_PASSWORD").
-	if !strings.Contains(out, "SMD_DB_PASSWORD") {
-		t.Errorf("expected --show-details output to contain at least one secretRef key\n--- stdout ---\n%s", out)
+	// Secret references render as "secretName/key". Under the per-service
+	// managed.roles model (2026-05-08) the SMD password env var is sourced
+	// from the smd-db Secret using the basic-auth-shaped "password" key, so
+	// the rendered tail must end "/password" against the smd-db Secret.
+	if !strings.Contains(out, "smd-db/password") {
+		t.Errorf("expected --show-details output to contain a secretRef to smd-db/password\n--- stdout ---\n%s", out)
+	}
+}
+
+func TestDescribe_RendersNotes(t *testing.T) {
+	cp := describeBuildCluster(t)
+	cp.Spec.Notes = "## Venado site\n\n- Stand-up: 2026-04-01\n- Contact: ops@example.com\n"
+	path := describeWriteFixture(t, cp)
+
+	out, err := describeRun(t, "", describeFlagFile, path)
+	if err != nil {
+		t.Fatalf("DescribeCmd returned error: %v\n--- stdout ---\n%s", err, out)
+	}
+	mustContain(t, out, "== Notes ==")
+	mustContain(t, out, "## Venado site")
+	mustContain(t, out, "Contact: ops@example.com")
+}
+
+func TestDescribe_OmitsNotesHeaderWhenEmpty(t *testing.T) {
+	cp := describeBuildCluster(t)
+	cp.Spec.Notes = ""
+	path := describeWriteFixture(t, cp)
+
+	out, err := describeRun(t, "", describeFlagFile, path)
+	if err != nil {
+		t.Fatalf("DescribeCmd returned error: %v\n--- stdout ---\n%s", err, out)
+	}
+	if strings.Contains(out, "== Notes ==") {
+		t.Errorf("expected no Notes section when Spec.Notes is empty, got:\n%s", out)
 	}
 }
 
@@ -219,8 +249,8 @@ func TestDescribe_DisabledServiceOmitted(t *testing.T) {
 	// slice when the service is disabled (see internal/reconcilers/coredhcp.go).
 	// The base fixture leaves CoreDHCP disabled, so its section should render
 	// as the empty marker — and crucially must contain no DaemonSet line.
-	cluster := describeBuildCluster(t)
-	path := describeWriteFixture(t, cluster)
+	cp := describeBuildCluster(t)
+	path := describeWriteFixture(t, cp)
 
 	out, err := describeRun(t, "", describeFlagFile, path)
 	if err != nil {

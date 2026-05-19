@@ -6,7 +6,7 @@ Read in order if you've never touched the codebase:
 1. [Quickstart](quickstart.md) — local dev cluster, applying a CR, watching it reconcile.
 2. [Architecture](architecture.md) — controller, sub-reconciler pattern, reconcile order.
 3. [Sub-reconcilers](reconcilers.md) — one section per sub-reconciler: what it owns, conditions it sets, dependencies.
-4. [CRD reference](crd-reference.md) — every `OpenCHAMICluster` spec and status field.
+4. [CRD reference](crd-reference.md) — every `OpenCHAMIControlPlane` spec and status field.
 5. [Invariants](invariants.md) — the 10 absolute rules. Violating any is a bug, regardless of what else works.
 6. [External dependencies](external-dependencies.md) — what the operator expects to find in the cluster.
 7. [Webhooks](webhooks.md) — defaulting, validation, conversion.

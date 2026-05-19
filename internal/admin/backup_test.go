@@ -49,16 +49,16 @@ func backupTestScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-// backupTestCluster returns an OpenCHAMICluster CR usable as input to the
+// backupTestCluster returns an OpenCHAMIControlPlane CR usable as input to the
 // backup runner. ClusterName and metadata.name are aligned so the canonical
 // per-cluster namespace ("openchami-{clusterName}") is well-defined.
-func backupTestCluster(name, ns string) *openchamiv1alpha1.OpenCHAMICluster {
-	return &openchamiv1alpha1.OpenCHAMICluster{
+func backupTestCluster(name, ns string) *openchamiv1alpha1.OpenCHAMIControlPlane {
+	return &openchamiv1alpha1.OpenCHAMIControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 		},
-		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
 			ClusterName: name,
 			Domain:      name + ".test.local",
 		},
@@ -117,8 +117,8 @@ func TestBackup_DryRunPrintsPlan(t *testing.T) {
 
 func TestBackup_HappyPath(t *testing.T) {
 	scheme := backupTestScheme(t)
-	cluster := backupTestCluster(backupTestClusterName, backupTestNamespace)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := backupTestCluster(backupTestClusterName, backupTestNamespace)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	var stdout, stderr bytes.Buffer
 	r := backupTestRunner(t, &stdout, &stderr)
@@ -127,14 +127,14 @@ func TestBackup_HappyPath(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	// (a) cluster.yaml was written and parses back to an OpenCHAMICluster
+	// (a) cluster.yaml was written and parses back to an OpenCHAMIControlPlane
 	//     with the correct ClusterName.
 	yamlPath := filepath.Join(r.outputDir, backupClusterYAMLFile)
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
 		t.Fatalf("reading written cluster YAML: %v", err)
 	}
-	var roundTrip openchamiv1alpha1.OpenCHAMICluster
+	var roundTrip openchamiv1alpha1.OpenCHAMIControlPlane
 	if err := yaml.Unmarshal(data, &roundTrip); err != nil {
 		t.Fatalf("parsing written cluster YAML: %v\n--- yaml ---\n%s", err, string(data))
 	}
@@ -180,7 +180,7 @@ func TestBackup_HappyPath(t *testing.T) {
 
 func TestBackup_ClusterNotFound(t *testing.T) {
 	scheme := backupTestScheme(t)
-	// No OpenCHAMICluster pre-created.
+	// No OpenCHAMIControlPlane pre-created.
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	var stdout, stderr bytes.Buffer
@@ -200,8 +200,8 @@ func TestBackup_ClusterNotFound(t *testing.T) {
 
 func TestBackup_ManualStepsEmittedToStderr(t *testing.T) {
 	scheme := backupTestScheme(t)
-	cluster := backupTestCluster(backupTestClusterName, backupTestNamespace)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := backupTestCluster(backupTestClusterName, backupTestNamespace)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	var stdout, stderr bytes.Buffer
 	r := backupTestRunner(t, &stdout, &stderr)

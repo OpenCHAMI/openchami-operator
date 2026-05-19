@@ -34,8 +34,8 @@ case "$PHASE" in
     file_exists "hack/local-dev/docker-compose.yaml"
     file_exists "hack/local-dev/kind-config.yaml"
     file_exists "hack/local-dev/seed-vault.sh"
-    file_exists "api/v1alpha1/openchamicluster_types.go"
-    file_exists "internal/controller/openchamicluster_controller.go"
+    file_exists "api/v1alpha1/openchamicontrolplane_types.go"
+    file_exists "internal/controller/openchamicontrolplane_controller.go"
     file_exists "cmd/operator/main.go"
     file_exists "cmd/ochami-admin/main.go"
     go_compiles
@@ -46,7 +46,7 @@ case "$PHASE" in
     ;;
 1)
     echo "Checking Phase 1: CRD Types"
-    file_exists "api/v1alpha1/openchamicluster_types.go"
+    file_exists "api/v1alpha1/openchamicontrolplane_types.go"
     dir_exists "config/crd/bases"
     cmd_succeeds "CRD generates cleanly" make generate manifests
     cmd_succeeds "CRD YAML is valid" bash -c 'for f in config/crd/bases/*.yaml; do grep -q "kind: CustomResourceDefinition" "$f" || exit 1; done'
@@ -60,7 +60,7 @@ case "$PHASE" in
     file_exists "internal/reconcilers/helpers.go"
     file_exists "internal/reconcilers/namespace.go"
     file_exists "internal/reconcilers/rbac.go"
-    file_exists "internal/controller/openchamicluster_controller.go"
+    file_exists "internal/controller/openchamicontrolplane_controller.go"
     go_compiles
     tests_pass
     lint_passes
@@ -131,7 +131,7 @@ case "$PHASE" in
     ;;
 10)
     echo "Checking Phase 10: Webhooks"
-    file_exists "api/v1alpha1/openchamicluster_webhook.go"
+    file_exists "api/v1alpha1/openchamicontrolplane_webhook.go"
     go_compiles
     tests_pass
     ;;

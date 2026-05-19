@@ -35,7 +35,7 @@ helpers.RecordConditionEvent(
 
 The runbook URL is appended to the message automatically. Output in `kubectl describe`:
 ```
-Warning  VaultUnreachable  openchamicluster/foo  vault dial: connection refused (runbook: https://openchami.org/docs/ops/vault-unreachable)
+Warning  VaultUnreachable  openchamicontrolplane/foo  vault dial: connection refused (runbook: https://openchami.org/docs/ops/vault-unreachable)
 ```
 
 **Never** call `r.Recorder.Event(...)` directly. The validate-invariants check rejects it.

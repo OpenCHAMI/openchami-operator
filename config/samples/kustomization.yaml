@@ -1,4 +1,4 @@
 ## Append samples of your project ##
 resources:
-- openchami_v1alpha1_openchamicluster.yaml
+- openchami_v1alpha1_openchamicontrolplane.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

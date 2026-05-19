@@ -35,23 +35,23 @@ func fixedNow(t time.Time) func() time.Time {
 
 // newTopologyClient mirrors newNetworkPolicyClient: SSA against the fake
 // client requires the deduced converter for ConfigMap apply patches.
-func newTopologyClient(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMICluster) client.Client {
+func newTopologyClient(t *testing.T, cp *openchamiv1alpha1.OpenCHAMIControlPlane) client.Client {
 	t.Helper()
 	scheme := newScheme(t)
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithTypeConverters(managedfields.NewDeducedTypeConverter()).
 		Build()
 }
 
 // fetchTopology reads the topology ConfigMap and parses topology.json.
-func fetchTopology(t *testing.T, c client.Client, cluster *openchamiv1alpha1.OpenCHAMICluster) (*corev1.ConfigMap, TopologySpec) {
+func fetchTopology(t *testing.T, c client.Client, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (*corev1.ConfigMap, TopologySpec) {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
 	key := types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
-		Name:      topologyConfigMapName(cluster),
+		Namespace: ControlPlaneNamespace(cp),
+		Name:      topologyConfigMapName(cp),
 	}
 	if err := c.Get(context.Background(), key, cm); err != nil {
 		t.Fatalf("getting topology configmap: %v", err)
@@ -68,19 +68,19 @@ func fetchTopology(t *testing.T, c client.Client, cluster *openchamiv1alpha1.Ope
 }
 
 func TestTopologyReconciler_AppliesConfigMap(t *testing.T) {
-	cluster := newCluster(testClusterAlpha)
-	c := newTopologyClient(t, cluster)
+	cp := newControlPlane(testClusterAlpha)
+	c := newTopologyClient(t, cp)
 	r := &TopologyReconciler{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(10),
 		nowFunc:  fixedNow(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
 	}
 
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	cm, spec := fetchTopology(t, c, cluster)
+	cm, spec := fetchTopology(t, c, cp)
 
 	if cm.Labels[topologyLabelKey] != topologyLabelValue {
 		t.Errorf("missing topology label: got %v", cm.Labels)
@@ -96,7 +96,7 @@ func TestTopologyReconciler_AppliesConfigMap(t *testing.T) {
 		t.Errorf("domain: want alpha.test.local, got %q", spec.Domain)
 	}
 
-	ns := ClusterNamespace(cluster)
+	ns := ControlPlaneNamespace(cp)
 	wantSMD := fmt.Sprintf("http://smd.%s.svc.cluster.local:27779", ns)
 	if spec.Services.SMD.Endpoint != wantSMD {
 		t.Errorf("smd endpoint: want %q, got %q", wantSMD, spec.Services.SMD.Endpoint)
@@ -147,8 +147,8 @@ func TestTopologyReconciler_AppliesConfigMap(t *testing.T) {
 	if !strings.HasPrefix(spec.Version, topologyHashPrefix) {
 		t.Errorf("version not sha256-prefixed: %q", spec.Version)
 	}
-	if cluster.Status.TopologyVersion != spec.Version {
-		t.Errorf("status.topologyVersion: want %q, got %q", spec.Version, cluster.Status.TopologyVersion)
+	if cp.Status.TopologyVersion != spec.Version {
+		t.Errorf("status.topologyVersion: want %q, got %q", spec.Version, cp.Status.TopologyVersion)
 	}
 	if spec.GeneratedAt != "2026-05-01T12:00:00Z" {
 		t.Errorf("generatedAt: got %q", spec.GeneratedAt)
@@ -156,8 +156,8 @@ func TestTopologyReconciler_AppliesConfigMap(t *testing.T) {
 }
 
 func TestTopologyReconciler_HashIsDeterministic(t *testing.T) {
-	cluster := newCluster(testClusterAlpha)
-	c := newTopologyClient(t, cluster)
+	cp := newControlPlane(testClusterAlpha)
+	c := newTopologyClient(t, cp)
 
 	// Two reconciles with two different wall-clock times; the version hash
 	// excludes generatedAt and version itself, so the digest must match.
@@ -166,51 +166,51 @@ func TestTopologyReconciler_HashIsDeterministic(t *testing.T) {
 		Recorder: record.NewFakeRecorder(10),
 		nowFunc:  fixedNow(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
 	}
-	if _, err := r1.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r1.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile 1: %v", err)
 	}
-	first := cluster.Status.TopologyVersion
+	first := cp.Status.TopologyVersion
 
 	r2 := &TopologyReconciler{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(10),
 		nowFunc:  fixedNow(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)),
 	}
-	if _, err := r2.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r2.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile 2: %v", err)
 	}
-	second := cluster.Status.TopologyVersion
+	second := cp.Status.TopologyVersion
 
 	if first != second {
 		t.Errorf("topology hash changed despite identical inputs: %q vs %q", first, second)
 	}
 
 	// Confirm the rendered generatedAt actually differed across reconciles.
-	_, spec := fetchTopology(t, c, cluster)
+	_, spec := fetchTopology(t, c, cp)
 	if spec.GeneratedAt != "2027-01-01T00:00:00Z" {
 		t.Errorf("expected second-run generatedAt, got %q", spec.GeneratedAt)
 	}
 }
 
 func TestTopologyReconciler_HashChangesOnSpecChange(t *testing.T) {
-	cluster := newCluster(testClusterAlpha)
-	c := newTopologyClient(t, cluster)
+	cp := newControlPlane(testClusterAlpha)
+	c := newTopologyClient(t, cp)
 	r := &TopologyReconciler{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(10),
 		nowFunc:  fixedNow(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
 	}
 
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile 1: %v", err)
 	}
-	first := cluster.Status.TopologyVersion
+	first := cp.Status.TopologyVersion
 
-	cluster.Spec.Domain = "alpha-changed.test.local"
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	cp.Spec.Domain = "alpha-changed.test.local"
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile 2: %v", err)
 	}
-	second := cluster.Status.TopologyVersion
+	second := cp.Status.TopologyVersion
 
 	if first == second {
 		t.Errorf("topology hash unchanged after Domain mutation: %q", first)
@@ -218,21 +218,21 @@ func TestTopologyReconciler_HashChangesOnSpecChange(t *testing.T) {
 }
 
 func TestTopologyReconciler_ServiceReadyReflectsStatus(t *testing.T) {
-	cluster := newCluster(testClusterAlpha)
-	cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{
+	cp := newControlPlane(testClusterAlpha)
+	cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{
 		ServiceSMD: {Ready: true, Endpoint: "ignored"},
 	}
-	c := newTopologyClient(t, cluster)
+	c := newTopologyClient(t, cp)
 	r := &TopologyReconciler{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(10),
 		nowFunc:  fixedNow(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
 	}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	_, spec := fetchTopology(t, c, cluster)
+	_, spec := fetchTopology(t, c, cp)
 	if !spec.Services.SMD.Ready {
 		t.Errorf("smd: expected ready=true, got false")
 	}
@@ -244,18 +244,18 @@ func TestTopologyReconciler_ServiceReadyReflectsStatus(t *testing.T) {
 }
 
 func TestTopologyReconciler_ConditionSet(t *testing.T) {
-	cluster := newCluster(testClusterAlpha)
-	c := newTopologyClient(t, cluster)
+	cp := newControlPlane(testClusterAlpha)
+	c := newTopologyClient(t, cp)
 	r := &TopologyReconciler{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(10),
 		nowFunc:  fixedNow(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)),
 	}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionTopologyPublished)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionTopologyPublished)
 	if cond == nil {
 		t.Fatalf("missing TopologyPublished condition")
 	}
@@ -265,8 +265,8 @@ func TestTopologyReconciler_ConditionSet(t *testing.T) {
 	if cond.Reason != conditions.ReasonReady {
 		t.Errorf("reason: want %q, got %q", conditions.ReasonReady, cond.Reason)
 	}
-	if cond.ObservedGeneration != cluster.Generation {
-		t.Errorf("observedGeneration: want %d, got %d", cluster.Generation, cond.ObservedGeneration)
+	if cond.ObservedGeneration != cp.Generation {
+		t.Errorf("observedGeneration: want %d, got %d", cp.Generation, cond.ObservedGeneration)
 	}
 }
 
@@ -276,23 +276,23 @@ func TestTopologyReconciler_TwoClustersIsolated(t *testing.T) {
 	now := fixedNow(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
 
 	results := map[string]TopologySpec{}
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
 		c := fake.NewClientBuilder().
 			WithScheme(scheme).
-			WithObjects(cluster).
+			WithObjects(cp).
 			WithTypeConverters(managedfields.NewDeducedTypeConverter()).
 			Build()
 		r := &TopologyReconciler{Client: c, Recorder: rec, nowFunc: now}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 
 		// Confirm the ConfigMap exists in the cluster's own namespace.
 		cm := &corev1.ConfigMap{}
 		key := types.NamespacedName{
-			Namespace: ClusterNamespace(cluster),
-			Name:      topologyConfigMapName(cluster),
+			Namespace: ControlPlaneNamespace(cp),
+			Name:      topologyConfigMapName(cp),
 		}
 		if err := c.Get(context.Background(), key, cm); err != nil {
 			t.Fatalf("getting %s topology configmap: %v", name, err)
@@ -306,9 +306,9 @@ func TestTopologyReconciler_TwoClustersIsolated(t *testing.T) {
 
 		// Sanity-check namespace isolation: nothing leaked into the wrong
 		// namespace.
-		other := testClusterBlue
-		if name == testClusterBlue {
-			other = testClusterRed
+		other := testControlPlaneBlue
+		if name == testControlPlaneBlue {
+			other = testControlPlaneRed
 		}
 		stray := &corev1.ConfigMap{}
 		strayKey := types.NamespacedName{
@@ -320,18 +320,18 @@ func TestTopologyReconciler_TwoClustersIsolated(t *testing.T) {
 		}
 	}
 
-	red := results[testClusterRed]
-	blue := results[testClusterBlue]
+	red := results[testControlPlaneRed]
+	blue := results[testControlPlaneBlue]
 	if red.ClusterName == blue.ClusterName {
 		t.Errorf("two clusters share clusterName")
 	}
-	if red.ClusterName != testClusterRed || blue.ClusterName != testClusterBlue {
+	if red.ClusterName != testControlPlaneRed || blue.ClusterName != testControlPlaneBlue {
 		t.Errorf("cluster names crossed over: red=%q blue=%q", red.ClusterName, blue.ClusterName)
 	}
-	if !strings.Contains(red.Services.SMD.Endpoint, "openchami-"+testClusterRed) {
+	if !strings.Contains(red.Services.SMD.Endpoint, "openchami-"+testControlPlaneRed) {
 		t.Errorf("red SMD endpoint missing red namespace: %q", red.Services.SMD.Endpoint)
 	}
-	if strings.Contains(red.Services.SMD.Endpoint, testClusterBlue) {
+	if strings.Contains(red.Services.SMD.Endpoint, testControlPlaneBlue) {
 		t.Errorf("red SMD endpoint contains blue cluster name: %q", red.Services.SMD.Endpoint)
 	}
 }

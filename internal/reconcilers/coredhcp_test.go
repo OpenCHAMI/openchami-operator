@@ -23,19 +23,14 @@ import (
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
-const (
-	testLeaseStartB = "10.0.0.100"
-	testLeaseEndB   = "10.0.0.200"
-)
-
 func TestCoreDHCPReconciler_DisabledSkips(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP.Enabled = false
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP.Enabled = false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &CoreDHCPReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -45,7 +40,7 @@ func TestCoreDHCPReconciler_DisabledSkips(t *testing.T) {
 
 	ds := &appsv1.DaemonSet{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceCoreDHCP,
 	}, ds)
 	if !apierrors.IsNotFound(getErr) {
@@ -55,20 +50,20 @@ func TestCoreDHCPReconciler_DisabledSkips(t *testing.T) {
 
 func TestCoreDHCPReconciler_WaitsForProbe(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP.Enabled = true
-	cluster.Spec.NetworkProbe.Enabled = true
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP.Enabled = true
+	cp.Spec.NetworkProbe.Enabled = true
 	// Pre-set NetworkProbeReady=False on the cluster.
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:    conditions.ConditionNetworkProbeReady,
 		Status:  metav1.ConditionFalse,
 		Reason:  conditions.ReasonProvisioning,
 		Message: "probe still spinning up",
 	})
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &CoreDHCPReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -78,14 +73,14 @@ func TestCoreDHCPReconciler_WaitsForProbe(t *testing.T) {
 
 	ds := &appsv1.DaemonSet{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceCoreDHCP,
 	}, ds)
 	if !apierrors.IsNotFound(getErr) {
 		t.Errorf("expected coredhcp DaemonSet to be absent while waiting for probe, got err=%v", getErr)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionDHCPReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionDHCPReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonWaitingForProbe {
 		t.Fatalf("expected DHCPReady=False/WaitingForNetworkProbe, got %+v", cond)
 	}
@@ -93,29 +88,29 @@ func TestCoreDHCPReconciler_WaitsForProbe(t *testing.T) {
 
 func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled:      true,
 		NodeSelector: map[string]string{testNodeRoleKey: testNodeRoleDHCP},
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: testProvisionSubnet,
-			Start:  testLeaseStartB,
-			End:    testLeaseEndB,
+			Start:  testLeaseRangeStartLarge,
+			End:    testLeaseRangeEndLarge,
 		}},
 		UnknownLeaseDuration: "5m",
 		KnownLeaseDuration:   "1h",
 	}
-	cluster.Spec.NetworkProbe.Enabled = false
+	cp.Spec.NetworkProbe.Enabled = false
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &CoreDHCPReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	ds := &appsv1.DaemonSet{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceCoreDHCP,
 	}, ds); err != nil {
 		t.Fatalf("getting coredhcp DaemonSet: %v", err)
@@ -176,33 +171,33 @@ func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 
 func TestCoreDHCPReconciler_ReadyWhenAvailable(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled:      true,
 		NodeSelector: map[string]string{testNodeRoleKey: testNodeRoleDHCP},
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: testProvisionSubnet,
-			Start:  testLeaseStartB,
-			End:    testLeaseEndB,
+			Start:  testLeaseRangeStartLarge,
+			End:    testLeaseRangeEndLarge,
 		}},
 	}
-	cluster.Spec.NetworkProbe.Enabled = false
+	cp.Spec.NetworkProbe.Enabled = false
 
 	existingDS := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceCoreDHCP,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DaemonSetStatus{NumberReady: 1},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.DaemonSet{}).
 		WithObjects(existingDS).
 		Build()
 	r := &CoreDHCPReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -210,7 +205,7 @@ func TestCoreDHCPReconciler_ReadyWhenAvailable(t *testing.T) {
 		t.Errorf("expected no requeue when ready, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionDHCPReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionDHCPReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Fatalf("expected DHCPReady=True, got %+v", cond)
 	}
@@ -218,29 +213,29 @@ func TestCoreDHCPReconciler_ReadyWhenAvailable(t *testing.T) {
 
 func TestCoreDHCPReconciler_UsesProbeNodeSelector(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP.Enabled = true
-	cluster.Spec.Services.CoreDHCP.LeaseRanges = []openchamiv1alpha1.DHCPLeaseRange{{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP.Enabled = true
+	cp.Spec.Services.CoreDHCP.LeaseRanges = []openchamiv1alpha1.DHCPLeaseRange{{
 		Subnet: testProvisionSubnet,
-		Start:  testLeaseStartB,
-		End:    testLeaseEndB,
+		Start:  testLeaseRangeStartLarge,
+		End:    testLeaseRangeEndLarge,
 	}}
-	cluster.Spec.NetworkProbe.Enabled = true
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	cp.Spec.NetworkProbe.Enabled = true
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:   conditions.ConditionNetworkProbeReady,
 		Status: metav1.ConditionTrue,
 		Reason: conditions.ReasonReady,
 	})
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &CoreDHCPReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	ds := &appsv1.DaemonSet{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceCoreDHCP,
 	}, ds); err != nil {
 		t.Fatalf("getting coredhcp DaemonSet: %v", err)

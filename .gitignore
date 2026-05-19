@@ -35,5 +35,3 @@ install.sh
 
 # Kubeconfig might contain secrets
 *.kubeconfig
-
-dist/*

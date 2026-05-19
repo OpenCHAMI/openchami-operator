@@ -1,6 +1,6 @@
 # Phase 10 — Admission Webhooks
 
-**File:** `api/v1alpha1/openchamicluster_webhook.go`
+**File:** `api/v1alpha1/openchamicontrolplane_webhook.go`
 
 ## Defaulting (implement Default())
 ```go
@@ -26,13 +26,13 @@ spec.logging.flushIntervalSeconds      = 60
 1. `spec.platform.vault.address` starts with `https://`
 2. `authMethod=appRole` requires `appRoleSecretRef` non-nil
 3. `oidcProvider=external` requires `oidcIssuerURL` non-empty
-4. `spec.clusterName` is unique across all OpenCHAMICluster resources (list all, compare)
+4. `spec.clusterName` is unique across all OpenCHAMIControlPlane resources (list all, compare)
 
 **When `networkProbe.enabled=false`:**
 5. `coreDHCP.nodeSelector` must be non-empty (required for scheduling)
 6. `coreDHCP.nodeSelector` must contain at least one key whose value
    contains the clusterName (discriminating label requirement)
-7. No other OpenCHAMICluster has an identical `coreDHCP.nodeSelector` (list all, compare)
+7. No other OpenCHAMIControlPlane has an identical `coreDHCP.nodeSelector` (list all, compare)
 
 **When `networkProbe.enabled=true`:**
 8. If `coreDHCP.enabled=true`: `networkProbe.provisionNetwork` must be non-nil
@@ -44,7 +44,7 @@ Re-run create validations for mutable fields, plus:
 - `spec.clusterName` is immutable → `field.Forbidden`
 
 ## Conversion hub
-`api/v1alpha1/openchamicluster_conversion.go` should already have `Hub()`.
+`api/v1alpha1/openchamicontrolplane_conversion.go` should already have `Hub()`.
 Verify it's present and compiles.
 
 ```bash

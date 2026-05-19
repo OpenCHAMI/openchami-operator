@@ -16,7 +16,7 @@
 | Network probe | `ghcr.io/openchami/openchami-operator:latest` | hard-coded in internal/reconcilers/networkprobe.go |
 
 Per-cluster overrides: each service spec accepts an `image` block with
-`repository` and `tag`. Override at the `OpenCHAMICluster` resource level.
+`repository` and `tag`. Override at the `OpenCHAMIControlPlane` resource level.
 
 ## Pinning to a specific tag at release time
 

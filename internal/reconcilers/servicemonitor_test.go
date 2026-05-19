@@ -24,10 +24,10 @@ import (
 // the controller-runtime fake client requires the deduced type converter
 // for SSA against ServiceMonitor (status field on the live object is not
 // declared in the apply-config schema).
-func newServiceMonitorClient(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMICluster, extra ...client.Object) client.Client {
+func newServiceMonitorClient(t *testing.T, cp *openchamiv1alpha1.OpenCHAMIControlPlane, extra ...client.Object) client.Client {
 	t.Helper()
 	scheme := newScheme(t)
-	objs := append([]client.Object{cluster}, extra...)
+	objs := append([]client.Object{cp}, extra...)
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
@@ -36,29 +36,29 @@ func newServiceMonitorClient(t *testing.T, cluster *openchamiv1alpha1.OpenCHAMIC
 }
 
 func TestServiceMonitorReconciler_DisabledNoOp(t *testing.T) {
-	cluster := newCluster("alpha")
+	cp := newControlPlane("alpha")
 	// Pre-create a ServiceMonitor so the test asserts the disabled path
 	// does not delete user-managed objects either.
 	preexisting := &monitoringv1.ServiceMonitor{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "openchami-alpha-services",
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Spec: monitoringv1.ServiceMonitorSpec{
 			Selector:  metav1.LabelSelector{MatchLabels: map[string]string{"foo": "bar"}},
 			Endpoints: []monitoringv1.Endpoint{{Port: "metrics"}},
 		},
 	}
-	c := newServiceMonitorClient(t, cluster, preexisting)
+	c := newServiceMonitorClient(t, cp, preexisting)
 
 	r := &ServiceMonitorReconciler{Client: c, Recorder: record.NewFakeRecorder(4)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	got := &monitoringv1.ServiceMonitor{}
 	err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      "openchami-alpha-services",
 	}, got)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestServiceMonitorReconciler_DisabledNoOp(t *testing.T) {
 	}
 	// And no extra ones were created.
 	list := &monitoringv1.ServiceMonitorList{}
-	if err := c.List(context.Background(), list, client.InNamespace(ClusterNamespace(cluster))); err != nil {
+	if err := c.List(context.Background(), list, client.InNamespace(ControlPlaneNamespace(cp))); err != nil {
 		t.Fatalf("listing service monitors: %v", err)
 	}
 	if len(list.Items) != 1 {
@@ -75,18 +75,18 @@ func TestServiceMonitorReconciler_DisabledNoOp(t *testing.T) {
 }
 
 func TestServiceMonitorReconciler_EnabledApplied(t *testing.T) {
-	cluster := newCluster("beta")
-	cluster.Spec.Observability.PrometheusOperator = true
-	c := newServiceMonitorClient(t, cluster)
+	cp := newControlPlane("beta")
+	cp.Spec.Observability.PrometheusOperator = true
+	c := newServiceMonitorClient(t, cp)
 
 	r := &ServiceMonitorReconciler{Client: c, Recorder: record.NewFakeRecorder(4)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	sm := &monitoringv1.ServiceMonitor{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      "openchami-beta-services",
 	}, sm); err != nil {
 		t.Fatalf("expected ServiceMonitor to exist, got %v", err)
@@ -114,19 +114,19 @@ func TestServiceMonitorReconciler_EnabledApplied(t *testing.T) {
 }
 
 func TestServiceMonitorReconciler_TwoClustersIsolated(t *testing.T) {
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
-		cluster.Spec.Observability.PrometheusOperator = true
-		c := newServiceMonitorClient(t, cluster)
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
+		cp.Spec.Observability.PrometheusOperator = true
+		c := newServiceMonitorClient(t, cp)
 
 		r := &ServiceMonitorReconciler{Client: c, Recorder: record.NewFakeRecorder(4)}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 
 		sm := &monitoringv1.ServiceMonitor{}
 		if err := c.Get(context.Background(), types.NamespacedName{
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Name:      "openchami-" + name + "-services",
 		}, sm); err != nil {
 			t.Fatalf("getting %s ServiceMonitor: %v", name, err)
@@ -140,13 +140,13 @@ func TestServiceMonitorReconciler_TwoClustersIsolated(t *testing.T) {
 
 		// No leakage: the other cluster's ServiceMonitor must not
 		// exist in this namespace.
-		other := testClusterBlue
-		if name == testClusterBlue {
-			other = testClusterRed
+		other := testControlPlaneBlue
+		if name == testControlPlaneBlue {
+			other = testControlPlaneRed
 		}
 		stray := &monitoringv1.ServiceMonitor{}
 		err := c.Get(context.Background(), types.NamespacedName{
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Name:      "openchami-" + other + "-services",
 		}, stray)
 		if err == nil || !apierrors.IsNotFound(err) {

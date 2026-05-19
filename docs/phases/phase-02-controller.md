@@ -5,7 +5,7 @@ No service-specific logic yet.
 
 ## Controller struct
 ```go
-type OpenCHAMIClusterReconciler struct {
+type OpenCHAMIControlPlaneReconciler struct {
     client.Client
     Scheme        *runtime.Scheme
     Recorder      record.EventRecorder
@@ -75,7 +75,7 @@ ClusterRole `openchami-{clusterName}-network-probe`:
 ## Watches
 ```go
 ctrl.NewControllerManagedBy(mgr).
-    For(&v1alpha1.OpenCHAMICluster{}).
+    For(&v1alpha1.OpenCHAMIControlPlane{}).
     Owns(&appsv1.Deployment{}).
     Owns(&appsv1.DaemonSet{}).
     Owns(&batchv1.CronJob{}).
@@ -88,7 +88,7 @@ ctrl.NewControllerManagedBy(mgr).
     Complete(r)
 ```
 
-`nodeToCluster` maps a node to all OpenCHAMIClusters that have probe labels
+`nodeToCluster` maps a node to all OpenCHAMIControlPlanes that have probe labels
 matching `openchami.org/{clusterName}/*-network-ready` on that node.
 
 ## DryRun mode

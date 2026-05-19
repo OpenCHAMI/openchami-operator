@@ -20,6 +20,9 @@ import (
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
+// psaLevelRestricted is the PodSecurityAdmission "restricted" level —
+// used for warn/audit labels on operator-managed namespaces. Extracted
+// from a string literal so it can be reused from tests.
 const psaLevelRestricted = "restricted"
 
 // NamespaceReconciler ensures the per-cluster namespace exists with correct labels.
@@ -28,42 +31,42 @@ type NamespaceReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *NamespaceReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "namespace")
+func (r *NamespaceReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "namespace")
 
-	ns := r.buildNamespace(cluster)
+	ns := r.buildNamespace(cp)
 	log = logging.EnrichWithResource(log, "Namespace", ns.Name)
 	log.Info("reconciling namespace")
 
 	if err := r.Client.Patch(ctx, ns, client.Apply, //nolint:staticcheck // SSA via Patch is the supported pattern; new client.Apply API requires runtime.ApplyConfiguration
 		client.ForceOwnership, client.FieldOwner("openchami-operator")); err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNamespaceReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("failed to reconcile namespace: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, fmt.Errorf("reconciling namespace: %w", err)
 	}
 
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionNamespaceReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            "Namespace exists with correct labels",
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
-	cluster.Status.Namespace = ns.Name
+	cp.Status.Namespace = ns.Name
 	return ctrl.Result{}, nil
 }
 
-func (r *NamespaceReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	return []client.Object{r.buildNamespace(cluster)}, nil
+func (r *NamespaceReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	return []client.Object{r.buildNamespace(cp)}, nil
 }
 
-func (r *NamespaceReconciler) buildNamespace(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Namespace {
-	name := ClusterNamespace(cluster)
+func (r *NamespaceReconciler) buildNamespace(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *corev1.Namespace {
+	name := ControlPlaneNamespace(cp)
 	return &corev1.Namespace{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -73,7 +76,7 @@ func (r *NamespaceReconciler) buildNamespace(cluster *openchamiv1alpha1.OpenCHAM
 			Name: name,
 			Labels: map[string]string{
 				kubernetesMetadataNameLabel: name,
-				"openchami.org/cluster":     cluster.Spec.ClusterName,
+				"openchami.org/cluster":     cp.Spec.ClusterName,
 				// PSA enforce=privileged because the namespace hosts three
 				// workloads that PSA `baseline` (the next-stricter floor)
 				// rejects:

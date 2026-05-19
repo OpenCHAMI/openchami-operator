@@ -20,12 +20,12 @@ import (
 // Call once at the very start of each Reconcile() method:
 //
 //	log := logging.Enrich(ctx, cluster, "vault")
-func Enrich(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster, reconcilerName string) logr.Logger {
+func Enrich(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, reconcilerName string) logr.Logger {
 	return log.FromContext(ctx).WithValues(
-		"cluster", cluster.Spec.ClusterName,
+		"cluster", cp.Spec.ClusterName,
 		"reconciler", reconcilerName,
-		"generation", cluster.Generation,
-		"namespace", "openchami-"+cluster.Spec.ClusterName,
+		"generation", cp.Generation,
+		"namespace", "openchami-"+cp.Spec.ClusterName,
 	)
 }
 
@@ -45,8 +45,8 @@ func EnrichWithNode(l logr.Logger, nodeName string) logr.Logger {
 	return l.WithValues("node", nodeName)
 }
 
-// ClusterNamespace returns the canonical namespace name for a cluster.
+// ControlPlaneNamespace returns the canonical namespace name for a cluster.
 // Centralised here to avoid string formatting scattered across reconcilers.
-func ClusterNamespace(clusterName string) string {
+func ControlPlaneNamespace(clusterName string) string {
 	return "openchami-" + clusterName
 }

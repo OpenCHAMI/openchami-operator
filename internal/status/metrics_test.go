@@ -21,7 +21,7 @@ import (
 // condition True, every service Ready, a NetworkProbe status with non-zero
 // node counts, and a known cert expiry. Each metric assertion in this file
 // touches a different aspect of the resulting state.
-func metricsCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
+func metricsCluster(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
 	c := newTestCluster(name)
 	addAllConditionsTrue(c)
 	allServicesReady(c)

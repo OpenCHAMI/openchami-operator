@@ -10,8 +10,6 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
-const testClusterNameAlpha = "alpha"
-
 // TestServiceURL_HonoursExternalEndpoint confirms ServiceURL returns the
 // site-supplied externalEndpoint verbatim when set, and the in-cluster
 // Service URL otherwise. This is the single hook used by every consumer
@@ -23,13 +21,13 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 
 	cases := []struct {
 		name string
-		spec openchamiv1alpha1.OpenCHAMICluster
+		spec openchamiv1alpha1.OpenCHAMIControlPlane
 		svc  string
 		want string
 	}{
 		{
 			name: "default — in-cluster URL for SMD",
-			spec: testCluster(openchamiv1alpha1.ServicesSpec{
+			spec: testAlphaControlPlane(openchamiv1alpha1.ServicesSpec{
 				SMD: openchamiv1alpha1.SMDSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceSMD,
@@ -37,7 +35,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "externalEndpoint set — passthrough",
-			spec: testCluster(openchamiv1alpha1.ServicesSpec{
+			spec: testAlphaControlPlane(openchamiv1alpha1.ServicesSpec{
 				SMD: openchamiv1alpha1.SMDSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{
 					Enabled: false, ExternalEndpoint: &external,
 				}},
@@ -47,7 +45,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "tokensmith default — in-cluster URL",
-			spec: testCluster(openchamiv1alpha1.ServicesSpec{
+			spec: testAlphaControlPlane(openchamiv1alpha1.ServicesSpec{
 				Tokensmith: openchamiv1alpha1.TokensmithSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceTokensmith,
@@ -55,7 +53,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "boot-service default — in-cluster URL",
-			spec: testCluster(openchamiv1alpha1.ServicesSpec{
+			spec: testAlphaControlPlane(openchamiv1alpha1.ServicesSpec{
 				BootService: openchamiv1alpha1.BootServiceSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceBootService,
@@ -63,7 +61,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "metadata-service default — in-cluster URL",
-			spec: testCluster(openchamiv1alpha1.ServicesSpec{
+			spec: testAlphaControlPlane(openchamiv1alpha1.ServicesSpec{
 				MetadataService: openchamiv1alpha1.MetadataServiceSpec{ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true}},
 			}),
 			svc:  ServiceMetadataService,
@@ -71,7 +69,7 @@ func TestServiceURL_HonoursExternalEndpoint(t *testing.T) {
 		},
 		{
 			name: "unknown service — empty string",
-			spec: testCluster(openchamiv1alpha1.ServicesSpec{}),
+			spec: testAlphaControlPlane(openchamiv1alpha1.ServicesSpec{}),
 			svc:  "no-such-service",
 			want: "",
 		},
@@ -106,8 +104,8 @@ func TestServiceDeployedInCluster(t *testing.T) {
 	for _, svc := range []string{ServiceSMD, ServiceTokensmith, ServiceBootService, ServiceMetadataService} {
 		for _, tc := range cases {
 			t.Run(svc+"/"+tc.name, func(t *testing.T) {
-				cluster := testCluster(servicesSpecFor(svc, tc.enabled, tc.ext))
-				if got := ServiceDeployedInCluster(&cluster, svc); got != tc.want {
+				cp := testAlphaControlPlane(servicesSpecFor(svc, tc.enabled, tc.ext))
+				if got := ServiceDeployedInCluster(&cp, svc); got != tc.want {
 					t.Errorf("ServiceDeployedInCluster(%s) = %v, want %v", svc, got, tc.want)
 				}
 			})
@@ -115,14 +113,24 @@ func TestServiceDeployedInCluster(t *testing.T) {
 	}
 }
 
-func testCluster(services openchamiv1alpha1.ServicesSpec) openchamiv1alpha1.OpenCHAMICluster {
-	return openchamiv1alpha1.OpenCHAMICluster{
-		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
-			ClusterName: testClusterNameAlpha,
+// testAlphaControlPlane returns a minimal OpenCHAMIControlPlane with the
+// fixed ClusterName "alpha" — the only name the helpers tests ever use.
+func testAlphaControlPlane(services openchamiv1alpha1.ServicesSpec) openchamiv1alpha1.OpenCHAMIControlPlane {
+	return openchamiv1alpha1.OpenCHAMIControlPlane{
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
+			ClusterName: testAlphaName,
 			Services:    services,
 		},
 	}
 }
+
+// testAlphaName / testAlphaNamespace are the shared "alpha" identifiers used
+// across the reconciler tests. Extracted so the namespace literal isn't
+// duplicated across files (goconst threshold).
+const (
+	testAlphaName      = "alpha"
+	testAlphaNamespace = "openchami-" + testAlphaName
+)
 
 func servicesSpecFor(svc string, enabled bool, ext *string) openchamiv1alpha1.ServicesSpec {
 	d := openchamiv1alpha1.ServiceDefaults{Enabled: enabled, ExternalEndpoint: ext}

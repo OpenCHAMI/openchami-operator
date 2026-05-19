@@ -15,7 +15,7 @@ All four must pass before proceeding.
 | Operator image | `ghcr.io/openchami/openchami-operator` |
 | Admin CLI | `ochami-admin` |
 | CRD group/version | `openchami.openchami.org/v1alpha1` |
-| Primary resource | `OpenCHAMICluster` |
+| Primary resource | `OpenCHAMIControlPlane` |
 | Kubebuilder | v4 |
 | Go | 1.23+ |
 | Kubernetes target | 1.29+ |
@@ -31,7 +31,7 @@ Violating any of these is a bug regardless of what else works.
 Configure them; never deploy them. Unreachable → requeue with backoff. Never crash.
 
 **2. Per-cluster namespace isolation.**
-Every resource for `OpenCHAMICluster` named `foo` lives in `openchami-foo`.
+Every resource for `OpenCHAMIControlPlane` named `foo` lives in `openchami-foo`.
 Nothing leaks across namespace boundaries.
 
 **3. Vault path isolation.**
@@ -39,7 +39,7 @@ All KV paths prefixed `openchami/{clusterName}/`.
 Validate uniqueness before any write. Two clusters cannot share a path.
 
 **4. DHCP node exclusivity.**
-When network probing is disabled, no two `OpenCHAMICluster` instances may
+When network probing is disabled, no two `OpenCHAMIControlPlane` instances may
 target the same Kubernetes node for CoreDHCP. Webhook enforces this.
 
 **5. Idempotent reconciliation.**

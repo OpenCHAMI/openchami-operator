@@ -60,13 +60,13 @@ The `dev-*` family stands up a kind cluster with all the prerequisite CRDs and t
 | `make dev-run` | Build the operator and run it locally against the dev kind cluster (`KUBECONFIG=~/.kube/config`). Calls `make install` first so the CRDs are present. Fastest iteration loop. |
 | `make dev-run-dry` | Same as `dev-run` but with `OPENCHAMI_DRY_RUN=true` — the operator logs what it would apply without touching the API server. Useful for testing fixture changes without cluster mutation. |
 
-The dev cluster brings up Vault on `127.0.0.1:8200` (root token `dev-root-token`) and LocalStack on `127.0.0.1:4566`. Both are also reachable from inside kind because kind runs in a container on the same docker bridge.
+The dev cluster brings up Vault on `127.0.0.1:8200` (root token `dev-root-token`) and LocalStack on `127.0.0.1:4566` via docker compose, then `make dev-up` attaches both compose containers to the `kind` docker network so pods inside the cluster can resolve them by container hostname (`openchami-vault-dev:8200`, `openchami-localstack-dev:4566`). The fixtures under `test/fixtures/` use the container-hostname form. From the host you can still reach Vault and LocalStack on `127.0.0.1` for `vault read`, `awslocal`, etc.
 
 ### Apply a test cluster
 
 ```sh
 kubectl apply -f test/fixtures/minimal-cluster.yaml
-kubectl get openchamicluster testcluster -w
+kubectl get openchamicontrolplane testcluster -w
 ```
 
 ### Reset
@@ -77,7 +77,7 @@ kubectl get openchamicluster testcluster -w
 
 | Target | When to run |
 |---|---|
-| `make migrate-storage-version` | After installing a new operator that ships a new CRD storage version. No-ops every `OpenCHAMICluster` so the API server re-encodes them. Safe to re-run. See [upgrade-and-versioning](upgrade-and-versioning.md). |
+| `make migrate-storage-version` | After installing a new operator that ships a new CRD storage version. No-ops every `OpenCHAMIControlPlane` so the API server re-encodes them. Safe to re-run. See [upgrade-and-versioning](upgrade-and-versioning.md). |
 
 ## Phase tracking
 
@@ -99,20 +99,20 @@ Auto-generated from the `## ` comments on each target. The list above is the sam
 
 ```sh
 # Watching reconciliation for a specific cluster
-kubectl get openchamicluster -A -w
+kubectl get openchamicontrolplane -A -w
 
 # Inspecting a cluster's status without all the spec noise
-kubectl get openchamicluster <name> -o jsonpath='{.status}' | jq
+kubectl get openchamicontrolplane <name> -o jsonpath='{.status}' | jq
 
 # Triggering a re-reconcile (no-op patch)
-kubectl patch openchamicluster <name> --type=merge -p '{}'
+kubectl patch openchamicontrolplane <name> --type=merge -p '{}'
 
 # Dumping every operator-managed resource for a cluster
 kubectl get all,networkpolicy,httproute,certificate,vaultstaticsecret \
   -n openchami-<name> -o yaml > /tmp/dump.yaml
 
 # Quick OpenAPI sanity for a CRD update
-kubectl explain openchamicluster.spec.services.coreDHCP
+kubectl explain openchamicontrolplane.spec.services.coreDHCP
 
 # Local manager log for one cluster
 make dev-run 2>&1 | grep cluster=foo

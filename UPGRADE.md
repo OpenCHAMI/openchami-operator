@@ -15,11 +15,11 @@ None.
 ## Upgrade procedure
 1. Pin production clusters before upgrading:
    ```
-   kubectl patch openchamicluster <name> --type=merge \
+   kubectl patch openchamicontrolplane <name> --type=merge \
      -p '{"spec":{"operatorChannel":"pinned","pinnedVersion":"<current>"}}'
    ```
 2. Deploy new operator
-3. Validate staging clusters: `kubectl get openchamicluster -A`
+3. Validate staging clusters: `kubectl get openchamicontrolplane -A`
 4. Unpin production clusters one at a time
 5. Verify `status.managedByVersion` matches new version
 
@@ -28,5 +28,5 @@ After installing a new operator that ships a new CRD storage version, run:
 ```
 hack/migrate-storage-version.sh
 ```
-The script no-op patches every OpenCHAMICluster, forcing the API server to
+The script no-op patches every OpenCHAMIControlPlane, forcing the API server to
 re-encode it at the current storage version. Safe to re-run.

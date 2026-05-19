@@ -33,34 +33,34 @@ type BucketReconciler struct {
 	S3Client s3.Client
 }
 
-func (r *BucketReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "bucket")
+func (r *BucketReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "bucket")
 	log.Info("reconciling boot-images bucket")
 
 	if r.S3Client == nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            "s3 client not configured",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: bucketRequeueAfter}, nil
 	}
 
-	credsName := "openchami-" + cluster.Spec.ClusterName + "-s3-credentials"
+	credsName := "openchami-" + cp.Spec.ClusterName + "-s3-credentials"
 	creds := &corev1.Secret{}
 	err := r.Client.Get(ctx, types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      credsName,
 	}, creds)
 	if apierrors.IsNotFound(err) {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonProvisioning,
 			Message:            "waiting for VSO to materialize s3-credentials Secret",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: bucketRequeueAfter}, nil
 	}
@@ -68,29 +68,29 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, cluster *openchamiv1al
 		return ctrl.Result{}, fmt.Errorf("getting s3 credentials secret: %w", err)
 	}
 
-	bucket := BootBucketName(cluster)
+	bucket := BootBucketName(cp)
 	if err := r.S3Client.EnsureBucket(ctx, bucket); err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionBucketReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("ensuring bucket: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, fmt.Errorf("ensuring bucket %s: %w", bucket, err)
 	}
 
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionBucketReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            fmt.Sprintf("bucket %s is ready", bucket),
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
 
-func (r *BucketReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *BucketReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	// Bucket lives in S3, not Kubernetes — no objects to apply.
 	return nil, nil
 }

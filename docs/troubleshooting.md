@@ -12,7 +12,7 @@ If any are missing, install them — see [external-dependencies](external-depend
 
 **Cause 2:** Vault is unreachable.
 ```sh
-kubectl get openchamicluster <name> -o jsonpath='{.status.conditions[?(@.type=="VaultReady")]}' | jq
+kubectl get openchamicontrolplane <name> -o jsonpath='{.status.conditions[?(@.type=="VaultReady")]}' | jq
 ```
 Look for `Reason: VaultUnreachable`. The Event has the runbook URL.
 
@@ -28,7 +28,7 @@ kubectl describe pod -n openchami-system -l app.kubernetes.io/name=openchami-ope
 
 This is recoverable by definition; the operator is requeueing. Check the most recent conditions:
 ```sh
-kubectl get openchamicluster <name> -o yaml | yq '.status.conditions'
+kubectl get openchamicontrolplane <name> -o yaml | yq '.status.conditions'
 ```
 The condition with `Status: False` and a `Reason: *Unreachable` is the proximate cause. Open the runbook URL in its Event.
 
@@ -38,17 +38,17 @@ If `phase=Degraded` lasts more than 5 minutes without the underlying condition r
 
 The operator hit a fatal, unrecoverable condition. Look for:
 ```sh
-kubectl describe openchamicluster <name> | grep -A 5 -i 'failed\|fatal'
+kubectl describe openchamicontrolplane <name> | grep -A 5 -i 'failed\|fatal'
 ```
 
 Common causes:
 - **CRD storage version mismatch.** The cluster was last reconciled by an operator at a version whose storage encoding the current operator can't read. Run `hack/migrate-storage-version.sh`.
 - **Webhook unavailable during create.** The validating webhook rejected the apply. Check the most recent kubectl-apply error message.
-- **Vault path collision.** Another `OpenCHAMICluster` already owns the prefix `openchami/{clusterName}/`. Pick a different `clusterName` or delete the conflicting cluster first.
+- **Vault path collision.** Another `OpenCHAMIControlPlane` already owns the prefix `openchami/{clusterName}/`. Pick a different `clusterName` or delete the conflicting cluster first.
 
 ## "Webhook timed out"
 
-`kubectl apply` returns `Internal error occurred: failed calling webhook "vopenchamicluster.kb.io": ... context deadline exceeded`.
+`kubectl apply` returns `Internal error occurred: failed calling webhook "vopenchamicontrolplane.kb.io": ... context deadline exceeded`.
 
 **Cause:** the webhook Service can't reach the operator. Common reasons:
 - Operator pod not Running.
@@ -106,7 +106,7 @@ If the image is wrong, the constant is wrong (a release shipped without updating
 Conditions persist until they're reset to `Unknown` or to a different `Reason`. The operator only writes a condition when its reconciler runs and decides on the new state. If you've fixed an issue but haven't seen `Status: True` flip back, force a re-reconcile:
 
 ```sh
-kubectl annotate openchamicluster <name> openchami.org/touch=$(date +%s) --overwrite
+kubectl annotate openchamicontrolplane <name> openchami.org/touch=$(date +%s) --overwrite
 ```
 
 (The annotation is arbitrary; any spec change triggers a reconcile.)
@@ -213,7 +213,7 @@ Re-deletion + reconcile recreates the Job. (If this fails repeatedly with the sa
 
 ### Per-cluster namespace deletion finalizer order
 
-**Symptom:** Namespace `openchami-<cluster>` stays in `Terminating` after `kubectl delete openchamicluster <cluster>`.
+**Symptom:** Namespace `openchami-<cluster>` stays in `Terminating` after `kubectl delete openchamicontrolplane <cluster>`.
 
 **Operator behaviour:** The cluster's namespace is owned by the operator. Resources inside (Deployments, Services, NetworkPolicies, ServiceMonitor, Gateway, HTTPRoute, VaultStaticSecret, CNPG Cluster) are GC'd via owner references. CNPG Cluster deletion can take 60–120s due to its own teardown.
 

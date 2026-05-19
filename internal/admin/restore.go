@@ -76,7 +76,7 @@ func RestoreCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "restore",
 		Short: "Restore cluster infrastructure from a backup snapshot",
-		Long: "Re-apply an OpenCHAMICluster manifest from a backup directory and " +
+		Long: "Re-apply an OpenCHAMIControlPlane manifest from a backup directory and " +
 			"emit copy-paste-ready instructions for the manual restore steps " +
 			"(Vault raft restore, PVC restore from VolumeSnapshot, CNPG recovery).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -117,7 +117,7 @@ func RestoreCmd() *cobra.Command {
 // bindFlags wires flag values into o. Names follow phase-14-cli.md.
 func (o *restoreOpts) bindFlags(f *pflag.FlagSet) {
 	f.StringVar(&o.clusterName, "cluster-name", "", "Cluster name (required)")
-	f.StringVar(&o.namespace, "namespace", restoreDefaultNamespace, "Namespace where the OpenCHAMICluster CR will be re-applied")
+	f.StringVar(&o.namespace, "namespace", restoreDefaultNamespace, "Namespace where the OpenCHAMIControlPlane CR will be re-applied")
 	f.StringVar(&o.kubeconfig, "kubeconfig", "", "Path to kubeconfig (optional; falls back to KUBECONFIG/in-cluster)")
 
 	f.StringVar(&o.inputPrefix, "input-prefix", "", "Local directory containing cluster.yaml from `ochami-admin backup` (required)")
@@ -148,36 +148,36 @@ func (r *restoreRunner) run(ctx context.Context, c client.Client) error {
 		return err
 	}
 
-	cluster, rawYAML, err := restoreLoadBackup(r.opts.inputPrefix)
+	cp, rawYAML, err := restoreLoadBackup(r.opts.inputPrefix)
 	if err != nil {
 		return err
 	}
 
-	if cluster.Spec.ClusterName != r.opts.clusterName {
+	if cp.Spec.ClusterName != r.opts.clusterName {
 		if !r.opts.force {
-			return fmt.Errorf(restoreClusterNameMismatch, cluster.Spec.ClusterName, r.opts.clusterName)
+			return fmt.Errorf(restoreClusterNameMismatch, cp.Spec.ClusterName, r.opts.clusterName)
 		}
 		_, _ = fmt.Fprintf(r.stderr, "warning: backup cluster-name %q does not match --cluster-name %q; proceeding because --force is set\n",
-			cluster.Spec.ClusterName, r.opts.clusterName)
+			cp.Spec.ClusterName, r.opts.clusterName)
 	}
 
 	// Ensure the CR lands in the requested namespace, irrespective of what
 	// the YAML on disk records.
-	cluster.Namespace = r.opts.namespace
+	cp.Namespace = r.opts.namespace
 
 	if r.opts.dryRun {
 		_, _ = fmt.Fprintln(r.stderr, "dry-run: no resources will be modified.")
 		if _, err := r.stdout.Write(rawYAML); err != nil {
 			return fmt.Errorf("writing dry-run manifest: %w", err)
 		}
-		r.printManualSteps(cluster.Spec.ClusterName)
+		r.printManualSteps(cp.Spec.ClusterName)
 		return nil
 	}
 
 	// Pre-flight: refuse to clobber an existing per-cluster namespace unless
 	// --force is set. The operator's controller will create it on first
 	// reconcile if absent, so absence is the expected happy-path.
-	targetNs := restoreNamespacePrefix + cluster.Spec.ClusterName
+	targetNs := restoreNamespacePrefix + cp.Spec.ClusterName
 	if err := r.preflightNamespace(ctx, c, targetNs); err != nil {
 		return err
 	}
@@ -187,14 +187,14 @@ func (r *restoreRunner) run(ctx context.Context, c client.Client) error {
 	// all flow from a successful apply. The new client.Apply API requires
 	// a generated ApplyConfiguration which we don't have for our CRD; the
 	// rest of the codebase uses client.Patch+client.Apply via Patch.
-	if err := c.Patch(ctx, cluster, client.Apply, //nolint:staticcheck // SSA via Patch
+	if err := c.Patch(ctx, cp, client.Apply, //nolint:staticcheck // SSA via Patch
 		client.ForceOwnership, client.FieldOwner(restoreFieldOwner)); err != nil {
-		return fmt.Errorf("server-side applying OpenCHAMICluster %q: %w",
-			cluster.Spec.ClusterName, err)
+		return fmt.Errorf("server-side applying OpenCHAMIControlPlane %q: %w",
+			cp.Spec.ClusterName, err)
 	}
 
-	r.printManualSteps(cluster.Spec.ClusterName)
-	r.printSummary(cluster.Spec.ClusterName, targetNs)
+	r.printManualSteps(cp.Spec.ClusterName)
+	r.printSummary(cp.Spec.ClusterName, targetNs)
 	return nil
 }
 
@@ -268,7 +268,7 @@ func (r *restoreRunner) printManualSteps(clusterName string) {
 func (r *restoreRunner) printSummary(clusterName, ns string) {
 	_, _ = fmt.Fprintf(r.stdout, "Restore of cluster %q queued.\n", clusterName)
 	_, _ = fmt.Fprintln(r.stdout, "Automated:")
-	_, _ = fmt.Fprintf(r.stdout, "  - Server-side applied OpenCHAMICluster CR to namespace %q.\n", r.opts.namespace)
+	_, _ = fmt.Fprintf(r.stdout, "  - Server-side applied OpenCHAMIControlPlane CR to namespace %q.\n", r.opts.namespace)
 	_, _ = fmt.Fprintf(r.stdout, "  - Verified per-cluster namespace pre-conditions (%s).\n", ns)
 	_, _ = fmt.Fprintln(r.stdout, "Manual (see stderr for details):")
 	_, _ = fmt.Fprintln(r.stdout, "  - Vault raft snapshot restore.")
@@ -278,28 +278,28 @@ func (r *restoreRunner) printSummary(clusterName, ns string) {
 
 // restoreLoadBackup reads <prefix>/cluster.yaml and parses it. Returns the
 // parsed cluster object, the raw YAML bytes (for dry-run echo), and any error.
-func restoreLoadBackup(prefix string) (*openchamiv1alpha1.OpenCHAMICluster, []byte, error) {
+func restoreLoadBackup(prefix string) (*openchamiv1alpha1.OpenCHAMIControlPlane, []byte, error) {
 	path := filepath.Join(prefix, restoreClusterFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading backup file %s: %w", path, err)
 	}
-	cluster := &openchamiv1alpha1.OpenCHAMICluster{}
-	if err := yaml.Unmarshal(data, cluster); err != nil {
+	cp := &openchamiv1alpha1.OpenCHAMIControlPlane{}
+	if err := yaml.Unmarshal(data, cp); err != nil {
 		return nil, nil, fmt.Errorf("parsing backup file %s: %w", path, err)
 	}
-	if cluster.Spec.ClusterName == "" {
+	if cp.Spec.ClusterName == "" {
 		return nil, nil, fmt.Errorf("backup file %s is missing spec.clusterName", path)
 	}
 	// SSA requires apiVersion+kind to be present on the unstructured wire
 	// payload. Force them so a backup written without typemeta still applies.
-	cluster.APIVersion = openchamiv1alpha1.GroupVersion.String()
-	cluster.Kind = "OpenCHAMICluster"
+	cp.APIVersion = openchamiv1alpha1.GroupVersion.String()
+	cp.Kind = "OpenCHAMIControlPlane"
 	// Strip status; SSA on a non-status field manager would otherwise fight
 	// the operator for ownership.
-	cluster.Status = openchamiv1alpha1.OpenCHAMIClusterStatus{}
+	cp.Status = openchamiv1alpha1.OpenCHAMIControlPlaneStatus{}
 	// Strip resourceVersion so SSA does not optimistic-lock against a stale
 	// generation.
-	cluster.ResourceVersion = ""
-	return cluster, data, nil
+	cp.ResourceVersion = ""
+	return cp, data, nil
 }

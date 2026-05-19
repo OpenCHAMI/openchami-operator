@@ -1,0 +1,9 @@
+apiVersion: openchami.openchami.org/v1alpha1
+kind: OpenCHAMIControlPlane
+metadata:
+  labels:
+    app.kubernetes.io/name: openchami-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: openchamicontrolplane-sample
+spec:
+  # TODO(user): Add fields here

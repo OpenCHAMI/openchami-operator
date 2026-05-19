@@ -36,14 +36,14 @@ func logCredsSecret(clusterName string) *corev1.Secret {
 
 func TestLogBucketReconciler_DisabledTriviallyReady(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = false
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	s3c := s3fake.NewClient()
 	r := &LogBucketReconciler{Client: c, Recorder: record.NewFakeRecorder(10), S3Client: s3c}
 
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
@@ -55,12 +55,12 @@ func TestLogBucketReconciler_DisabledTriviallyReady(t *testing.T) {
 		t.Errorf("expected no EnsureLifecycleRule calls when logging disabled, got %d",
 			s3c.CallCount("EnsureLifecycleRule"))
 	}
-	if cluster.Status.LogBucket != "" {
+	if cp.Status.LogBucket != "" {
 		t.Errorf("expected status.logBucket empty when disabled, got %q",
-			cluster.Status.LogBucket)
+			cp.Status.LogBucket)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogBucketReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogBucketReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected LogBucketReady=True/Ready when disabled, got %+v", cond)
 	}
@@ -68,15 +68,15 @@ func TestLogBucketReconciler_DisabledTriviallyReady(t *testing.T) {
 
 func TestLogBucketReconciler_WaitsForCredsSecret(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
-	cluster.Spec.Logging.RetentionDays = 90
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
+	cp.Spec.Logging.RetentionDays = 90
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	s3c := s3fake.NewClient()
 	r := &LogBucketReconciler{Client: c, Recorder: record.NewFakeRecorder(10), S3Client: s3c}
 
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestLogBucketReconciler_WaitsForCredsSecret(t *testing.T) {
 			s3c.CallCount("EnsureBucket"))
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogBucketReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogBucketReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonProvisioning {
 		t.Fatalf("expected LogBucketReady=False/Provisioning, got %+v", cond)
 	}
@@ -97,17 +97,17 @@ func TestLogBucketReconciler_WaitsForCredsSecret(t *testing.T) {
 
 func TestLogBucketReconciler_HappyPath(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
-	cluster.Spec.Logging.RetentionDays = 45
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
+	cp.Spec.Logging.RetentionDays = 45
 
-	creds := logCredsSecret(cluster.Spec.ClusterName)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, creds).Build()
+	creds := logCredsSecret(cp.Spec.ClusterName)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, creds).Build()
 
 	s3c := s3fake.NewClient()
 	r := &LogBucketReconciler{Client: c, Recorder: record.NewFakeRecorder(10), S3Client: s3c}
 
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestLogBucketReconciler_HappyPath(t *testing.T) {
 		t.Errorf("expected no requeue on happy path, got %+v", res)
 	}
 
-	bucket := LogBucketName(cluster)
+	bucket := LogBucketName(cp)
 	s3c.AssertCalled(t, "EnsureBucket")
 	s3c.AssertCalled(t, "EnsureLifecycleRule")
 	s3c.AssertBucketExists(t, bucket)
@@ -123,11 +123,11 @@ func TestLogBucketReconciler_HappyPath(t *testing.T) {
 		t.Errorf("expected lifecycle retention=45 on bucket %q, got %d", bucket, got)
 	}
 
-	if cluster.Status.LogBucket != bucket {
-		t.Errorf("expected status.logBucket=%q, got %q", bucket, cluster.Status.LogBucket)
+	if cp.Status.LogBucket != bucket {
+		t.Errorf("expected status.logBucket=%q, got %q", bucket, cp.Status.LogBucket)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogBucketReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogBucketReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected LogBucketReady=True/Ready, got %+v", cond)
 	}
@@ -135,29 +135,29 @@ func TestLogBucketReconciler_HappyPath(t *testing.T) {
 
 func TestLogBucketReconciler_BucketEnsureError(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
-	cluster.Spec.Logging.RetentionDays = 30
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
+	cp.Spec.Logging.RetentionDays = 30
 
-	creds := logCredsSecret(cluster.Spec.ClusterName)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, creds).Build()
+	creds := logCredsSecret(cp.Spec.ClusterName)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, creds).Build()
 
 	s3c := s3fake.NewClient()
 	s3c.Errors["EnsureBucket"] = errors.New("versitygw down")
 	r := &LogBucketReconciler{Client: c, Recorder: record.NewFakeRecorder(10), S3Client: s3c}
 
-	_, err := r.Reconcile(context.Background(), cluster)
+	_, err := r.Reconcile(context.Background(), cp)
 	if err == nil {
 		t.Fatalf("expected error when EnsureBucket fails")
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogBucketReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogBucketReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonError {
 		t.Fatalf("expected LogBucketReady=False/Error, got %+v", cond)
 	}
 
-	if cluster.Status.LogBucket != "" {
-		t.Errorf("expected status.logBucket empty on error, got %q", cluster.Status.LogBucket)
+	if cp.Status.LogBucket != "" {
+		t.Errorf("expected status.logBucket empty on error, got %q", cp.Status.LogBucket)
 	}
 }
 
@@ -166,21 +166,21 @@ func TestLogBucketReconciler_TwoClustersIsolated(t *testing.T) {
 	s3c := s3fake.NewClient()
 	rec := record.NewFakeRecorder(20)
 
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
-		cluster.Spec.Logging.Enabled = true
-		cluster.Spec.Logging.RetentionDays = 14
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
+		cp.Spec.Logging.Enabled = true
+		cp.Spec.Logging.RetentionDays = 14
 		creds := logCredsSecret(name)
 		c := fake.NewClientBuilder().WithScheme(scheme).
-			WithObjects(cluster, creds).Build()
+			WithObjects(cp, creds).Build()
 		r := &LogBucketReconciler{Client: c, Recorder: rec, S3Client: s3c}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 	}
 
-	redBucket := testClusterRed + "-logs"
-	blueBucket := testClusterBlue + "-logs"
+	redBucket := testControlPlaneRed + "-logs"
+	blueBucket := testControlPlaneBlue + "-logs"
 	if redBucket == blueBucket {
 		t.Fatalf("two clusters share log bucket name %q", redBucket)
 	}

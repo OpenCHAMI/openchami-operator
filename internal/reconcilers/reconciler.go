@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-// Package reconcilers contains sub-reconcilers for each OpenCHAMICluster concern.
+// Package reconcilers contains sub-reconcilers for each OpenCHAMIControlPlane concern.
 package reconcilers
 
 import (
@@ -29,10 +29,10 @@ type SubReconciler interface {
 	// Reconcile creates, updates, or deletes Kubernetes resources for this
 	// sub-domain. Returns a ctrl.Result instructing the controller when to
 	// requeue, and any error that should trigger an immediate requeue.
-	Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error)
+	Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error)
 
 	// Describe returns the Kubernetes objects this reconciler would apply,
 	// in apply order, without actually applying them. Used by
 	// `ochami-admin describe`. Must not contact any external service.
-	Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error)
+	Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error)
 }

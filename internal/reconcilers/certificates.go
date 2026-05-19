@@ -42,8 +42,11 @@ const (
 	// imminently expiring (CertificatesValid=False/ExpirationImminent).
 	certImminentGap = 24 * time.Hour
 
-	// certManagerAPIVersion is the apiVersion string for cert-manager.io/v1.
-	certManagerAPIVersion = "cert-manager.io/v1"
+	// certManagerGroup / certManagerAPIVersion are the cert-manager.io
+	// group + apiVersion strings shared across cert-manager.io IssuerRefs
+	// and TypeMeta values produced by certificates.go and service_identity.go.
+	certManagerGroup      = "cert-manager.io"
+	certManagerAPIVersion = certManagerGroup + "/v1"
 	// kindCertificate is the Kind string for cert-manager Certificate.
 	kindCertificate = "Certificate"
 
@@ -64,10 +67,10 @@ type CertificatesReconciler struct {
 
 // Reconcile applies the Certificate resource and reports CertificatesValid
 // based on the NotAfter timestamp parsed from the resulting TLS secret.
-func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "certificates")
+func (r *CertificatesReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "certificates")
 
-	cert := r.buildCertificate(cluster)
+	cert := r.buildCertificate(cp)
 	cLog := logging.EnrichWithResource(log, kindCertificate, cert.Name)
 	cLog.Info("applying gateway Certificate")
 	if err := r.Client.Patch(ctx, cert, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -75,10 +78,10 @@ func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *opencha
 		return ctrl.Result{}, fmt.Errorf("applying gateway Certificate: %w", err)
 	}
 
-	secretName := GatewayTLSSecretName(cluster)
+	secretName := GatewayTLSSecretName(cp)
 	secret := &corev1.Secret{}
 	getErr := r.Client.Get(ctx, types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      secretName,
 	}, secret)
 	if getErr != nil && !apierrors.IsNotFound(getErr) {
@@ -86,12 +89,12 @@ func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *opencha
 	}
 	if apierrors.IsNotFound(getErr) {
 		log.Info("waiting for cert-manager to populate TLS Secret", "secret", secretName)
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionCertificatesValid,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonAwaitingCertificate,
 			Message:            fmt.Sprintf("waiting for TLS Secret %q to be issued", secretName),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: certificatesRequeueAfter}, nil
 	}
@@ -99,55 +102,55 @@ func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *opencha
 	notAfter, err := parseNotAfter(secret.Data[corev1.TLSCertKey])
 	if err != nil {
 		log.Error(err, "parsing TLS certificate", "secret", secretName)
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionCertificatesValid,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("parsing TLS Secret %q: %v", secretName, err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonError,
 			fmt.Sprintf("could not parse TLS certificate from Secret %q", secretName))
 		return ctrl.Result{RequeueAfter: certificatesRequeueAfter}, nil
 	}
 
-	cluster.Status.CertExpiryTime = notAfter.UTC().Format(time.RFC3339)
+	cp.Status.CertExpiryTime = notAfter.UTC().Format(time.RFC3339)
 
 	gap := time.Until(notAfter)
 	switch {
 	case gap <= 0:
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionCertificatesValid,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonExpired,
 			Message:            fmt.Sprintf("certificate expired at %s", notAfter.UTC().Format(time.RFC3339)),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonExpired,
 			fmt.Sprintf("gateway TLS certificate expired at %s", notAfter.UTC().Format(time.RFC3339)))
 	case gap <= certImminentGap:
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionCertificatesValid,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonExpirationImminent,
 			Message:            fmt.Sprintf("certificate expires in %s", gap.Round(time.Minute)),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonExpirationImminent,
 			fmt.Sprintf("gateway TLS certificate expires in %s", gap.Round(time.Minute)))
 	default:
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionCertificatesValid,
 			Status:             metav1.ConditionTrue,
 			Reason:             conditions.ReasonReady,
 			Message:            fmt.Sprintf("certificate valid until %s", notAfter.UTC().Format(time.RFC3339)),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		if gap <= certWarningGap {
-			RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+			RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 				conditions.ReasonExpirationImminent,
 				fmt.Sprintf("gateway TLS certificate expires in %s", gap.Round(time.Minute)))
 		}
@@ -157,37 +160,37 @@ func (r *CertificatesReconciler) Reconcile(ctx context.Context, cluster *opencha
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.
-func (r *CertificatesReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	return []client.Object{r.buildCertificate(cluster)}, nil
+func (r *CertificatesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	return []client.Object{r.buildCertificate(cp)}, nil
 }
 
 // GatewayTLSSecretName returns the resolved name of the TLS Secret that
 // cert-manager populates for the gateway. Exported because the controller's
 // Secret-to-cluster watcher uses it to gate enqueues.
-func GatewayTLSSecretName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	if name := cluster.Spec.Networking.TLS.SecretName; name != "" {
+func GatewayTLSSecretName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	if name := cp.Spec.Networking.TLS.SecretName; name != "" {
 		return name
 	}
-	return cluster.Spec.ClusterName + "-" + gatewayTLSSuffix
+	return cp.Spec.ClusterName + "-" + gatewayTLSSuffix
 }
 
 // gatewayTLSIssuer returns the resolved cert-manager ClusterIssuer name.
-func gatewayTLSIssuer(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	if iss := cluster.Spec.Networking.TLS.Issuer; iss != "" {
+func gatewayTLSIssuer(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	if iss := cp.Spec.Networking.TLS.Issuer; iss != "" {
 		return iss
 	}
 	return defaultTLSIssuer
 }
 
 // gatewayCertificateName returns the cert-manager Certificate object name.
-func gatewayCertificateName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	return cluster.Spec.ClusterName + "-" + gatewayTLSSuffix
+func gatewayCertificateName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	return cp.Spec.ClusterName + "-" + gatewayTLSSuffix
 }
 
-func (r *CertificatesReconciler) buildCertificate(cluster *openchamiv1alpha1.OpenCHAMICluster) *cmv1.Certificate {
+func (r *CertificatesReconciler) buildCertificate(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *cmv1.Certificate {
 	labels := map[string]string{
 		labelAppName:   "gateway",
-		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 		labelManagedBy: managedByValue,
 	}
 	duration := metav1.Duration{Duration: certDuration}
@@ -195,19 +198,19 @@ func (r *CertificatesReconciler) buildCertificate(cluster *openchamiv1alpha1.Ope
 	return &cmv1.Certificate{
 		TypeMeta: metav1.TypeMeta{APIVersion: certManagerAPIVersion, Kind: kindCertificate},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      gatewayCertificateName(cluster),
-			Namespace: ClusterNamespace(cluster),
+			Name:      gatewayCertificateName(cp),
+			Namespace: ControlPlaneNamespace(cp),
 			Labels:    labels,
 		},
 		Spec: cmv1.CertificateSpec{
-			SecretName:  GatewayTLSSecretName(cluster),
-			DNSNames:    []string{cluster.Spec.Domain},
+			SecretName:  GatewayTLSSecretName(cp),
+			DNSNames:    []string{cp.Spec.Domain},
 			Duration:    &duration,
 			RenewBefore: &renewBefore,
 			IssuerRef: cmmeta.IssuerReference{
-				Name:  gatewayTLSIssuer(cluster),
+				Name:  gatewayTLSIssuer(cp),
 				Kind:  "ClusterIssuer",
-				Group: "cert-manager.io",
+				Group: certManagerGroup,
 			},
 		},
 	}

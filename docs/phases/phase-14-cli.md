@@ -15,7 +15,7 @@ root.AddCommand(admin.InitCmd(), admin.DescribeCmd(), admin.BackupCmd(),
 ```
 
 ## init — `internal/admin/init.go`
-Generates a ready-to-apply OpenCHAMICluster YAML from flags.
+Generates a ready-to-apply OpenCHAMIControlPlane YAML from flags.
 
 Key flags:
 ```
@@ -54,7 +54,7 @@ Infrastructure state snapshot to VersityGW:
 1. CNPG base backup via `Backup` CRD
 2. tokensmith PVC via VolumeSnapshot (if available) or `kubectl cp`
 3. Vault raft snapshot via `vault operator raft snapshot save`
-4. CR YAML via `kubectl get openchamicluster {name} -o yaml`
+4. CR YAML via `kubectl get openchamicontrolplane {name} -o yaml`
 
 Requires: `--kubeconfig`, `--vault-addr`, `--vault-token`,
           `--s3-endpoint`, `--s3-bucket`, `--output-prefix`

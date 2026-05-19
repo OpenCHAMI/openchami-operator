@@ -169,8 +169,8 @@ func (r *probeRunner) checkTarget(kind string, t *targetConfig) bool {
 	return true
 }
 
-func probeLabelKey(cluster, kind string) string {
-	return fmt.Sprintf("openchami.org/%s-%s-network-ready", cluster, kind)
+func probeLabelKey(cp, kind string) string {
+	return fmt.Sprintf("openchami.org/%s-%s-network-ready", cp, kind)
 }
 
 func boolStr(b bool) string {
@@ -238,8 +238,8 @@ func parseTarget(subnet, host, port, timeout string) *targetConfig {
 // On success the runner has its routeCheck/dialCheck/patchLabels/now hooks
 // wired to production implementations; tests construct the runner directly.
 func runnerFromEnv(cs kubernetes.Interface, logger *log.Logger) (*probeRunner, error) {
-	cluster := os.Getenv(envClusterName)
-	if cluster == "" {
+	cp := os.Getenv(envClusterName)
+	if cp == "" {
 		return nil, fmt.Errorf("%s required", envClusterName)
 	}
 	node := os.Getenv(envNodeName)
@@ -272,7 +272,7 @@ func runnerFromEnv(cs kubernetes.Interface, logger *log.Logger) (*probeRunner, e
 		return nil, errors.New("no probe targets configured (set PROBE_PROVISION_SUBNET and/or PROBE_BMC_SUBNET)")
 	}
 	return &probeRunner{
-		clusterName: cluster,
+		clusterName: cp,
 		nodeName:    node,
 		interval:    time.Duration(intervalSec) * time.Second,
 		provision:   provision,

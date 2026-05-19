@@ -16,8 +16,17 @@ type VaultPaths struct {
 	// All cluster secrets live under this prefix.
 	SecretPrefix string
 
-	// DBCredentials is the path for database credentials.
-	DBCredentials string
+	// DBSMDCredentials is the path for the SMD service's database
+	// username/password. Each consumer service has its own Vault path
+	// and corresponding Kubernetes Secret so CNPG's managed.roles
+	// declarative role management can reference them by name without
+	// the operator having to derive per-service secrets from a single
+	// aggregate (the kube-deploy pattern).
+	DBSMDCredentials string
+
+	// DBBootServiceCredentials is the path for the boot-service's
+	// database username/password.
+	DBBootServiceCredentials string
 
 	// S3Credentials is the path for VersityGW boot-image bucket credentials.
 	S3Credentials string
@@ -46,15 +55,16 @@ func Paths(clusterName string) VaultPaths {
 	prefix := "openchami/" + clusterName
 	role := "openchami-" + clusterName + "-services"
 	return VaultPaths{
-		KVMount:         "openchami",
-		SecretPrefix:    prefix,
-		DBCredentials:   prefix + "/db/credentials",
-		S3Credentials:   prefix + "/s3/versitygw",
-		LogCredentials:  prefix + "/s3/logs",
-		TokensmithOIDC:  prefix + "/oidc/tokensmith-client",
-		PolicyServices:  role,
-		AppRoleServices: role,
-		K8sRoleServices: role,
+		KVMount:                  "openchami",
+		SecretPrefix:             prefix,
+		DBSMDCredentials:         prefix + "/db/smd",
+		DBBootServiceCredentials: prefix + "/db/boot-service",
+		S3Credentials:            prefix + "/s3/versitygw",
+		LogCredentials:           prefix + "/s3/logs",
+		TokensmithOIDC:           prefix + "/oidc/tokensmith-client",
+		PolicyServices:           role,
+		AppRoleServices:          role,
+		K8sRoleServices:          role,
 	}
 }
 

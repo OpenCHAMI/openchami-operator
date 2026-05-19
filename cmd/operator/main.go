@@ -36,7 +36,6 @@ import (
 	s3client "github.com/openchami/openchami-operator/internal/s3"
 	"github.com/openchami/openchami-operator/internal/status"
 	"github.com/openchami/openchami-operator/internal/vault"
-	"github.com/openchami/openchami-operator/internal/version"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -200,24 +199,24 @@ func main() {
 		Recorder: mgr.GetEventRecorderFor("openchami-operator"),
 	}
 
-	if err := (&controller.OpenCHAMIClusterReconciler{
+	if err := (&controller.OpenCHAMIControlPlaneReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		//nolint:staticcheck // legacy events API; migration to events.EventRecorder is a future cleanup
-		Recorder:      mgr.GetEventRecorderFor("openchamicluster-controller"),
-		VaultClient:   vaultClient,
-		S3Client:      s3c,
-		DefaultImages: version.DefaultImages(),
-		DryRun:        os.Getenv("OPENCHAMI_DRY_RUN") == "true",
-		Reporter:      reporter,
+		Recorder:    mgr.GetEventRecorderFor("openchamicontrolplane-controller"),
+		VaultClient: vaultClient,
+		S3Client:    s3c,
+		DryRun:      os.Getenv("OPENCHAMI_DRY_RUN") == "true",
+		Reporter:    reporter,
+		RESTConfig:  mgr.GetConfig(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "openchamicluster")
+		setupLog.Error(err, "Failed to create controller", "controller", "openchamicontrolplane")
 		os.Exit(1)
 	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := openchamiv1alpha1.SetupOpenCHAMIClusterWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "Failed to create webhook", "webhook", "OpenCHAMICluster")
+		if err := openchamiv1alpha1.SetupOpenCHAMIControlPlaneWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "OpenCHAMIControlPlane")
 			os.Exit(1)
 		}
 	}

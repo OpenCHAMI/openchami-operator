@@ -19,7 +19,7 @@ make dev-up
 kubectl apply -f test/fixtures/minimal-cluster.yaml
 
 # 3. Watch it come up
-kubectl get openchamicluster testcluster -w
+kubectl get openchamicontrolplane testcluster -w
 
 # 4. Run the operator locally
 make dev-run

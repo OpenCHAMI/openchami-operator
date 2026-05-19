@@ -86,8 +86,8 @@ type NetworkProbeSpec struct {
     BMCNetwork *NetworkProbeTarget `json:"bmcNetwork,omitempty"`
 }
 
-// OpenCHAMIClusterSpec defines the desired state of an OpenCHAMI service cluster.
-type OpenCHAMIClusterSpec struct {
+// OpenCHAMIControlPlaneSpec defines the desired state of an OpenCHAMI service cluster.
+type OpenCHAMIControlPlaneSpec struct {
     // ClusterName is the logical name used in namespaces, Vault paths, and labels.
     // Immutable after creation.
     // +kubebuilder:validation:Required
@@ -336,10 +336,10 @@ type ObservabilitySpec struct {
 }
 ```
 
-### OpenCHAMIClusterStatus
+### OpenCHAMIControlPlaneStatus
 
 ```go
-type OpenCHAMIClusterStatus struct {
+type OpenCHAMIControlPlaneStatus struct {
     // +optional
     ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
@@ -476,3 +476,4 @@ vsov1beta1.VaultStaticSecret{Spec: vsov1beta1.VaultStaticSecretSpec{
     },
 }}
 ```
+

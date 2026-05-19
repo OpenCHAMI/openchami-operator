@@ -9,11 +9,11 @@
 kubebuilder init --domain openchami.org \
   --repo github.com/openchami/openchami-operator --project-version 3
 kubebuilder create api --group openchami --version v1alpha1 \
-  --kind OpenCHAMICluster --resource --controller
+  --kind OpenCHAMIControlPlane --resource --controller
 kubebuilder create webhook --group openchami --version v1alpha1 \
-  --kind OpenCHAMICluster --defaulting --validation
+  --kind OpenCHAMIControlPlane --defaulting --validation
 kubebuilder create webhook --group openchami --version v1alpha1 \
-  --kind OpenCHAMICluster --conversion
+  --kind OpenCHAMIControlPlane --conversion
 ```
 
 ### 0.2 Dependencies

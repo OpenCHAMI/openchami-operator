@@ -38,6 +38,20 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/exec
+  verbs:
+  - create
+- apiGroups:
   - apps
   resources:
   - daemonsets
@@ -67,6 +81,7 @@ rules:
   - cert-manager.io
   resources:
   - certificates
+  - issuers
   verbs:
   - create
   - delete
@@ -91,6 +106,7 @@ rules:
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
+  - backendtlspolicies
   - gateways
   - httproutes
   verbs:
@@ -128,7 +144,7 @@ rules:
 - apiGroups:
   - openchami.openchami.org
   resources:
-  - openchamiclusters
+  - openchamicontrolplanes
   verbs:
   - create
   - delete
@@ -140,13 +156,13 @@ rules:
 - apiGroups:
   - openchami.openchami.org
   resources:
-  - openchamiclusters/finalizers
+  - openchamicontrolplanes/finalizers
   verbs:
   - update
 - apiGroups:
   - openchami.openchami.org
   resources:
-  - openchamiclusters/status
+  - openchamicontrolplanes/status
   verbs:
   - get
   - patch

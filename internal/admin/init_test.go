@@ -69,10 +69,10 @@ func initRunCmd(t *testing.T, args ...string) (string, string, error) {
 }
 
 // initUnmarshal parses the YAML manifest produced by the init command back
-// into a typed *OpenCHAMICluster. Failures fail the test.
-func initUnmarshal(t *testing.T, manifest string) *openchamiv1alpha1.OpenCHAMICluster {
+// into a typed *OpenCHAMIControlPlane. Failures fail the test.
+func initUnmarshal(t *testing.T, manifest string) *openchamiv1alpha1.OpenCHAMIControlPlane {
 	t.Helper()
-	var c openchamiv1alpha1.OpenCHAMICluster
+	var c openchamiv1alpha1.OpenCHAMIControlPlane
 	if err := yaml.Unmarshal([]byte(manifest), &c); err != nil {
 		t.Fatalf("unmarshalling generated manifest: %v\n--- YAML ---\n%s", err, manifest)
 	}

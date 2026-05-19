@@ -11,9 +11,13 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
+// Shared DHCP-range fixture literals. Extracted so the same address pair can
+// be re-used across tests without tripping the goconst threshold.
 const (
-	testLeaseStartA = "10.0.0.10"
-	testLeaseEndA   = "10.0.0.20"
+	testLeaseRangeStartSmall = "10.0.0.10"
+	testLeaseRangeEndSmall   = "10.0.0.20"
+	testLeaseRangeStartLarge = "10.0.0.100"
+	testLeaseRangeEndLarge   = "10.0.0.200"
 )
 
 // TestRenderCoreDHCPConfig pins the YAML the operator hands to coredhcp.
@@ -21,8 +25,8 @@ const (
 // a regression here would surface as a fatal config-load error in the pod
 // (which is exactly the bug this rendering was added to fix).
 func TestRenderCoreDHCPConfig(t *testing.T) {
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: "192.168.100.0/24",
@@ -33,7 +37,7 @@ func TestRenderCoreDHCPConfig(t *testing.T) {
 		UnknownLeaseDuration: "10m",
 	}
 
-	got, err := renderCoreDHCPConfig(cluster)
+	got, err := renderCoreDHCPConfig(cp)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -58,16 +62,16 @@ func TestRenderCoreDHCPConfig(t *testing.T) {
 }
 
 func TestRenderCoreDHCPConfig_DefaultsLeaseDurations(t *testing.T) {
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: "10.0.0.0/24",
-			Start:  testLeaseStartA,
-			End:    testLeaseEndA,
+			Start:  testLeaseRangeStartSmall,
+			End:    testLeaseRangeEndSmall,
 		}},
 	}
-	got, err := renderCoreDHCPConfig(cluster)
+	got, err := renderCoreDHCPConfig(cp)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
@@ -82,38 +86,38 @@ func TestRenderCoreDHCPConfig_DefaultsLeaseDurations(t *testing.T) {
 }
 
 func TestRenderCoreDHCPConfig_RejectsEmptyLeaseRanges(t *testing.T) {
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{Enabled: true}
-	if _, err := renderCoreDHCPConfig(cluster); err == nil {
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{Enabled: true}
+	if _, err := renderCoreDHCPConfig(cp); err == nil {
 		t.Fatal("expected error when leaseRanges is empty")
 	}
 }
 
 func TestRenderCoreDHCPConfig_RejectsInvalidSubnet(t *testing.T) {
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{{
 			Subnet: "not-a-cidr",
-			Start:  testLeaseStartA,
-			End:    testLeaseEndA,
+			Start:  testLeaseRangeStartSmall,
+			End:    testLeaseRangeEndSmall,
 		}},
 	}
-	if _, err := renderCoreDHCPConfig(cluster); err == nil {
+	if _, err := renderCoreDHCPConfig(cp); err == nil {
 		t.Fatal("expected error for invalid CIDR")
 	}
 }
 
 func TestRenderCoreDHCPConfig_NotesIgnoredAdditionalRanges(t *testing.T) {
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.CoreDHCP = openchamiv1alpha1.CoreDHCPSpec{
 		Enabled: true,
 		LeaseRanges: []openchamiv1alpha1.DHCPLeaseRange{
-			{Subnet: "10.0.0.0/24", Start: testLeaseStartA, End: testLeaseEndA},
+			{Subnet: "10.0.0.0/24", Start: testLeaseRangeStartSmall, End: testLeaseRangeEndSmall},
 			{Subnet: "10.0.1.0/24", Start: "10.0.1.10", End: "10.0.1.20"},
 		},
 	}
-	got, err := renderCoreDHCPConfig(cluster)
+	got, err := renderCoreDHCPConfig(cp)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}

@@ -33,11 +33,11 @@ import (
 // faultS3CredsSecret returns a Secret matching what VSO would sync from the
 // cluster's s3-credentials Vault path, so BucketReconciler progresses past
 // the "wait for creds" stage.
-func faultS3CredsSecret(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Secret {
+func faultS3CredsSecret(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      SecretName(cluster, SuffixS3Credentials),
-			Namespace: ClusterNamespace(cluster),
+			Name:      SecretName(cp, SuffixS3Credentials),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Data: map[string][]byte{
 			s3AccessKeyKey: []byte("AKIA-fault"),
@@ -147,8 +147,8 @@ func faultDrainEvents(rec *record.FakeRecorder, wantType, wantReason string) boo
 
 func TestF01_VaultEnsureSecretError(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster(testClusterRed)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane(testControlPlaneRed)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	v := vaultfake.NewClient()
 	// IsReachable and EnsureKVMount succeed; EnsureSecret is the first
@@ -163,7 +163,7 @@ func TestF01_VaultEnsureSecretError(t *testing.T) {
 
 	// Reconcile must not panic. It returns the wrapped error so the manager
 	// will requeue on the standard rate limiter.
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err == nil {
 		t.Fatalf("expected wrapped error from EnsureSecret failure, got nil (res=%+v)", res)
 	}
@@ -171,7 +171,7 @@ func TestF01_VaultEnsureSecretError(t *testing.T) {
 		t.Errorf("expected error message to surface underlying cause, got %q", err.Error())
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionVaultConfigured)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionVaultConfigured)
 	if cond == nil {
 		t.Fatalf("expected VaultConfigured condition to be set, got none")
 	}
@@ -194,18 +194,29 @@ func TestF01_VaultEnsureSecretError(t *testing.T) {
 
 func TestF02_DatabaseNeverHealthy(t *testing.T) {
 	scheme := faultDBScheme(t)
-	cluster := newCluster(testClusterRed)
+	cp := newControlPlane(testControlPlaneRed)
 
-	// Pre-create the db-credentials secret so the reconciler progresses
-	// past the wait-for-VSO stage.
-	creds := &corev1.Secret{
+	// Pre-create both per-service db-credentials Secrets so the reconciler
+	// progresses past the wait-for-VSO stage. Under the managed.roles model
+	// (2026-05-08) each service role has its own basic-auth-shaped Secret.
+	smdCreds := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      SecretName(cluster, SuffixDBCredentials),
-			Namespace: ClusterNamespace(cluster),
+			Name:      SecretName(cp, SuffixSMDDB),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Data: map[string][]byte{
-			VaultKeySMDPassword:         []byte("smd-pw"),
-			VaultKeyBootServicePassword: []byte("boot-pw"),
+			VaultKeyDBUsername: []byte(ServiceSMD),
+			VaultKeyDBPassword: []byte("smd-pw"),
+		},
+	}
+	bootCreds := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SecretName(cp, SuffixBootServiceDB),
+			Namespace: ControlPlaneNamespace(cp),
+		},
+		Data: map[string][]byte{
+			VaultKeyDBUsername: []byte("boot_service"),
+			VaultKeyDBPassword: []byte("boot-pw"),
 		},
 	}
 
@@ -213,20 +224,20 @@ func TestF02_DatabaseNeverHealthy(t *testing.T) {
 	// transitions; the reconciler should see this and requeue indefinitely.
 	cnpg := &cnpgv1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "openchami-" + cluster.Spec.ClusterName + "-postgres",
-			Namespace: ClusterNamespace(cluster),
+			Name:      "openchami-" + cp.Spec.ClusterName + "-postgres",
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: cnpgv1.ClusterStatus{Phase: "Setting up primary"},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster, creds).
+		WithObjects(cp, smdCreds, bootCreds).
 		WithStatusSubresource(&cnpgv1.Cluster{}).
 		WithObjects(cnpg).
 		Build()
 
 	dbR := &DatabaseReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := dbR.Reconcile(context.Background(), cluster)
+	res, err := dbR.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("database reconcile: %v", err)
 	}
@@ -238,7 +249,7 @@ func TestF02_DatabaseNeverHealthy(t *testing.T) {
 		t.Errorf("expected RequeueAfter=%v, got %v", want, res.RequeueAfter)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionDatabaseReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionDatabaseReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonProvisioning {
 		t.Fatalf("expected DatabaseReady=False/Provisioning, got %+v", cond)
 	}
@@ -247,9 +258,9 @@ func TestF02_DatabaseNeverHealthy(t *testing.T) {
 	// ready. boot-service reads its DB host from cluster.Spec, not from the
 	// CNPG Cluster status, so it can still build resources — the contract
 	// here is "no panic, no fatal error".
-	cluster.Spec.Services.BootService.Enabled = true
+	cp.Spec.Services.BootService.Enabled = true
 	bsR := &BootServiceReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := bsR.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := bsR.Reconcile(context.Background(), cp); err != nil {
 		t.Errorf("boot-service reconcile crashed while DB pending: %v", err)
 	}
 }
@@ -262,9 +273,9 @@ func TestF02_DatabaseNeverHealthy(t *testing.T) {
 
 func TestF03_BucketTransientErrorThenSuccess(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster(testClusterRed)
-	creds := faultS3CredsSecret(cluster)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, creds).Build()
+	cp := newControlPlane(testControlPlaneRed)
+	creds := faultS3CredsSecret(cp)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, creds).Build()
 
 	transientErr := errors.New("versitygw 503: try again")
 	s3c := newFaultTransientS3Client(transientErr)
@@ -276,24 +287,24 @@ func TestF03_BucketTransientErrorThenSuccess(t *testing.T) {
 	}
 
 	// First reconcile: error path.
-	if _, err := r.Reconcile(context.Background(), cluster); err == nil {
+	if _, err := r.Reconcile(context.Background(), cp); err == nil {
 		t.Fatalf("expected error on first call, got nil")
 	}
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionBucketReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionBucketReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonError {
 		t.Fatalf("expected BucketReady=False/Error after first call, got %+v", cond)
 	}
 
 	// Second reconcile: success path.
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("expected success on second call, got %v", err)
 	}
-	cond = apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionBucketReady)
+	cond = apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionBucketReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected BucketReady=True/Ready after retry, got %+v", cond)
 	}
 
-	bucket := BootBucketName(cluster)
+	bucket := BootBucketName(cp)
 	if !s3c.HasBucket(bucket) {
 		t.Errorf("expected bucket %q to be recorded after successful retry", bucket)
 	}
@@ -310,8 +321,8 @@ func TestF03_BucketTransientErrorThenSuccess(t *testing.T) {
 
 func TestF04_TokensmithPreservesExistingPVC(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster(testClusterAlpha)
-	cluster.Spec.Services.Tokensmith.Enabled = true
+	cp := newControlPlane(testClusterAlpha)
+	cp.Spec.Services.Tokensmith.Enabled = true
 
 	const preserveAnno = "e2e/test-preserved"
 	const preserveValue = "true"
@@ -319,7 +330,7 @@ func TestF04_TokensmithPreservesExistingPVC(t *testing.T) {
 	preExisting := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tokensmithPVCName,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			UID:       types.UID("pre-existing-uid-12345"),
 			Annotations: map[string]string{
 				preserveAnno: preserveValue,
@@ -336,20 +347,20 @@ func TestF04_TokensmithPreservesExistingPVC(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster, preExisting).
+		WithObjects(cp, preExisting).
 		Build()
 
 	r := &TokensmithReconciler{
 		Client:   c,
 		Recorder: record.NewFakeRecorder(10),
 	}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	got := &corev1.PersistentVolumeClaim{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      tokensmithPVCName,
 	}, got); err != nil {
 		t.Fatalf("expected PVC to exist after reconcile: %v", err)
@@ -392,15 +403,15 @@ func TestF05_ConcurrentReconciles_NoRaces(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			scheme := newScheme(t)
-			cluster := newCluster(name)
-			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+			cp := newControlPlane(name)
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 			v := vaultfake.NewClient()
 			r := &VaultReconciler{
 				Client:      c,
 				Recorder:    record.NewFakeRecorder(10),
 				VaultClient: v,
 			}
-			if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
 				t.Fatalf("reconcile %s: %v", name, err)
 			}
 		})
@@ -414,8 +425,8 @@ func TestF05_ConcurrentReconciles_NoRaces(t *testing.T) {
 
 func TestF06_NetworkProbeNoEligibleNodes(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster(testClusterAlpha)
-	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
+	cp := newControlPlane(testClusterAlpha)
+	cp.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:          true,
 		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
 		BMCNetwork:       &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
@@ -424,11 +435,11 @@ func TestF06_NetworkProbeNoEligibleNodes(t *testing.T) {
 	// Pre-create a probe DaemonSet showing pods are running, plus a couple
 	// of nodes lacking any probe-applied labels — i.e. the probe ran and
 	// found nothing.
-	dsName := "openchami-" + cluster.Spec.ClusterName + "-network-probe"
+	dsName := "openchami-" + cp.Spec.ClusterName + "-network-probe"
 	existingDS := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      dsName,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DaemonSetStatus{NumberReady: 2},
 	}
@@ -439,14 +450,14 @@ func TestF06_NetworkProbeNoEligibleNodes(t *testing.T) {
 	nodeC := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "fault-node-c"}}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.DaemonSet{}).
 		WithObjects(existingDS, nodeA, nodeC).
 		Build()
 
 	rec := record.NewFakeRecorder(10)
 	r := &NetworkProbeReconciler{Client: c, Recorder: rec}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -454,7 +465,7 @@ func TestF06_NetworkProbeNoEligibleNodes(t *testing.T) {
 		t.Errorf("expected positive RequeueAfter when no eligible nodes, got %v", res.RequeueAfter)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionNetworkProbeReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkProbeReady)
 	if cond == nil {
 		t.Fatalf("expected NetworkProbeReady condition to be set, got none")
 	}
@@ -472,18 +483,18 @@ func TestF06_NetworkProbeNoEligibleNodes(t *testing.T) {
 	}
 
 	// Status should reflect the empty probe result.
-	if cluster.Status.NetworkProbe == nil {
+	if cp.Status.NetworkProbe == nil {
 		t.Fatalf("expected status.networkProbe to be populated, got nil")
 	}
-	if len(cluster.Status.NetworkProbe.NodesWithProvisionAccess) != 0 {
+	if len(cp.Status.NetworkProbe.NodesWithProvisionAccess) != 0 {
 		t.Errorf("expected empty NodesWithProvisionAccess, got %+v",
-			cluster.Status.NetworkProbe.NodesWithProvisionAccess)
+			cp.Status.NetworkProbe.NodesWithProvisionAccess)
 	}
-	if len(cluster.Status.NetworkProbe.NodesWithBMCAccess) != 0 {
+	if len(cp.Status.NetworkProbe.NodesWithBMCAccess) != 0 {
 		t.Errorf("expected empty NodesWithBMCAccess, got %+v",
-			cluster.Status.NetworkProbe.NodesWithBMCAccess)
+			cp.Status.NetworkProbe.NodesWithBMCAccess)
 	}
-	if cluster.Status.NetworkProbe.ProbeReady {
+	if cp.Status.NetworkProbe.ProbeReady {
 		t.Errorf("expected probeReady=false, got true")
 	}
 }

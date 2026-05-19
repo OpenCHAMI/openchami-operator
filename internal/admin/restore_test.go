@@ -52,7 +52,7 @@ func restoreWriteBackupFile(t *testing.T, clusterName string) string {
 	dir := t.TempDir()
 	yamlBytes := []byte("" +
 		"apiVersion: openchami.openchami.org/v1alpha1\n" +
-		"kind: OpenCHAMICluster\n" +
+		"kind: OpenCHAMIControlPlane\n" +
 		"metadata:\n" +
 		"  name: " + clusterName + "\n" +
 		"  namespace: default\n" +
@@ -79,7 +79,7 @@ func restoreWriteEmptyBackup(t *testing.T) string {
 	dir := t.TempDir()
 	yamlBytes := []byte("" +
 		"apiVersion: openchami.openchami.org/v1alpha1\n" +
-		"kind: OpenCHAMICluster\n" +
+		"kind: OpenCHAMIControlPlane\n" +
 		"metadata:\n" +
 		"  name: orphan\n" +
 		"spec:\n" +
@@ -119,12 +119,12 @@ func TestRestore_DryRunPrintsCRYAML(t *testing.T) {
 	if !strings.Contains(got, "clusterName: "+restoreTestClusterFoo) {
 		t.Errorf("dry-run stdout should contain the cluster YAML, got:\n%s", got)
 	}
-	if !strings.Contains(got, "kind: OpenCHAMICluster") {
-		t.Errorf("dry-run stdout should contain kind: OpenCHAMICluster, got:\n%s", got)
+	if !strings.Contains(got, "kind: OpenCHAMIControlPlane") {
+		t.Errorf("dry-run stdout should contain kind: OpenCHAMIControlPlane, got:\n%s", got)
 	}
 
 	// Dry-run must not have created the CR in the fake client.
-	out := &openchamiv1alpha1.OpenCHAMICluster{}
+	out := &openchamiv1alpha1.OpenCHAMIControlPlane{}
 	err := c.Get(context.Background(),
 		types.NamespacedName{Name: restoreTestClusterFoo, Namespace: restoreTestNamespaceNS}, out)
 	if err == nil {
@@ -185,7 +185,7 @@ func TestRestore_ForceProceedsWhenNamespaceExists(t *testing.T) {
 	}
 
 	// CR should have been server-side applied.
-	out := &openchamiv1alpha1.OpenCHAMICluster{}
+	out := &openchamiv1alpha1.OpenCHAMIControlPlane{}
 	if err := c.Get(context.Background(),
 		types.NamespacedName{Name: restoreTestClusterFoo, Namespace: restoreTestNamespaceNS}, out); err != nil {
 		t.Fatalf("expected CR to be applied with --force, get err: %v", err)
@@ -210,7 +210,7 @@ func TestRestore_HappyPath(t *testing.T) {
 		t.Fatalf("happy-path restore failed: %v", err)
 	}
 
-	out := &openchamiv1alpha1.OpenCHAMICluster{}
+	out := &openchamiv1alpha1.OpenCHAMIControlPlane{}
 	if err := c.Get(context.Background(),
 		types.NamespacedName{Name: restoreTestClusterFoo, Namespace: restoreTestNamespaceNS}, out); err != nil {
 		t.Fatalf("expected CR to exist post-restore: %v", err)

@@ -29,10 +29,10 @@ import (
 // newTestCluster returns a cluster with all four status-tracked services
 // enabled so detectServiceRegressions and the all-services-ready check have
 // something to inspect.
-func newTestCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
-	c := &openchamiv1alpha1.OpenCHAMICluster{
+func newTestCluster(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
+	c := &openchamiv1alpha1.OpenCHAMIControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
-		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
 			ClusterName: name,
 			Domain:      name + ".test.local",
 		},
@@ -46,7 +46,7 @@ func newTestCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
 
 // allServicesReady marks every enabled service as Ready in the cluster
 // status, mirroring the post-reconcile state the controller would produce.
-func allServicesReady(c *openchamiv1alpha1.OpenCHAMICluster) {
+func allServicesReady(c *openchamiv1alpha1.OpenCHAMIControlPlane) {
 	c.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{
 		reconcilers.ServiceSMD:             {Ready: true, Endpoint: "http://smd"},
 		reconcilers.ServiceTokensmith:      {Ready: true, Endpoint: "http://tokensmith"},
@@ -56,7 +56,7 @@ func allServicesReady(c *openchamiv1alpha1.OpenCHAMICluster) {
 }
 
 // addCondition is a small helper to set a single condition on a cluster.
-func addCondition(c *openchamiv1alpha1.OpenCHAMICluster, t string, status metav1.ConditionStatus, reason string) {
+func addCondition(c *openchamiv1alpha1.OpenCHAMIControlPlane, t string, status metav1.ConditionStatus, reason string) {
 	apimeta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
 		Type:               t,
 		Status:             status,
@@ -68,7 +68,7 @@ func addCondition(c *openchamiv1alpha1.OpenCHAMICluster, t string, status metav1
 
 // addAllConditionsTrue stamps every condition the reporter looks at as True
 // so the happy path can flip a single one to False per test.
-func addAllConditionsTrue(c *openchamiv1alpha1.OpenCHAMICluster) {
+func addAllConditionsTrue(c *openchamiv1alpha1.OpenCHAMIControlPlane) {
 	conds := []string{
 		conditions.ConditionReconcileActive,
 		conditions.ConditionNamespaceReady,

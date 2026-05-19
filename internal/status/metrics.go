@@ -123,11 +123,11 @@ var (
 //
 // The reconcile-duration histogram is updated separately by ObserveReconcile;
 // histograms accumulate observations and are not "set" each pass.
-func (r *Reporter) UpdateMetrics(cluster *openchamiv1alpha1.OpenCHAMICluster) {
-	name := cluster.Spec.ClusterName
+func (r *Reporter) UpdateMetrics(cp *openchamiv1alpha1.OpenCHAMIControlPlane) {
+	name := cp.Spec.ClusterName
 
 	// Ready gauge.
-	if cluster.Status.Phase == openchamiv1alpha1.PhaseReady {
+	if cp.Status.Phase == openchamiv1alpha1.PhaseReady {
 		clusterReady.WithLabelValues(name).Set(1)
 	} else {
 		clusterReady.WithLabelValues(name).Set(0)
@@ -138,14 +138,14 @@ func (r *Reporter) UpdateMetrics(cluster *openchamiv1alpha1.OpenCHAMICluster) {
 	// transitions.
 	for _, p := range allPhases {
 		v := 0.0
-		if cluster.Status.Phase == p {
+		if cp.Status.Phase == p {
 			v = 1.0
 		}
 		clusterPhase.WithLabelValues(name, string(p)).Set(v)
 	}
 
 	// Per-service readiness.
-	for svc, st := range cluster.Status.Services {
+	for svc, st := range cp.Status.Services {
 		v := 0.0
 		if st.Ready {
 			v = 1.0
@@ -156,7 +156,7 @@ func (r *Reporter) UpdateMetrics(cluster *openchamiv1alpha1.OpenCHAMICluster) {
 	// Vault reachable: derived from ConditionVaultConfigured=True.
 	vaultV := 0.0
 	if apimeta.IsStatusConditionPresentAndEqual(
-		cluster.Status.Conditions,
+		cp.Status.Conditions,
 		conditions.ConditionVaultConfigured,
 		metav1.ConditionTrue,
 	) {
@@ -167,8 +167,8 @@ func (r *Reporter) UpdateMetrics(cluster *openchamiv1alpha1.OpenCHAMICluster) {
 	// Certificate expiry: parse status.CertExpiryTime (RFC3339); 0 when
 	// missing or unparseable so dashboards can detect the absence.
 	expiry := 0.0
-	if cluster.Status.CertExpiryTime != "" {
-		if t, err := time.Parse(time.RFC3339, cluster.Status.CertExpiryTime); err == nil {
+	if cp.Status.CertExpiryTime != "" {
+		if t, err := time.Parse(time.RFC3339, cp.Status.CertExpiryTime); err == nil {
 			expiry = float64(t.Unix())
 		}
 	}
@@ -180,9 +180,9 @@ func (r *Reporter) UpdateMetrics(cluster *openchamiv1alpha1.OpenCHAMICluster) {
 	// provision-passed nodes is the right proxy for "DHCP nodes".
 	provision := 0
 	bmc := 0
-	if cluster.Status.NetworkProbe != nil {
-		provision = len(cluster.Status.NetworkProbe.NodesWithProvisionAccess)
-		bmc = len(cluster.Status.NetworkProbe.NodesWithBMCAccess)
+	if cp.Status.NetworkProbe != nil {
+		provision = len(cp.Status.NetworkProbe.NodesWithProvisionAccess)
+		bmc = len(cp.Status.NetworkProbe.NodesWithBMCAccess)
 	}
 	clusterDHCPNodes.WithLabelValues(name).Set(float64(provision))
 	clusterProbeNodesProvision.WithLabelValues(name).Set(float64(provision))

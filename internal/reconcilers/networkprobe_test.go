@@ -28,12 +28,12 @@ const alphaProbeDS = "openchami-alpha-network-probe"
 
 func TestNetworkProbeReconciler_DisabledTriviallyReady(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe.Enabled = false
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe.Enabled = false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &NetworkProbeReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -43,27 +43,27 @@ func TestNetworkProbeReconciler_DisabledTriviallyReady(t *testing.T) {
 
 	ds := &appsv1.DaemonSet{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      alphaProbeDS,
 	}, ds)
 	if !apierrors.IsNotFound(getErr) {
 		t.Errorf("expected probe DaemonSet to be absent when probe disabled, got err=%v", getErr)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionNetworkProbeReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkProbeReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected NetworkProbeReady=True/Ready, got %+v", cond)
 	}
-	if cluster.Status.NetworkProbe != nil {
+	if cp.Status.NetworkProbe != nil {
 		t.Errorf("expected status.networkProbe to be cleared when disabled, got %+v",
-			cluster.Status.NetworkProbe)
+			cp.Status.NetworkProbe)
 	}
 }
 
 func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:         true,
 		IntervalSeconds: 60,
 		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{
@@ -76,16 +76,16 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 			Subnet: testBMCSubnet,
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &NetworkProbeReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	ds := &appsv1.DaemonSet{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      alphaProbeDS,
 	}, ds); err != nil {
 		t.Fatalf("getting probe DaemonSet: %v", err)
@@ -111,8 +111,9 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 		t.Fatalf("expected 1 container, got %d", len(ds.Spec.Template.Spec.Containers))
 	}
 	container := ds.Spec.Template.Spec.Containers[0]
-	if container.Image != defaultNetworkProbeImage {
-		t.Errorf("expected image=%q, got %q", defaultNetworkProbeImage, container.Image)
+	wantImage, _ := ResolveImage(cp, ServiceNetworkProbe)
+	if container.Image != wantImage {
+		t.Errorf("expected image=%q, got %q", wantImage, container.Image)
 	}
 	if len(container.Args) != 1 || container.Args[0] != testProbeContainer {
 		t.Errorf("expected args=[probe], got %+v", container.Args)
@@ -153,8 +154,8 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 
 func TestNetworkProbeReconciler_NoEligibleNodes(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:          true,
 		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
 		BMCNetwork:       &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
@@ -165,21 +166,21 @@ func TestNetworkProbeReconciler_NoEligibleNodes(t *testing.T) {
 	existingDS := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      alphaProbeDS,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DaemonSetStatus{NumberReady: 2},
 	}
 	plainNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n0"}}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.DaemonSet{}).
 		WithObjects(existingDS, plainNode).
 		Build()
 
 	rec := record.NewFakeRecorder(10)
 	r := &NetworkProbeReconciler{Client: c, Recorder: rec}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestNetworkProbeReconciler_NoEligibleNodes(t *testing.T) {
 		t.Errorf("expected requeue when no eligible nodes, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionNetworkProbeReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkProbeReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonNoEligibleNodes {
 		t.Fatalf("expected NetworkProbeReady=False/NoEligibleNodes, got %+v", cond)
 	}
@@ -202,18 +203,18 @@ func TestNetworkProbeReconciler_NoEligibleNodes(t *testing.T) {
 		t.Errorf("expected an Event to be recorded")
 	}
 
-	if cluster.Status.NetworkProbe == nil {
+	if cp.Status.NetworkProbe == nil {
 		t.Fatalf("expected status.networkProbe to be set")
 	}
-	if cluster.Status.NetworkProbe.ProbeReady {
+	if cp.Status.NetworkProbe.ProbeReady {
 		t.Errorf("expected probeReady=false, got true")
 	}
 }
 
 func TestNetworkProbeReconciler_PopulatesProbeStatus(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe = openchamiv1alpha1.NetworkProbeSpec{
 		Enabled:          true,
 		ProvisionNetwork: &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet},
 		BMCNetwork:       &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet},
@@ -222,7 +223,7 @@ func TestNetworkProbeReconciler_PopulatesProbeStatus(t *testing.T) {
 	existingDS := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      alphaProbeDS,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DaemonSetStatus{NumberReady: 1},
 	}
@@ -246,13 +247,13 @@ func TestNetworkProbeReconciler_PopulatesProbeStatus(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.DaemonSet{}).
 		WithObjects(existingDS, eligible, provisionOnly).
 		Build()
 
 	r := &NetworkProbeReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -260,31 +261,31 @@ func TestNetworkProbeReconciler_PopulatesProbeStatus(t *testing.T) {
 		t.Errorf("expected no requeue when probe ready, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionNetworkProbeReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkProbeReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Fatalf("expected NetworkProbeReady=True, got %+v", cond)
 	}
 
-	if cluster.Status.NetworkProbe == nil {
+	if cp.Status.NetworkProbe == nil {
 		t.Fatalf("expected status.networkProbe to be set")
 	}
-	if !cluster.Status.NetworkProbe.ProbeReady {
+	if !cp.Status.NetworkProbe.ProbeReady {
 		t.Errorf("expected probeReady=true")
 	}
 	want := map[string]bool{testNodeAName: true, "node-b": true}
 	got := map[string]bool{}
-	for _, n := range cluster.Status.NetworkProbe.NodesWithProvisionAccess {
+	for _, n := range cp.Status.NetworkProbe.NodesWithProvisionAccess {
 		got[n] = true
 	}
 	for n := range want {
 		if !got[n] {
 			t.Errorf("expected node %q in NodesWithProvisionAccess, got %+v",
-				n, cluster.Status.NetworkProbe.NodesWithProvisionAccess)
+				n, cp.Status.NetworkProbe.NodesWithProvisionAccess)
 		}
 	}
-	if len(cluster.Status.NetworkProbe.NodesWithBMCAccess) != 1 ||
-		cluster.Status.NetworkProbe.NodesWithBMCAccess[0] != testNodeAName {
+	if len(cp.Status.NetworkProbe.NodesWithBMCAccess) != 1 ||
+		cp.Status.NetworkProbe.NodesWithBMCAccess[0] != testNodeAName {
 		t.Errorf("expected NodesWithBMCAccess=[node-a], got %+v",
-			cluster.Status.NetworkProbe.NodesWithBMCAccess)
+			cp.Status.NetworkProbe.NodesWithBMCAccess)
 	}
 }

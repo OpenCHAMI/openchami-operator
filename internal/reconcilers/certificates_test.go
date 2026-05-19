@@ -51,11 +51,11 @@ func makeTestCert(t *testing.T, notAfter time.Time) []byte {
 
 func TestCertificatesReconciler_AppliesCertificate(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &CertificatesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -65,17 +65,17 @@ func TestCertificatesReconciler_AppliesCertificate(t *testing.T) {
 
 	cert := &cmv1.Certificate{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
-		Name:      gatewayCertificateName(cluster),
+		Namespace: ControlPlaneNamespace(cp),
+		Name:      gatewayCertificateName(cp),
 	}, cert); err != nil {
 		t.Fatalf("expected Certificate to be applied: %v", err)
 	}
 
-	if got := cert.Spec.SecretName; got != GatewayTLSSecretName(cluster) {
-		t.Errorf("Certificate.SecretName=%q want=%q", got, GatewayTLSSecretName(cluster))
+	if got := cert.Spec.SecretName; got != GatewayTLSSecretName(cp) {
+		t.Errorf("Certificate.SecretName=%q want=%q", got, GatewayTLSSecretName(cp))
 	}
-	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != cluster.Spec.Domain {
-		t.Errorf("Certificate.DNSNames=%v want=[%s]", cert.Spec.DNSNames, cluster.Spec.Domain)
+	if len(cert.Spec.DNSNames) != 1 || cert.Spec.DNSNames[0] != cp.Spec.Domain {
+		t.Errorf("Certificate.DNSNames=%v want=[%s]", cert.Spec.DNSNames, cp.Spec.Domain)
 	}
 	if cert.Spec.Duration == nil || cert.Spec.Duration.Duration != 72*time.Hour {
 		t.Errorf("Certificate.Duration=%v want 72h", cert.Spec.Duration)
@@ -90,7 +90,7 @@ func TestCertificatesReconciler_AppliesCertificate(t *testing.T) {
 		t.Errorf("Certificate.IssuerRef.Name=%q want %q", cert.Spec.IssuerRef.Name, defaultTLSIssuer)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionCertificatesValid)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionCertificatesValid)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonAwaitingCertificate {
 		t.Fatalf("expected CertificatesValid=False/AwaitingCertificate, got %+v", cond)
 	}
@@ -98,13 +98,13 @@ func TestCertificatesReconciler_AppliesCertificate(t *testing.T) {
 
 func TestCertificatesReconciler_HappyPath(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
+	cp := newControlPlane("alpha")
 
 	notAfter := time.Now().Add(48 * time.Hour)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      GatewayTLSSecretName(cluster),
-			Namespace: ClusterNamespace(cluster),
+			Name:      GatewayTLSSecretName(cp),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Type: corev1.SecretTypeTLS,
 		Data: map[string][]byte{
@@ -112,23 +112,23 @@ func TestCertificatesReconciler_HappyPath(t *testing.T) {
 			corev1.TLSPrivateKeyKey: []byte("ignored-by-reconciler"),
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, secret).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, secret).Build()
 
 	rec := record.NewFakeRecorder(10)
 	r := &CertificatesReconciler{Client: c, Recorder: rec}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionCertificatesValid)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionCertificatesValid)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected CertificatesValid=True/Ready, got %+v", cond)
 	}
-	if cluster.Status.CertExpiryTime == "" {
+	if cp.Status.CertExpiryTime == "" {
 		t.Errorf("expected CertExpiryTime to be set")
 	}
-	if _, err := time.Parse(time.RFC3339, cluster.Status.CertExpiryTime); err != nil {
-		t.Errorf("CertExpiryTime %q not RFC3339: %v", cluster.Status.CertExpiryTime, err)
+	if _, err := time.Parse(time.RFC3339, cp.Status.CertExpiryTime); err != nil {
+		t.Errorf("CertExpiryTime %q not RFC3339: %v", cp.Status.CertExpiryTime, err)
 	}
 
 	// gap < 48h — expect Warning Event
@@ -144,28 +144,28 @@ func TestCertificatesReconciler_HappyPath(t *testing.T) {
 
 func TestCertificatesReconciler_ExpiryImminent(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
+	cp := newControlPlane("alpha")
 
 	notAfter := time.Now().Add(12 * time.Hour)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      GatewayTLSSecretName(cluster),
-			Namespace: ClusterNamespace(cluster),
+			Name:      GatewayTLSSecretName(cp),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Type: corev1.SecretTypeTLS,
 		Data: map[string][]byte{
 			corev1.TLSCertKey: makeTestCert(t, notAfter),
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, secret).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, secret).Build()
 
 	rec := record.NewFakeRecorder(10)
 	r := &CertificatesReconciler{Client: c, Recorder: rec}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionCertificatesValid)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionCertificatesValid)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonExpirationImminent {
 		t.Fatalf("expected CertificatesValid=False/ExpirationImminent, got %+v", cond)
 	}
@@ -182,27 +182,27 @@ func TestCertificatesReconciler_ExpiryImminent(t *testing.T) {
 
 func TestCertificatesReconciler_Expired(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
+	cp := newControlPlane("alpha")
 
 	notAfter := time.Now().Add(-1 * time.Hour)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      GatewayTLSSecretName(cluster),
-			Namespace: ClusterNamespace(cluster),
+			Name:      GatewayTLSSecretName(cp),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Type: corev1.SecretTypeTLS,
 		Data: map[string][]byte{
 			corev1.TLSCertKey: makeTestCert(t, notAfter),
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, secret).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, secret).Build()
 
 	r := &CertificatesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionCertificatesValid)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionCertificatesValid)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonExpired {
 		t.Fatalf("expected CertificatesValid=False/Expired, got %+v", cond)
 	}
@@ -212,18 +212,18 @@ func TestCertificatesReconciler_TwoClustersIsolated(t *testing.T) {
 	scheme := newScheme(t)
 	rec := record.NewFakeRecorder(20)
 
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
-		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 		r := &CertificatesReconciler{Client: c, Recorder: rec}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 
 		cert := &cmv1.Certificate{}
 		if err := c.Get(context.Background(), types.NamespacedName{
-			Namespace: ClusterNamespace(cluster),
-			Name:      gatewayCertificateName(cluster),
+			Namespace: ControlPlaneNamespace(cp),
+			Name:      gatewayCertificateName(cp),
 		}, cert); err != nil {
 			t.Fatalf("getting cluster %q Certificate: %v", name, err)
 		}
@@ -240,20 +240,20 @@ func TestCertificatesReconciler_TwoClustersIsolated(t *testing.T) {
 
 func TestCertificatesReconciler_RespectsCustomSecretName(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Networking.TLS.SecretName = "custom-tls-secret"
-	cluster.Spec.Networking.TLS.Issuer = "custom-issuer"
+	cp := newControlPlane("alpha")
+	cp.Spec.Networking.TLS.SecretName = "custom-tls-secret"
+	cp.Spec.Networking.TLS.Issuer = "custom-issuer"
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &CertificatesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	cert := &cmv1.Certificate{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
-		Name:      gatewayCertificateName(cluster),
+		Namespace: ControlPlaneNamespace(cp),
+		Name:      gatewayCertificateName(cp),
 	}, cert); err != nil {
 		t.Fatalf("getting Certificate: %v", err)
 	}

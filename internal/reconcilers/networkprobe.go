@@ -29,11 +29,6 @@ import (
 const (
 	networkProbeRequeueAfter = 30 * time.Second
 
-	// defaultNetworkProbeImage is the operator's own image, run with the
-	// "probe" subcommand. The DaemonSet does not expose an image override;
-	// the probe binary ships with the operator release.
-	defaultNetworkProbeImage = "ghcr.io/openchami/openchami-operator:latest"
-
 	// kindDaemonSet is the Kind name for apps/v1 DaemonSet.
 	// Defined here (rather than in smd.go) because it is first used in
 	// Phase 6; reused by coredhcp.go.
@@ -76,25 +71,25 @@ type NetworkProbeReconciler struct {
 
 // Reconcile applies the probe DaemonSet (if probing is enabled), reads back
 // node labels written by the probe binary, and sets ConditionNetworkProbeReady.
-func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "networkprobe")
+func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "networkprobe")
 
-	if !cluster.Spec.NetworkProbe.Enabled {
+	if !cp.Spec.NetworkProbe.Enabled {
 		log.Info("network probe disabled, manual nodeSelectors in use")
 		// Trivially satisfy the condition so downstream sub-reconcilers
 		// (CoreDHCP, Magellan) don't gate on a probe that isn't running.
-		cluster.Status.NetworkProbe = nil
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		cp.Status.NetworkProbe = nil
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkProbeReady,
 			Status:             metav1.ConditionTrue,
 			Reason:             conditions.ReasonReady,
 			Message:            "probe disabled, manual nodeSelectors in use",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, nil
 	}
 
-	ds := r.buildDaemonSet(cluster)
+	ds := r.buildDaemonSet(cp)
 	dsLog := logging.EnrichWithResource(log, kindDaemonSet, ds.Name)
 	dsLog.Info("applying network-probe DaemonSet")
 	if err := r.Client.Patch(ctx, ds, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -113,12 +108,12 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *opencha
 	}
 
 	if numberReady == 0 {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkProbeReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonProvisioning,
 			Message:            "waiting for network-probe DaemonSet pods to become ready",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: networkProbeRequeueAfter}, nil
 	}
@@ -129,8 +124,8 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *opencha
 		return ctrl.Result{}, fmt.Errorf("listing nodes for probe status: %w", err)
 	}
 
-	provisionLabel := fmt.Sprintf(probeNetworkReadyLabelFmt, cluster.Spec.ClusterName, probeTypeProvision)
-	bmcLabel := fmt.Sprintf(probeNetworkReadyLabelFmt, cluster.Spec.ClusterName, probeTypeBMC)
+	provisionLabel := fmt.Sprintf(probeNetworkReadyLabelFmt, cp.Spec.ClusterName, probeTypeProvision)
+	bmcLabel := fmt.Sprintf(probeNetworkReadyLabelFmt, cp.Spec.ClusterName, probeTypeBMC)
 
 	provisionNodes := []string{}
 	bmcNodes := []string{}
@@ -146,14 +141,14 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *opencha
 	sort.Strings(provisionNodes)
 	sort.Strings(bmcNodes)
 
-	bmcConfigured := cluster.Spec.NetworkProbe.BMCNetwork != nil
-	provisionConfigured := cluster.Spec.NetworkProbe.ProvisionNetwork != nil
+	bmcConfigured := cp.Spec.NetworkProbe.BMCNetwork != nil
+	provisionConfigured := cp.Spec.NetworkProbe.ProvisionNetwork != nil
 
 	provisionOK := !provisionConfigured || len(provisionNodes) > 0
 	bmcOK := !bmcConfigured || len(bmcNodes) > 0
 	probeReady := provisionOK && bmcOK
 
-	cluster.Status.NetworkProbe = &openchamiv1alpha1.NetworkProbeStatus{
+	cp.Status.NetworkProbe = &openchamiv1alpha1.NetworkProbeStatus{
 		NodesWithProvisionAccess: provisionNodes,
 		NodesWithBMCAccess:       bmcNodes,
 		ProbeReady:               probeReady,
@@ -171,25 +166,25 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *opencha
 		default:
 			missing = "no eligible nodes"
 		}
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkProbeReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonNoEligibleNodes,
 			Message:            missing,
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster,
+		RecordConditionEvent(r.Recorder, cp,
 			corev1.EventTypeWarning, "NoEligibleNodes",
 			"network-probe DaemonSet running but no nodes meet probe requirements: "+missing)
 		return ctrl.Result{RequeueAfter: networkProbeRequeueAfter}, nil
 	}
 
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionNetworkProbeReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            fmt.Sprintf("provisionNodes=%d bmcNodes=%d", len(provisionNodes), len(bmcNodes)),
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
@@ -197,18 +192,18 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cluster *opencha
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when the probe is disabled so callers
 // can iterate without nil checks.
-func (r *NetworkProbeReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	if !cluster.Spec.NetworkProbe.Enabled {
+func (r *NetworkProbeReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	if !cp.Spec.NetworkProbe.Enabled {
 		return []client.Object{}, nil
 	}
-	return []client.Object{r.buildDaemonSet(cluster)}, nil
+	return []client.Object{r.buildDaemonSet(cp)}, nil
 }
 
 // networkProbePodLabels returns the canonical label set for probe pods.
-func networkProbePodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
+func networkProbePodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceNetworkProbe,
-		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 		labelManagedBy: managedByValue,
 	}
 }
@@ -244,30 +239,31 @@ func targetEnvVars(prefix string, t *openchamiv1alpha1.NetworkProbeTarget) []cor
 	}
 }
 
-func (r *NetworkProbeReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
-	labels := networkProbePodLabels(cluster)
+func (r *NetworkProbeReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.DaemonSet {
+	labels := networkProbePodLabels(cp)
 	tmpVol, tmpMount := TmpVolume()
 
-	intervalSeconds := cluster.Spec.NetworkProbe.IntervalSeconds
+	intervalSeconds := cp.Spec.NetworkProbe.IntervalSeconds
 	if intervalSeconds == 0 {
 		intervalSeconds = 300
 	}
 
 	env := make([]corev1.EnvVar, 0, 11)
 	env = append(env,
-		corev1.EnvVar{Name: "PROBE_CLUSTER_NAME", Value: cluster.Spec.ClusterName},
+		corev1.EnvVar{Name: "PROBE_CLUSTER_NAME", Value: cp.Spec.ClusterName},
 		corev1.EnvVar{Name: "PROBE_INTERVAL_SECONDS", Value: strconv.FormatInt(int64(intervalSeconds), 10)},
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
 	)
-	env = append(env, targetEnvVars("PROVISION", cluster.Spec.NetworkProbe.ProvisionNetwork)...)
-	env = append(env, targetEnvVars("BMC", cluster.Spec.NetworkProbe.BMCNetwork)...)
+	env = append(env, targetEnvVars("PROVISION", cp.Spec.NetworkProbe.ProvisionNetwork)...)
+	env = append(env, targetEnvVars("BMC", cp.Spec.NetworkProbe.BMCNetwork)...)
 
 	hostNetwork := false
 
+	image, pullPolicy := ResolveImage(cp, ServiceNetworkProbe)
 	container := corev1.Container{
 		Name:            containerNameProbe,
-		Image:           defaultNetworkProbeImage,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		Args:            []string{containerNameProbe},
 		SecurityContext: CommonSecurityContext(),
 		Env:             env,
@@ -277,8 +273,8 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenC
 	return &appsv1.DaemonSet{
 		TypeMeta: metav1.TypeMeta{APIVersion: appsAPIVersion, Kind: kindDaemonSet},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "openchami-" + cluster.Spec.ClusterName + "-network-probe",
-			Namespace: ClusterNamespace(cluster),
+			Name:      "openchami-" + cp.Spec.ClusterName + "-network-probe",
+			Namespace: ControlPlaneNamespace(cp),
 			Labels:    labels,
 		},
 		Spec: appsv1.DaemonSetSpec{
@@ -287,6 +283,7 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenC
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: ServiceNetworkProbe,
+					EnableServiceLinks: DisableServiceLinks(),
 					PriorityClassName:  priorityClassSystemNodeCritical,
 					HostNetwork:        hostNetwork,
 					SecurityContext:    CommonPodSecurityContext(),

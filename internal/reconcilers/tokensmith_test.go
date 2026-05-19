@@ -21,20 +21,20 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
-func newTokensmithCluster() *openchamiv1alpha1.OpenCHAMICluster {
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.Tokensmith.Enabled = true
-	return cluster
+func newTokensmithCluster() *openchamiv1alpha1.OpenCHAMIControlPlane {
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.Tokensmith.Enabled = true
+	return cp
 }
 
 func TestTokensmithReconciler_DisabledSkips(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.Tokensmith.Enabled = false
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.Tokensmith.Enabled = false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestTokensmithReconciler_DisabledSkips(t *testing.T) {
 
 	dep := &appsv1.Deployment{}
 	err = c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceTokensmith,
 	}, dep)
 	if !apierrors.IsNotFound(err) {
@@ -54,15 +54,15 @@ func TestTokensmithReconciler_DisabledSkips(t *testing.T) {
 
 func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newTokensmithCluster()
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newTokensmithCluster()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	ns := ClusterNamespace(cluster)
+	ns := ControlPlaneNamespace(cp)
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: tokensmithPVCName}, pvc); err != nil {
@@ -103,7 +103,7 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/default") {
 		t.Errorf("expected OIDC_ISSUER_URL to contain vault issuer suffix, got %q", oidcIssuer)
 	}
-	wantSecret := SecretName(cluster, SuffixTokensmithOIDC)
+	wantSecret := SecretName(cp, SuffixTokensmithOIDC)
 	if oidcSecretRefName != wantSecret || oidcSecretRefKey != tokensmithOIDCClientSecretKey {
 		t.Errorf("expected OIDC_CLIENT_SECRET to reference Secret %q key %q, got %q/%q",
 			wantSecret, tokensmithOIDCClientSecretKey, oidcSecretRefName, oidcSecretRefKey)
@@ -122,21 +122,21 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 
 func TestTokensmithReconciler_ExternalOIDCRequiresURL(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newTokensmithCluster()
-	cluster.Spec.Services.Tokensmith.OIDCProvider = "external"
-	cluster.Spec.Services.Tokensmith.OIDCIssuerURL = ""
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newTokensmithCluster()
+	cp.Spec.Services.Tokensmith.OIDCProvider = "external"
+	cp.Spec.Services.Tokensmith.OIDCIssuerURL = ""
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	rec := record.NewFakeRecorder(10)
 	r := &TokensmithReconciler{Client: c, Recorder: rec}
-	_, err := r.Reconcile(context.Background(), cluster)
+	_, err := r.Reconcile(context.Background(), cp)
 	if err == nil {
 		t.Fatalf("expected error when oidcProvider=external without oidcIssuerURL")
 	}
 
 	dep := &appsv1.Deployment{}
 	gerr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceTokensmith,
 	}, dep)
 	if !apierrors.IsNotFound(gerr) {
@@ -155,19 +155,19 @@ func TestTokensmithReconciler_ExternalOIDCRequiresURL(t *testing.T) {
 
 func TestTokensmithReconciler_ExternalOIDCHappy(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newTokensmithCluster()
-	cluster.Spec.Services.Tokensmith.OIDCProvider = "external"
-	cluster.Spec.Services.Tokensmith.OIDCIssuerURL = "https://issuer.example/realm"
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newTokensmithCluster()
+	cp.Spec.Services.Tokensmith.OIDCProvider = "external"
+	cp.Spec.Services.Tokensmith.OIDCIssuerURL = "https://issuer.example/realm"
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	dep := &appsv1.Deployment{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceTokensmith,
 	}, dep); err != nil {
 		t.Fatalf("getting deployment: %v", err)
@@ -186,13 +186,13 @@ func TestTokensmithReconciler_ExternalOIDCHappy(t *testing.T) {
 
 func TestTokensmithReconciler_ReadyWhenAvailable(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newTokensmithCluster()
+	cp := newTokensmithCluster()
 
 	// Pre-create the Deployment with AvailableReplicas=1 so reconcile reads it back as ready.
 	existing := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceTokensmith,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DeploymentStatus{
 			AvailableReplicas: 1,
@@ -200,13 +200,13 @@ func TestTokensmithReconciler_ReadyWhenAvailable(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.Deployment{}).
 		WithObjects(existing).
 		Build()
 
 	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestTokensmithReconciler_ReadyWhenAvailable(t *testing.T) {
 		t.Errorf("expected no requeue once ready, got %+v", res)
 	}
 
-	st, ok := cluster.Status.Services[ServiceTokensmith]
+	st, ok := cp.Status.Services[ServiceTokensmith]
 	if !ok {
 		t.Fatalf("expected status.services[tokensmith] to be set")
 	}
@@ -227,11 +227,11 @@ func TestTokensmithReconciler_ReadyWhenAvailable(t *testing.T) {
 }
 
 func TestTokensmithReconciler_ReplicasAlwaysOne(t *testing.T) {
-	cluster := newTokensmithCluster()
-	cluster.Spec.Services.Tokensmith.Replicas = 5
+	cp := newTokensmithCluster()
+	cp.Spec.Services.Tokensmith.Replicas = 5
 
 	r := &TokensmithReconciler{}
-	dep := r.buildDeployment(cluster)
+	dep := r.buildDeployment(cp)
 	if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 1 {
 		t.Errorf("expected replicas=1 even when spec.replicas=5, got %v", dep.Spec.Replicas)
 	}

@@ -42,7 +42,7 @@ const (
 	lifecycleClusterPolling = 5 * time.Second
 
 	// lifecycleNamespaceTimeout is the upper bound on namespace teardown
-	// after the parent OpenCHAMICluster is deleted.
+	// after the parent OpenCHAMIControlPlane is deleted.
 	lifecycleNamespaceTimeout = 3 * time.Minute
 
 	// lifecycleConditionTimeout is the upper bound on condition transitions
@@ -67,7 +67,7 @@ const (
 	lifecycleConditionFalse = "False"
 )
 
-// lifecycleClusterYAML returns a minimal valid OpenCHAMICluster manifest.
+// lifecycleClusterYAML returns a minimal valid OpenCHAMIControlPlane manifest.
 // dhcpDiscriminator is appended to the CoreDHCP nodeSelector to force a
 // distinct selector per cluster (so two clusters don't collide on the
 // "DHCP node exclusivity" invariant).
@@ -80,7 +80,7 @@ func lifecycleClusterYAML(name, vaultAddr, dhcpDiscriminator, operatorChannel, p
 		operatorChannel = "stable"
 	}
 	return fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
-kind: OpenCHAMICluster
+kind: OpenCHAMIControlPlane
 metadata:
   name: %[1]s
 spec:
@@ -176,10 +176,10 @@ func lifecycleApplyYAMLExpectError(yaml string) (string, error) {
 // lifecycleDeleteCluster removes the cluster CR. Errors during delete are
 // reported but not fatal (the spec is responsible for asserting teardown).
 func lifecycleDeleteCluster(name string) {
-	cmd := exec.Command("kubectl", "delete", "openchamicluster", name, "--ignore-not-found", "--wait=false")
+	cmd := exec.Command("kubectl", "delete", "openchamicontrolplane", name, "--ignore-not-found", "--wait=false")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		_, _ = fmt.Fprintf(GinkgoWriter, "kubectl delete openchamicluster %s: %s\n", name, string(output))
+		_, _ = fmt.Fprintf(GinkgoWriter, "kubectl delete openchamicontrolplane %s: %s\n", name, string(output))
 	}
 }
 
@@ -187,7 +187,7 @@ func lifecycleDeleteCluster(name string) {
 // using a strategic merge patch.
 func lifecyclePatchVaultAddress(name, addr string) {
 	patch := fmt.Sprintf(`{"spec":{"platform":{"vault":{"address":%q}}}}`, addr)
-	cmd := exec.Command("kubectl", "patch", "openchamicluster", name, "--type=merge", "-p", patch)
+	cmd := exec.Command("kubectl", "patch", "openchamicontrolplane", name, "--type=merge", "-p", patch)
 	output, err := cmd.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), "kubectl patch failed: %s", string(output))
 }
@@ -196,7 +196,7 @@ func lifecyclePatchVaultAddress(name, addr string) {
 // and clears any PinnedVersion (E2E-09 recovery).
 func lifecycleClearVersionPin(name string) {
 	patch := `{"spec":{"operatorChannel":"stable","pinnedVersion":null}}`
-	cmd := exec.Command("kubectl", "patch", "openchamicluster", name, "--type=merge", "-p", patch)
+	cmd := exec.Command("kubectl", "patch", "openchamicontrolplane", name, "--type=merge", "-p", patch)
 	output, err := cmd.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), "kubectl patch failed: %s", string(output))
 }
@@ -205,7 +205,7 @@ func lifecycleClearVersionPin(name string) {
 // jsonpath. Returns "" when the cluster or condition is missing.
 func lifecycleConditionStatus(name, condType string) string {
 	jsonpath := fmt.Sprintf(`jsonpath={.status.conditions[?(@.type==%q)].status}`, condType)
-	cmd := exec.Command("kubectl", "get", "openchamicluster", name, "-o", jsonpath)
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane", name, "-o", jsonpath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
@@ -217,7 +217,7 @@ func lifecycleConditionStatus(name, condType string) string {
 // jsonpath. Returns "" when the cluster or condition is missing.
 func lifecycleConditionReason(name, condType string) string {
 	jsonpath := fmt.Sprintf(`jsonpath={.status.conditions[?(@.type==%q)].reason}`, condType)
-	cmd := exec.Command("kubectl", "get", "openchamicluster", name, "-o", jsonpath)
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane", name, "-o", jsonpath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
@@ -487,7 +487,7 @@ func lifecycleSkipIfNoRebuildScript(path string) {
 // lifecycleClusterManagedByVersion returns the cluster's
 // status.managedByVersion or "" if unset.
 func lifecycleClusterManagedByVersion(name string) string {
-	cmd := exec.Command("kubectl", "get", "openchamicluster", name,
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane", name,
 		"-o", "jsonpath={.status.managedByVersion}")
 	output, err := cmd.CombinedOutput()
 	if err != nil {

@@ -1,18 +1,18 @@
 # Architecture
 
-The operator manages an `OpenCHAMICluster` custom resource. Each instance produces a self-contained, namespace-isolated OpenCHAMI deployment.
+The operator manages an `OpenCHAMIControlPlane` custom resource. Each instance produces a self-contained, namespace-isolated OpenCHAMI deployment.
 
 ## Big picture
 
 ```
                  ┌──────────────────┐
-                 │ OpenCHAMICluster │  user-authored CR
+                 │ OpenCHAMIControlPlane │  user-authored CR
                  │      (CR)        │
                  └────────┬─────────┘
                           │ Reconcile
                           ▼
         ┌─────────────────────────────────────┐
-        │ OpenCHAMIClusterReconciler          │
+        │ OpenCHAMIControlPlaneReconciler          │
         │  (cmd/operator + internal/controller)│
         └─────────────────────────────────────┘
                           │
@@ -45,12 +45,12 @@ The operator manages an `OpenCHAMICluster` custom resource. Each instance produc
 
 ## Reconcile loop (one tick)
 
-`internal/controller/openchamicluster_controller.go::Reconcile`:
+`internal/controller/openchamicontrolplane_controller.go::Reconcile`:
 
-1. Fetch the `OpenCHAMICluster` (no-op on `IsNotFound`).
+1. Fetch the `OpenCHAMIControlPlane` (no-op on `IsNotFound`).
 2. Branch on deletion: `cluster.DeletionTimestamp != nil` → `reconcileDelete`, else continue.
 3. Add the `openchami.org/cluster-protection` finalizer if absent. Patch and return — the next reconcile picks up.
-4. Snapshot the current `*OpenCHAMICluster` so we can patch the diff.
+4. Snapshot the current `*OpenCHAMIControlPlane` so we can patch the diff.
 5. `cluster.Status.ObservedGeneration = cluster.Generation` and call `reconcileAll`.
 6. `r.Status().Patch(ctx, cluster, client.MergeFrom(orig))` — the status patch is the very last thing, regardless of `reconcileErr`.
 
@@ -91,8 +91,8 @@ If `cluster.Spec.OperatorChannel == "pinned"` and `cluster.Spec.PinnedVersion !=
 
 ```go
 type SubReconciler interface {
-    Reconcile(ctx context.Context, cluster *v1alpha1.OpenCHAMICluster) (ctrl.Result, error)
-    Describe(cluster *v1alpha1.OpenCHAMICluster) ([]client.Object, error)
+    Reconcile(ctx context.Context, cluster *v1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error)
+    Describe(cluster *v1alpha1.OpenCHAMIControlPlane) ([]client.Object, error)
 }
 ```
 
@@ -110,7 +110,7 @@ Implementation rules (enforced by `make validate-invariants`):
 
 ## Per-cluster namespace isolation
 
-Every resource for `OpenCHAMICluster foo` lives in `openchami-foo`. Nothing leaks across cluster boundaries (invariant 2). The Namespace reconciler is the first sub-reconciler and is the only place that creates the namespace.
+Every resource for `OpenCHAMIControlPlane foo` lives in `openchami-foo`. Nothing leaks across cluster boundaries (invariant 2). The Namespace reconciler is the first sub-reconciler and is the only place that creates the namespace.
 
 ## Vault path isolation
 

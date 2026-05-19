@@ -44,9 +44,9 @@ type RBACReconciler struct {
 	Recorder record.EventRecorder
 }
 
-func (r *RBACReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "rbac")
-	ns := ClusterNamespace(cluster)
+func (r *RBACReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "rbac")
+	ns := ControlPlaneNamespace(cp)
 
 	log.Info("reconciling service accounts")
 	for _, name := range serviceAccountNames {
@@ -58,20 +58,20 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alph
 	}
 
 	log.Info("reconciling operator-config-reader role")
-	role := r.buildConfigReaderRole(cluster)
+	role := r.buildConfigReaderRole(cp)
 	if err := r.Client.Patch(ctx, role, client.Apply, //nolint:staticcheck // SSA via Patch is the supported pattern
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling config-reader role: %w", err)
 	}
 
-	rb := r.buildConfigReaderRoleBinding(cluster)
+	rb := r.buildConfigReaderRoleBinding(cp)
 	if err := r.Client.Patch(ctx, rb, client.Apply, //nolint:staticcheck // SSA via Patch is the supported pattern
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling config-reader rolebinding: %w", err)
 	}
 
 	log.Info("reconciling network-probe cluster role")
-	cr := r.buildNetworkProbeClusterRole(cluster)
+	cr := r.buildNetworkProbeClusterRole(cp)
 	if err := r.Client.Patch(ctx, cr, client.Apply, //nolint:staticcheck // SSA via Patch is the supported pattern
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling network-probe clusterrole: %w", err)
@@ -80,16 +80,16 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alph
 	return ctrl.Result{}, nil
 }
 
-func (r *RBACReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	ns := ClusterNamespace(cluster)
+func (r *RBACReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	ns := ControlPlaneNamespace(cp)
 	objs := make([]client.Object, 0, len(serviceAccountNames)+3)
 	for _, name := range serviceAccountNames {
 		objs = append(objs, r.buildServiceAccount(ns, name))
 	}
 	objs = append(objs,
-		r.buildConfigReaderRole(cluster),
-		r.buildConfigReaderRoleBinding(cluster),
-		r.buildNetworkProbeClusterRole(cluster),
+		r.buildConfigReaderRole(cp),
+		r.buildConfigReaderRoleBinding(cp),
+		r.buildNetworkProbeClusterRole(cp),
 	)
 	return objs, nil
 }
@@ -107,8 +107,8 @@ func (r *RBACReconciler) buildServiceAccount(ns, name string) *corev1.ServiceAcc
 	}
 }
 
-func (r *RBACReconciler) buildConfigReaderRole(cluster *openchamiv1alpha1.OpenCHAMICluster) *rbacv1.Role {
-	ns := ClusterNamespace(cluster)
+func (r *RBACReconciler) buildConfigReaderRole(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *rbacv1.Role {
+	ns := ControlPlaneNamespace(cp)
 	return &rbacv1.Role{
 		TypeMeta: metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "Role"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -118,14 +118,14 @@ func (r *RBACReconciler) buildConfigReaderRole(cluster *openchamiv1alpha1.OpenCH
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups:     []string{""},
 			Resources:     []string{"configmaps"},
-			ResourceNames: []string{"openchami-" + cluster.Spec.ClusterName + "-topology"},
+			ResourceNames: []string{"openchami-" + cp.Spec.ClusterName + "-topology"},
 			Verbs:         []string{"get", "list"},
 		}},
 	}
 }
 
-func (r *RBACReconciler) buildConfigReaderRoleBinding(cluster *openchamiv1alpha1.OpenCHAMICluster) *rbacv1.RoleBinding {
-	ns := ClusterNamespace(cluster)
+func (r *RBACReconciler) buildConfigReaderRoleBinding(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *rbacv1.RoleBinding {
+	ns := ControlPlaneNamespace(cp)
 	return &rbacv1.RoleBinding{
 		TypeMeta: metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "RoleBinding"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -145,11 +145,11 @@ func (r *RBACReconciler) buildConfigReaderRoleBinding(cluster *openchamiv1alpha1
 	}
 }
 
-func (r *RBACReconciler) buildNetworkProbeClusterRole(cluster *openchamiv1alpha1.OpenCHAMICluster) *rbacv1.ClusterRole {
+func (r *RBACReconciler) buildNetworkProbeClusterRole(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		TypeMeta: metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "ClusterRole"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "openchami-" + cluster.Spec.ClusterName + "-network-probe",
+			Name: "openchami-" + cp.Spec.ClusterName + "-network-probe",
 		},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},

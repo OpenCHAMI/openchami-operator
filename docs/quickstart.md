@@ -25,7 +25,7 @@ make dev-up            # docker-compose Vault+LocalStack, kind cluster, prerequi
 1. Brings up `hack/local-dev/docker-compose.yaml` — Vault (dev mode, root token `dev-root-token`) and LocalStack S3 on `127.0.0.1:8200` and `127.0.0.1:4566`.
 2. Creates the kind cluster `openchami-dev`.
 3. Installs cert-manager, CloudNativePG, Vault Secrets Operator, Envoy Gateway via `make dev-install-prereqs`.
-4. Installs the `OpenCHAMICluster` CRD via `make install`.
+4. Installs the `OpenCHAMIControlPlane` CRD via `make install`.
 5. Runs `hack/local-dev/seed-vault.sh` to create the per-cluster KV paths and AppRole.
 
 After `make dev-up`, the cluster has the prereq CRDs and the OpenCHAMI CRD,
@@ -76,7 +76,7 @@ After **either** Path A or Path B is running:
 
 ```sh
 kubectl apply -f test/fixtures/minimal-cluster.yaml
-kubectl get openchamicluster testcluster -w
+kubectl get openchamicontrolplane testcluster -w
 ```
 
 You should see the `phase` walk through `Provisioning` → `Ready` (or `Degraded` if a prerequisite is missing — see [troubleshooting](troubleshooting.md)).

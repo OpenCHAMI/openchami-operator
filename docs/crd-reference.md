@@ -1,6 +1,6 @@
-# OpenCHAMICluster CRD reference
+# OpenCHAMIControlPlane CRD reference
 
-Group/version: `openchami.openchami.org/v1alpha1`. Kind: `OpenCHAMICluster`. Source of truth: `api/v1alpha1/openchamicluster_types.go`. Authoritative auto-generated form: `config/crd/bases/openchami.openchami.org_openchamiclusters.yaml`. This file is the human-readable summary.
+Group/version: `openchami.openchami.org/v1alpha1`. Kind: `OpenCHAMIControlPlane`. Source of truth: `api/v1alpha1/openchamicontrolplane_types.go`. Authoritative auto-generated form: `config/crd/bases/openchami.openchami.org_openchamicontrolplanes.yaml`. This file is the human-readable summary.
 
 ## Spec
 
@@ -231,4 +231,4 @@ Three fixtures ship with the repo:
 - `test/fixtures/full-cluster.yaml` — same shape with 3 DB replicas + backup enabled.
 - `test/fixtures/dual-cluster.yaml` — two clusters (`venado`, `frontier`) for concurrency testing.
 
-Apply any of them with `kubectl apply -f` and watch with `kubectl get openchamicluster -A -w`.
+Apply any of them with `kubectl apply -f` and watch with `kubectl get openchamicontrolplane -A -w`.

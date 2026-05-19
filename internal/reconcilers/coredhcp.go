@@ -28,11 +28,6 @@ import (
 const (
 	coreDHCPRequeueAfter = 30 * time.Second
 
-	// defaultCoreDHCPImage is the fallback container image for the CoreDHCP
-	// DaemonSet. Per Phase 13 the operator's ImageConfig will eventually
-	// resolve image overrides; until then this is the only source of truth.
-	defaultCoreDHCPImage = "ghcr.io/openchami/coredhcp:latest"
-
 	coreDHCPPort     int32 = 67
 	coreDHCPPortName       = "dhcp-server"
 
@@ -58,25 +53,25 @@ type CoreDHCPReconciler struct {
 // When the network probe is enabled but ConditionNetworkProbeReady is not
 // True, this reconciler defers and requeues; the DaemonSet is only applied
 // once the probe has identified eligible nodes.
-func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "coredhcp")
+func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "coredhcp")
 
-	if !cluster.Spec.Services.CoreDHCP.Enabled {
+	if !cp.Spec.Services.CoreDHCP.Enabled {
 		log.Info("coredhcp disabled, skipping")
 		return ctrl.Result{}, nil
 	}
 
 	// Probe gate: when probing is enabled, we must wait for the probe
 	// reconciler to report at least one eligible node before scheduling.
-	if cluster.Spec.NetworkProbe.Enabled &&
-		!apimeta.IsStatusConditionTrue(cluster.Status.Conditions, conditions.ConditionNetworkProbeReady) {
+	if cp.Spec.NetworkProbe.Enabled &&
+		!apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionNetworkProbeReady) {
 		log.Info("waiting for network probe before deploying coredhcp")
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionDHCPReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonWaitingForProbe,
 			Message:            "waiting for NetworkProbeReady before scheduling coredhcp",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: coreDHCPRequeueAfter}, nil
 	}
@@ -91,7 +86,7 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openchamiv1
 	// pods schedule with the volume already populated. SSA is idempotent
 	// either way, but ordering this first avoids one self-correcting
 	// requeue on the first reconcile.
-	cm, err := r.buildConfigMap(cluster)
+	cm, err := r.buildConfigMap(cp)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("rendering coredhcp config: %w", err)
 	}
@@ -102,7 +97,7 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openchamiv1
 		return ctrl.Result{}, fmt.Errorf("applying coredhcp ConfigMap: %w", err)
 	}
 
-	ds := r.buildDaemonSet(cluster)
+	ds := r.buildDaemonSet(cp)
 	dsLog := logging.EnrichWithResource(log, kindDaemonSet, ds.Name)
 	dsLog.Info("applying coredhcp DaemonSet")
 	if err := r.Client.Patch(ctx, ds, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -123,43 +118,43 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cluster *openchamiv1
 	// TODO(phase11): expose CoreDHCP node list on cluster.Status (no field yet).
 
 	if numberReady == 0 {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionDHCPReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonProvisioning,
 			Message:            "waiting for coredhcp DaemonSet pods to become ready",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: coreDHCPRequeueAfter}, nil
 	}
 
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionDHCPReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            fmt.Sprintf("coredhcp DaemonSet ready (numberReady=%d)", numberReady),
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when CoreDHCP is disabled.
-func (r *CoreDHCPReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	if !cluster.Spec.Services.CoreDHCP.Enabled {
+func (r *CoreDHCPReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	if !cp.Spec.Services.CoreDHCP.Enabled {
 		return []client.Object{}, nil
 	}
-	cm, err := r.buildConfigMap(cluster)
+	cm, err := r.buildConfigMap(cp)
 	if err != nil {
 		return nil, err
 	}
-	return []client.Object{cm, r.buildDaemonSet(cluster)}, nil
+	return []client.Object{cm, r.buildDaemonSet(cp)}, nil
 }
 
 // buildConfigMap wraps the rendered coredhcp YAML in a ConfigMap suitable
 // for SSA. Lives in the cluster namespace and is mounted into the DS.
-func (r *CoreDHCPReconciler) buildConfigMap(cluster *openchamiv1alpha1.OpenCHAMICluster) (*corev1.ConfigMap, error) {
-	yaml, err := renderCoreDHCPConfig(cluster)
+func (r *CoreDHCPReconciler) buildConfigMap(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (*corev1.ConfigMap, error) {
+	yaml, err := renderCoreDHCPConfig(cp)
 	if err != nil {
 		return nil, err
 	}
@@ -167,39 +162,19 @@ func (r *CoreDHCPReconciler) buildConfigMap(cluster *openchamiv1alpha1.OpenCHAMI
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindConfigMap},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceCoreDHCP + "-config",
-			Namespace: ClusterNamespace(cluster),
-			Labels:    coreDHCPPodLabels(cluster),
+			Namespace: ControlPlaneNamespace(cp),
+			Labels:    coreDHCPPodLabels(cp),
 		},
 		Data: map[string]string{coreDHCPConfigKey: yaml},
 	}, nil
 }
 
 // coreDHCPPodLabels returns the canonical label set for coredhcp pods.
-func coreDHCPPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
+func coreDHCPPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceCoreDHCP,
-		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 		labelManagedBy: managedByValue,
-	}
-}
-
-// coreDHCPImage resolves the container image, preferring the per-cluster
-// spec override and falling back to defaultCoreDHCPImage.
-func coreDHCPImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	img := cluster.Spec.Services.CoreDHCP.Image
-	if img == nil {
-		return defaultCoreDHCPImage
-	}
-	repo, tag := img.Repository, img.Tag
-	switch {
-	case repo == "" && tag == "":
-		return defaultCoreDHCPImage
-	case repo == "":
-		return "ghcr.io/openchami/coredhcp:" + tag
-	case tag == "":
-		return repo + ":latest"
-	default:
-		return repo + ":" + tag
 	}
 }
 
@@ -215,10 +190,10 @@ func dhcpSecurityContext() *corev1.SecurityContext {
 	return sc
 }
 
-func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
-	labels := coreDHCPPodLabels(cluster)
+func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.DaemonSet {
+	labels := coreDHCPPodLabels(cp)
 	tmpVol, tmpMount := TmpVolume()
-	dhcp := cluster.Spec.Services.CoreDHCP
+	dhcp := cp.Spec.Services.CoreDHCP
 
 	// LeaseRanges as JSON for the container to consume. Marshal failures fall
 	// back to "[]" — they cannot occur for the well-typed input but we guard
@@ -229,7 +204,7 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMI
 	}
 
 	env := []corev1.EnvVar{
-		{Name: "CLUSTER_NAME", Value: cluster.Spec.ClusterName},
+		{Name: "CLUSTER_NAME", Value: cp.Spec.ClusterName},
 		{Name: "LEASE_RANGES_JSON", Value: leaseRangesJSON},
 		{Name: "UNKNOWN_LEASE_DURATION", Value: dhcp.UnknownLeaseDuration},
 		{Name: "KNOWN_LEASE_DURATION", Value: dhcp.KnownLeaseDuration},
@@ -254,10 +229,11 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMI
 		ReadOnly:  true,
 	}
 
+	image, pullPolicy := ResolveImage(cp, ServiceCoreDHCP)
 	container := corev1.Container{
 		Name:            ServiceCoreDHCP,
-		Image:           coreDHCPImage(cluster),
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		SecurityContext: dhcpSecurityContext(),
 		// No explicit --config flag: the upstream image's ENTRYPOINT is
 		// `tini --` and prepending an arg makes tini try to exec the
@@ -283,7 +259,7 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMI
 		TypeMeta: metav1.TypeMeta{APIVersion: appsAPIVersion, Kind: kindDaemonSet},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceCoreDHCP,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Labels:    labels,
 		},
 		Spec: appsv1.DaemonSetSpec{
@@ -292,10 +268,11 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMI
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: ServiceCoreDHCP,
+					EnableServiceLinks: DisableServiceLinks(),
 					PriorityClassName:  priorityClassSystemNodeCritical,
 					HostNetwork:        true,
 					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
-					NodeSelector:       EffectiveNodeSelector(cluster, probeTypeProvision),
+					NodeSelector:       EffectiveNodeSelector(cp, probeTypeProvision),
 					Tolerations:        dhcp.Tolerations,
 					SecurityContext:    CommonPodSecurityContext(),
 					Containers:         []corev1.Container{container},

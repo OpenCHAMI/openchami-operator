@@ -89,7 +89,7 @@ fi
 # string literals — not type names like TokensmithSpec or comments.
 echo "Checking: no credential literals in CRD types..."
 hits=$(grep -rni "password\|credential\|apikey\|api_key\|bearer" \
-        api/v1alpha1/openchamicluster_types.go 2>/dev/null \
+        api/v1alpha1/openchamicontrolplane_types.go 2>/dev/null \
     | grep -v "SecretRef\|SecretName\|secretName" \
     | strip_comments_and_blanks || true)
 if [ -n "$hits" ]; then

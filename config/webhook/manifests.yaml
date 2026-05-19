@@ -10,9 +10,9 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-openchami-openchami-org-v1alpha1-openchamicluster
+      path: /mutate-openchami-openchami-org-v1alpha1-openchamicontrolplane
   failurePolicy: Fail
-  name: mopenchamicluster.kb.io
+  name: mopenchamicontrolplane.kb.io
   rules:
   - apiGroups:
     - openchami.openchami.org
@@ -22,7 +22,7 @@ webhooks:
     - CREATE
     - UPDATE
     resources:
-    - openchamiclusters
+    - openchamicontrolplanes
   sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -36,9 +36,9 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-openchami-openchami-org-v1alpha1-openchamicluster
+      path: /validate-openchami-openchami-org-v1alpha1-openchamicontrolplane
   failurePolicy: Fail
-  name: vopenchamicluster.kb.io
+  name: vopenchamicontrolplane.kb.io
   rules:
   - apiGroups:
     - openchami.openchami.org
@@ -48,5 +48,5 @@ webhooks:
     - CREATE
     - UPDATE
     resources:
-    - openchamiclusters
+    - openchamicontrolplanes
   sideEffects: None

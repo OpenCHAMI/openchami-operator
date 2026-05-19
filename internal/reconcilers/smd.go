@@ -27,14 +27,11 @@ import (
 const (
 	smdRequeueAfter = 30 * time.Second
 
-	// defaultSMDImage is the fallback container image when the spec does not
-	// override it. Phase 13 wires per-cluster image overrides via the operator
-	// ImageConfig; until then this constant is the only source of truth.
-	defaultSMDImage = "ghcr.io/openchami/smd:latest"
-
 	smdPort       int32 = 27779
 	smdPortName         = "http"
 	smdHealthPath       = "/hsm/v2/service/ready"
+
+	smdDBPassEnvName = "SMD_DBPASS"
 
 	// Common label/key strings extracted to constants to satisfy goconst.
 	labelAppName    = "app.kubernetes.io/name"
@@ -64,10 +61,10 @@ type SMDReconciler struct {
 
 // Reconcile applies the SMD Deployment, Service, and PDB. It records readiness
 // in cluster.Status.Services["smd"]. The aggregator owns ConditionServicesReady.
-func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "smd")
+func (r *SMDReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "smd")
 
-	if !ServiceDeployedInCluster(cluster, ServiceSMD) {
+	if !ServiceDeployedInCluster(cp, ServiceSMD) {
 		// Either SMD is disabled, or the site has supplied an external
 		// endpoint via spec.services.smd.externalEndpoint — in either case
 		// the operator must not produce in-cluster objects for it.
@@ -75,9 +72,9 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha
 		return ctrl.Result{}, nil
 	}
 
-	ns := ClusterNamespace(cluster)
+	ns := ControlPlaneNamespace(cp)
 
-	dep := r.buildDeployment(cluster)
+	dep := r.buildDeployment(cp)
 	depLog := logging.EnrichWithResource(log, "Deployment", dep.Name)
 	depLog.Info("applying smd deployment")
 	if err := r.Client.Patch(ctx, dep, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -85,7 +82,7 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha
 		return ctrl.Result{}, fmt.Errorf("applying smd deployment: %w", err)
 	}
 
-	svc := r.buildService(cluster)
+	svc := r.buildService(cp)
 	svcLog := logging.EnrichWithResource(log, "Service", svc.Name)
 	svcLog.Info("applying smd service")
 	if err := r.Client.Patch(ctx, svc, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -93,7 +90,7 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha
 		return ctrl.Result{}, fmt.Errorf("applying smd service: %w", err)
 	}
 
-	pdb := r.buildPDB(cluster)
+	pdb := r.buildPDB(cp)
 	pdbLog := logging.EnrichWithResource(log, "PodDisruptionBudget", pdb.Name)
 	pdbLog.Info("applying smd pdb")
 	if err := r.Client.Patch(ctx, pdb, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -119,10 +116,10 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha
 		msg = "smd deployment available"
 	}
 
-	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
+	if cp.Status.Services == nil {
+		cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
-	cluster.Status.Services[ServiceSMD] = openchamiv1alpha1.ServiceStatus{
+	cp.Status.Services[ServiceSMD] = openchamiv1alpha1.ServiceStatus{
 		Ready:    ready,
 		Endpoint: endpoint,
 		Message:  msg,
@@ -136,49 +133,27 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha
 
 // Describe returns the Kubernetes objects this reconciler would apply, in
 // apply order, without contacting any external service.
-func (r *SMDReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+func (r *SMDReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	return []client.Object{
-		r.buildDeployment(cluster),
-		r.buildService(cluster),
-		r.buildPDB(cluster),
+		r.buildDeployment(cp),
+		r.buildService(cp),
+		r.buildPDB(cp),
 	}, nil
 }
 
 // podLabels returns the canonical pod selector labels for the SMD Deployment.
-func smdPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
+func smdPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceSMD,
-		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 		labelManagedBy: managedByValue,
 	}
 }
 
-// smdImage resolves the container image for the SMD container, preferring the
-// per-cluster spec override, falling back to defaultSMDImage.
-func smdImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	img := cluster.Spec.Services.SMD.Image
-	if img == nil {
-		return defaultSMDImage
-	}
-	repo := img.Repository
-	tag := img.Tag
-	switch {
-	case repo == "" && tag == "":
-		return defaultSMDImage
-	case repo == "":
-		// Use default repo with overridden tag.
-		return "ghcr.io/openchami/smd:" + tag
-	case tag == "":
-		return repo + ":latest"
-	default:
-		return repo + ":" + tag
-	}
-}
-
-func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.Deployment {
-	ns := ClusterNamespace(cluster)
-	labels := smdPodLabels(cluster)
-	replicas := cluster.Spec.Services.SMD.Replicas
+func (r *SMDReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.Deployment {
+	ns := ControlPlaneNamespace(cp)
+	labels := smdPodLabels(cp)
+	replicas := cp.Spec.Services.SMD.Replicas
 	if replicas == 0 {
 		replicas = 2
 	}
@@ -188,14 +163,15 @@ func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMIClus
 	maxSurge := intstr.FromInt32(1)
 
 	dbHost := fmt.Sprintf("openchami-%s-postgres-rw.%s.svc.cluster.local",
-		cluster.Spec.ClusterName, ns)
-	jwksURL := ServiceURL(cluster, ServiceTokensmith) + "/.well-known/jwks.json"
-	dbCredsSecret := SecretName(cluster, SuffixDBCredentials)
+		cp.Spec.ClusterName, ns)
+	jwksURL := ServiceURL(cp, ServiceTokensmith) + "/.well-known/jwks.json"
+	dbCredsSecret := SecretName(cp, SuffixSMDDB)
 
+	image, pullPolicy := ResolveImage(cp, ServiceSMD)
 	container := corev1.Container{
 		Name:            ServiceSMD,
-		Image:           smdImage(cluster),
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		SecurityContext: CommonSecurityContext(),
 		Ports: []corev1.ContainerPort{{
 			Name:          smdPortName,
@@ -208,11 +184,11 @@ func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMIClus
 			{Name: "SMD_DBNAME", Value: ServiceSMD},
 			{Name: "SMD_DBUSER", Value: ServiceSMD},
 			{
-				Name: "SMD_DBPASS",
+				Name: smdDBPassEnvName,
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{Name: dbCredsSecret},
-						Key:                  VaultKeySMDPassword,
+						Key:                  VaultKeyDBPassword,
 					},
 				},
 			},
@@ -250,8 +226,42 @@ func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMIClus
 			FailureThreshold: 3,
 		},
 	}
-	if cluster.Spec.Services.SMD.Resources != nil {
-		container.Resources = *cluster.Spec.Services.SMD.Resources
+	if cp.Spec.Services.SMD.Resources != nil {
+		container.Resources = *cp.Spec.Services.SMD.Resources
+	}
+
+	// SMD's image ships /smd-init at the root: a one-shot binary that
+	// applies SQL migrations from /persistent_migrations. Without it the
+	// `smd` database (created by CNPG bootstrap) is empty and the main
+	// SMD process loops on `Schema check failed: relation "system" does
+	// not exist`. Run it as an init container before SMD starts. It uses
+	// flag args, not env vars: -dbhost, -dbport, -dbname, -dbuser; the
+	// password comes from the same SMD_DBPASS env var SMD itself reads.
+	initContainer := corev1.Container{
+		Name:            ServiceSMD + "-init",
+		Image:           image, // same image as the main container
+		ImagePullPolicy: pullPolicy,
+		SecurityContext: CommonSecurityContext(),
+		Command:         []string{"/smd-init"},
+		Args: []string{
+			"-dbhost", dbHost,
+			"-dbport", "5432",
+			"-dbname", ServiceSMD,
+			"-dbuser", ServiceSMD,
+			"-migrationsdir", "/persistent_migrations",
+		},
+		Env: []corev1.EnvVar{
+			{
+				Name: smdDBPassEnvName,
+				ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: dbCredsSecret},
+						Key:                  VaultKeyDBPassword,
+					},
+				},
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{tmpMount},
 	}
 
 	return &appsv1.Deployment{
@@ -275,7 +285,9 @@ func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMIClus
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: ServiceSMD,
+					EnableServiceLinks: DisableServiceLinks(),
 					SecurityContext:    CommonPodSecurityContext(),
+					InitContainers:     []corev1.Container{initContainer},
 					Containers:         []corev1.Container{container},
 					Volumes:            []corev1.Volume{tmpVol},
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{
@@ -290,13 +302,13 @@ func (r *SMDReconciler) buildDeployment(cluster *openchamiv1alpha1.OpenCHAMIClus
 	}
 }
 
-func (r *SMDReconciler) buildService(cluster *openchamiv1alpha1.OpenCHAMICluster) *corev1.Service {
-	labels := smdPodLabels(cluster)
+func (r *SMDReconciler) buildService(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *corev1.Service {
+	labels := smdPodLabels(cp)
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindService},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceSMD,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Labels:    labels,
 		},
 		Spec: corev1.ServiceSpec{
@@ -312,14 +324,14 @@ func (r *SMDReconciler) buildService(cluster *openchamiv1alpha1.OpenCHAMICluster
 	}
 }
 
-func (r *SMDReconciler) buildPDB(cluster *openchamiv1alpha1.OpenCHAMICluster) *policyv1.PodDisruptionBudget {
-	labels := smdPodLabels(cluster)
+func (r *SMDReconciler) buildPDB(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *policyv1.PodDisruptionBudget {
+	labels := smdPodLabels(cp)
 	minAvailable := intstr.FromInt32(1)
 	return &policyv1.PodDisruptionBudget{
 		TypeMeta: metav1.TypeMeta{APIVersion: policyAPIVersion, Kind: kindPodDisruptionBudget},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceSMD,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Labels:    labels,
 		},
 		Spec: policyv1.PodDisruptionBudgetSpec{

@@ -1,0 +1,1317 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.0
+  name: openchamicontrolplanes.openchami.openchami.org
+spec:
+  group: openchami.openchami.org
+  names:
+    kind: OpenCHAMIControlPlane
+    listKind: OpenCHAMIControlPlaneList
+    plural: openchamicontrolplanes
+    shortNames:
+    - ocp
+    - ocps
+    singular: openchamicontrolplane
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.clusterName
+      name: Cluster
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.domain
+      name: Domain
+      type: string
+    - jsonPath: .status.gateway.url
+      name: URL
+      type: string
+    - jsonPath: .status.managedByVersion
+      name: Operator
+      type: string
+    - jsonPath: .status.certExpiryTime
+      name: CertExpiry
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: OpenCHAMIControlPlane is the Schema for the openchamicontrolplanes
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenCHAMIControlPlaneSpec defines the desired state of an
+              OpenCHAMI control plane.
+            properties:
+              clusterName:
+                description: |-
+                  ClusterName is the logical name of the HPC cluster this control plane
+                  serves. Used as the suffix in per-control-plane namespaces, Vault paths,
+                  and labels. Immutable after creation.
+                maxLength: 32
+                minLength: 1
+                pattern: ^[a-z][a-z0-9-]*$
+                type: string
+              database:
+                description: DatabaseSpec configures the CloudNativePG PostgreSQL
+                  cluster.
+                properties:
+                  backupEnabled:
+                    description: BackupEnabled enables CNPG WAL archiving to the object
+                      storage bucket.
+                    type: boolean
+                  instances:
+                    default: 3
+                    format: int32
+                    maximum: 5
+                    minimum: 1
+                    type: integer
+                  storageClass:
+                    type: string
+                  storageSize:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 20Gi
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
+              domain:
+                description: Domain is the external FQDN for the cluster gateway.
+                type: string
+              images:
+                description: |-
+                  ImagesSpec controls how the operator picks container image tags
+                  across the managed service set. The default — empty struct, with
+                  Stream defaulting to "release" — is the reproducible safe choice.
+
+                  Streams resolve **tags only**. The image repository for each
+                  service still comes from the per-service `image.repository`
+                  override (when set) or the operator-built-in default
+                  (`ghcr.io/openchami/<name>` for most services).
+                properties:
+                  pinned:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Pinned is required when Stream=pinned. Keys are the operator's
+                      canonical service names: smd, tokensmith, bootService,
+                      metadataService, coredhcp, magellan, funicular, networkProbe.
+                      Each value is a tag (e.g. "v1.2.3"), not a full image reference.
+                    type: object
+                  stream:
+                    default: release
+                    description: |-
+                      ImageStream selects which set of upstream tags the operator picks
+                      from when a per-service ImageSpec doesn't override the tag.
+
+                        - "release" — the curated set of tags shipped with this operator
+                          version (see SERVICES.md). Reproducible across reconciles, bumps
+                          only when the operator itself is upgraded. Default.
+                        - "bleedingEdge" — `:latest` for every service. Each pod restart
+                          re-pulls (PullPolicy=Always is applied automatically). Useful
+                          for development, never for production.
+                        - "pinned" — operator reads tags from Spec.Images.Pinned. Every
+                          enabled service must have an entry; validating webhook rejects
+                          a CR with gaps.
+
+                      In all streams, a per-service `image.tag` override still wins. The
+                      stream only controls the *default* tag used when no override is set.
+                    enum:
+                    - release
+                    - bleedingEdge
+                    - pinned
+                    type: string
+                type: object
+              logging:
+                description: |-
+                  LoggingSpec configures legendary-funicular log collection infrastructure.
+                  The operator provisions the S3 bucket and deploys the collector DaemonSet.
+                  Log schema and query patterns are defined by legendary-funicular and the
+                  services — not by the operator.
+                properties:
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled gates the funicular-collector DaemonSet. Defaults to false
+                      because the upstream `ghcr.io/openchami/funicular-collector` image
+                      is not yet published; deployments that flip this on must also set
+                      .image to point at a working collector. When false, LogCollectorReady
+                      reaches True with reason=Ready/message="logging disabled".
+                    type: boolean
+                  flushIntervalSeconds:
+                    default: 60
+                    description: FlushIntervalSeconds controls how often the collector
+                      writes Parquet.
+                    format: int32
+                    type: integer
+                  image:
+                    description: |-
+                      Image overrides the funicular-collector container image. Required in
+                      practice while no public default image exists; the reconciler will
+                      emit LogCollectorReady=False/Reason=ImageNotConfigured when Enabled
+                      is true and Image is unset.
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy describes a policy for if/when to
+                          pull a container image
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                      repository:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
+                  includeServices:
+                    description: |-
+                      IncludeServices limits collection to named services.
+                      Empty means collect from all services in the namespace.
+                    items:
+                      type: string
+                    type: array
+                  logBucket:
+                    description: |-
+                      LogBucket is the S3 bucket for collected logs.
+                      Defaults to "{clusterName}-logs".
+                    type: string
+                  retentionDays:
+                    default: 90
+                    description: RetentionDays is how long Parquet objects are kept.
+                    format: int32
+                    type: integer
+                type: object
+              networkProbe:
+                description: NetworkProbeSpec configures the network reachability
+                  probe DaemonSet.
+                properties:
+                  bmcNetwork:
+                    description: |-
+                      BMCNetwork describes the BMC network to probe.
+                      Required when Enabled=true and Magellan is enabled.
+                    properties:
+                      subnet:
+                        description: Subnet is the CIDR to check for a local route.
+                        type: string
+                      validateHost:
+                        description: ValidateHost is an IP/hostname to TCP-dial as
+                          a secondary reachability check.
+                        type: string
+                      validatePort:
+                        description: ValidatePort is the TCP port for the connectivity
+                          check.
+                        format: int32
+                        type: integer
+                      validateTimeout:
+                        description: ValidateTimeout is the dial timeout, e.g. "3s".
+                        type: string
+                    required:
+                    - subnet
+                    type: object
+                  enabled:
+                    default: false
+                    type: boolean
+                  image:
+                    description: |-
+                      Image overrides the network-probe container image. The probe runs
+                      the operator's own binary (with subcommand `probe`); the default
+                      is therefore the operator image itself.
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy describes a policy for if/when to
+                          pull a container image
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                      repository:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
+                  intervalSeconds:
+                    default: 300
+                    description: IntervalSeconds between successive probes on each
+                      node.
+                    format: int32
+                    type: integer
+                  provisionNetwork:
+                    description: |-
+                      ProvisionNetwork describes the provision/PXE network to probe.
+                      Required when Enabled=true and CoreDHCP is enabled.
+                    properties:
+                      subnet:
+                        description: Subnet is the CIDR to check for a local route.
+                        type: string
+                      validateHost:
+                        description: ValidateHost is an IP/hostname to TCP-dial as
+                          a secondary reachability check.
+                        type: string
+                      validatePort:
+                        description: ValidatePort is the TCP port for the connectivity
+                          check.
+                        format: int32
+                        type: integer
+                      validateTimeout:
+                        description: ValidateTimeout is the dial timeout, e.g. "3s".
+                        type: string
+                    required:
+                    - subnet
+                    type: object
+                type: object
+              networking:
+                description: NetworkingSpec configures the external gateway.
+                properties:
+                  gatewayClass:
+                    default: envoy
+                    type: string
+                  tls:
+                    description: TLSSpec configures TLS certificate management.
+                    properties:
+                      issuer:
+                        default: vault-pki-issuer
+                        type: string
+                      secretName:
+                        description: SecretName defaults to "{clusterName}-gateway-tls".
+                        type: string
+                    type: object
+                type: object
+              notes:
+                description: |-
+                  Notes is free-form CommonMark markdown describing this control plane:
+                  site context, contact, deployment history, known quirks. Surfaced
+                  verbatim by `ochami-admin describe` and untouched by any reconciler.
+                  Purely human-facing — no field on it is parsed or validated beyond
+                  the length cap.
+                maxLength: 8192
+                type: string
+              observability:
+                description: ObservabilitySpec configures observability integrations.
+                properties:
+                  prometheusOperator:
+                    description: |-
+                      PrometheusOperator enables ServiceMonitor creation.
+                      Requires prometheus-operator CRDs to be installed.
+                    type: boolean
+                type: object
+              operatorChannel:
+                default: stable
+                description: |-
+                  OperatorChannel controls reconcile behaviour.
+                  "stable" — always reconcile.
+                  "pinned" — only reconcile if PinnedVersion matches the running operator version.
+                enum:
+                - stable
+                - pinned
+                type: string
+              pinnedVersion:
+                description: PinnedVersion is the exact operator semver required when
+                  OperatorChannel=pinned.
+                type: string
+              platform:
+                description: PlatformSpec references the external infrastructure this
+                  cluster depends on.
+                properties:
+                  objectStorage:
+                    description: |-
+                      ObjectStorageSpec configures access to the VersityGW S3-compatible object store.
+                      VersityGW is never deployed by this operator.
+                    properties:
+                      bucket:
+                        description: Bucket for boot images. Defaults to "{clusterName}-boot-images".
+                        type: string
+                      endpoint:
+                        type: string
+                      tlsInsecure:
+                        description: TLSInsecure disables TLS certificate verification
+                          (dev/test only).
+                        type: boolean
+                    required:
+                    - endpoint
+                    type: object
+                  vault:
+                    description: |-
+                      VaultSpec configures access to the external Vault instance.
+                      Vault is never deployed by this operator.
+                    properties:
+                      address:
+                        type: string
+                      appRoleSecretRef:
+                        description: |-
+                          AppRoleSecretRef names a Secret containing role_id and secret_id.
+                          Required when AuthMethod is appRole.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      authMethod:
+                        default: kubernetes
+                        description: VaultAuthMethod selects how the operator authenticates
+                          to Vault.
+                        enum:
+                        - kubernetes
+                        - appRole
+                        type: string
+                      caBundleSecretRef:
+                        description: CABundleSecretRef names a Secret with key ca.crt
+                          for Vault TLS verification.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - address
+                    type: object
+                required:
+                - objectStorage
+                - vault
+                type: object
+              services:
+                description: ServicesSpec configures all operator-managed services.
+                properties:
+                  bootService:
+                    description: BootServiceSpec configures the boot-service.
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
+                      image:
+                        description: ImageSpec overrides the default container image
+                          for a service.
+                        properties:
+                          pullPolicy:
+                            description: PullPolicy describes a policy for if/when
+                              to pull a container image
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          repository:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      replicas:
+                        default: 2
+                        description: Replicas is ignored for DaemonSet and CronJob
+                          services.
+                        format: int32
+                        maximum: 10
+                        minimum: 1
+                        type: integer
+                      resources:
+                        description: ResourceRequirements describes the compute resource
+                          requirements.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                    type: object
+                  coreDHCP:
+                    description: CoreDHCPSpec configures the CoreDHCP DaemonSet.
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                      image:
+                        description: ImageSpec overrides the default container image
+                          for a service.
+                        properties:
+                          pullPolicy:
+                            description: PullPolicy describes a policy for if/when
+                              to pull a container image
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          repository:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      knownLeaseDuration:
+                        default: 1h
+                        type: string
+                      leaseRanges:
+                        description: |-
+                          LeaseRanges defines DHCP subnet ranges to serve.
+                          At least one range is required when Enabled=true (validated by admission webhook).
+                        items:
+                          description: DHCPLeaseRange defines a DHCP subnet range
+                            to serve.
+                          properties:
+                            end:
+                              type: string
+                            start:
+                              type: string
+                            subnet:
+                              type: string
+                          required:
+                          - end
+                          - start
+                          - subnet
+                          type: object
+                        type: array
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          NodeSelector is used when spec.networkProbe.enabled is false.
+                          When network probing is enabled this field is ignored; the operator
+                          generates the selector from probe-applied node labels.
+                          When probing is disabled this field is required.
+                        type: object
+                      resources:
+                        description: ResourceRequirements describes the compute resource
+                          requirements.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      tolerations:
+                        items:
+                          description: |-
+                            The pod this Toleration is attached to tolerates any taint that matches
+                            the triple <key,value,effect> using the matching operator <operator>.
+                          properties:
+                            effect:
+                              description: |-
+                                Effect indicates the taint effect to match. Empty means match all taint effects.
+                                When specified, allowed values are NoSchedule, PreferNoSchedule and NoExecute.
+                              type: string
+                            key:
+                              description: |-
+                                Key is the taint key that the toleration applies to. Empty means match all taint keys.
+                                If the key is empty, operator must be Exists; this combination means to match all values and all keys.
+                              type: string
+                            operator:
+                              description: |-
+                                Operator represents a key's relationship to the value.
+                                Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                Exists is equivalent to wildcard for value, so that a pod can
+                                tolerate all taints of a particular category.
+                                Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                              type: string
+                            tolerationSeconds:
+                              description: |-
+                                TolerationSeconds represents the period of time the toleration (which must be
+                                of effect NoExecute, otherwise this field is ignored) tolerates the taint. By default,
+                                it is not set, which means tolerate the taint forever (do not evict). Zero and
+                                negative values will be treated as 0 (evict immediately) by the system.
+                              format: int64
+                              type: integer
+                            value:
+                              description: |-
+                                Value is the taint value the toleration matches to.
+                                If the operator is Exists, the value should be empty, otherwise just a regular string.
+                              type: string
+                          type: object
+                        type: array
+                      unknownLeaseDuration:
+                        default: 5m
+                        type: string
+                    type: object
+                  magellan:
+                    description: MagellanSpec configures the Magellan BMC discovery
+                      CronJob.
+                    properties:
+                      bmcSubnet:
+                        description: |-
+                          BMCSubnet is the CIDR range to scan for BMC endpoints.
+                          Required when Enabled=true (validated by admission webhook).
+                        type: string
+                      concurrencyPolicy:
+                        default: Forbid
+                        description: |-
+                          ConcurrencyPolicy describes how the job will be handled.
+                          Only one of the following concurrent policies may be specified.
+                          If none of the following policies is specified, the default one
+                          is AllowConcurrent.
+                        enum:
+                        - Allow
+                        - Forbid
+                        - Replace
+                        type: string
+                      enabled:
+                        default: true
+                        type: boolean
+                      image:
+                        description: ImageSpec overrides the default container image
+                          for a service.
+                        properties:
+                          pullPolicy:
+                            description: PullPolicy describes a policy for if/when
+                              to pull a container image
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          repository:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: NodeSelector is used when spec.networkProbe.enabled
+                          is false.
+                        type: object
+                      resources:
+                        description: ResourceRequirements describes the compute resource
+                          requirements.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                      schedule:
+                        default: '*/30 * * * *'
+                        type: string
+                    type: object
+                  metadataService:
+                    description: MetadataServiceSpec configures the metadata (cloud-init)
+                      service.
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
+                      image:
+                        description: ImageSpec overrides the default container image
+                          for a service.
+                        properties:
+                          pullPolicy:
+                            description: PullPolicy describes a policy for if/when
+                              to pull a container image
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          repository:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      preserveClientIP:
+                        default: false
+                        description: |-
+                          PreserveClientIP exposes metadata-service as a NodePort Service with
+                          `externalTrafficPolicy: Local`, so the per-node source IP that
+                          cloud-init / metadata-service uses to identify the requesting node
+                          is preserved end-to-end. Default false: traffic flows through the
+                          Envoy Gateway and the operator-managed Service stays ClusterIP.
+
+                          Set this to true in deployments where compute nodes reach
+                          metadata-service directly over L2/L3 without a WireGuard tunnel
+                          (the kube-deploy default for cloud-init). Without it, kube-proxy
+                          SNATs the request to a node-network IP and metadata-service
+                          cannot recognise the caller.
+                        type: boolean
+                      replicas:
+                        default: 2
+                        description: Replicas is ignored for DaemonSet and CronJob
+                          services.
+                        format: int32
+                        maximum: 10
+                        minimum: 1
+                        type: integer
+                      resources:
+                        description: ResourceRequirements describes the compute resource
+                          requirements.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                    type: object
+                  smd:
+                    description: SMDSpec configures the SMD (State Management Database)
+                      service.
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
+                      image:
+                        description: ImageSpec overrides the default container image
+                          for a service.
+                        properties:
+                          pullPolicy:
+                            description: PullPolicy describes a policy for if/when
+                              to pull a container image
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          repository:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      replicas:
+                        default: 2
+                        description: Replicas is ignored for DaemonSet and CronJob
+                          services.
+                        format: int32
+                        maximum: 10
+                        minimum: 1
+                        type: integer
+                      resources:
+                        description: ResourceRequirements describes the compute resource
+                          requirements.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                    type: object
+                  tokensmith:
+                    description: TokensmithSpec configures the tokensmith OIDC token
+                      service.
+                    properties:
+                      enabled:
+                        default: true
+                        type: boolean
+                      externalEndpoint:
+                        description: |-
+                          ExternalEndpoint, when set, declares that the service is provided
+                          externally (e.g. by a shared platform deployment) rather than by the
+                          operator. Consumer services within this cluster will be wired to the
+                          supplied URL instead of the in-cluster Service DNS.
+
+                          Setting ExternalEndpoint requires Enabled=false; the validating
+                          webhook enforces this. The URL must be an http:// or https:// URL.
+
+                          Not all services support an external endpoint — DHCP is a layer-2/3
+                          concern and Magellan is a CronJob; both reject this field.
+                        type: string
+                      image:
+                        description: ImageSpec overrides the default container image
+                          for a service.
+                        properties:
+                          pullPolicy:
+                            description: PullPolicy describes a policy for if/when
+                              to pull a container image
+                            enum:
+                            - Always
+                            - Never
+                            - IfNotPresent
+                            type: string
+                          repository:
+                            type: string
+                          tag:
+                            type: string
+                        type: object
+                      oidcIssuerURL:
+                        description: OIDCIssuerURL is required when OIDCProvider is
+                          "external".
+                        type: string
+                      oidcProvider:
+                        default: vault
+                        description: |-
+                          OIDCProvider selects the upstream OIDC token source.
+                          "vault"    — use Vault's identity/oidc engine as the issuer.
+                          "external" — use an existing OIDC provider; OIDCIssuerURL required.
+                        enum:
+                        - vault
+                        - external
+                        type: string
+                      replicas:
+                        default: 2
+                        description: Replicas is ignored for DaemonSet and CronJob
+                          services.
+                        format: int32
+                        maximum: 10
+                        minimum: 1
+                        type: integer
+                      resources:
+                        description: ResourceRequirements describes the compute resource
+                          requirements.
+                        properties:
+                          claims:
+                            description: |-
+                              Claims lists the names of resources, defined in spec.resourceClaims,
+                              that are used by this container.
+
+                              This field depends on the
+                              DynamicResourceAllocation feature gate.
+
+                              This field is immutable. It can only be set for containers.
+                            items:
+                              description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                              properties:
+                                name:
+                                  description: |-
+                                    Name must match the name of one entry in pod.spec.resourceClaims of
+                                    the Pod where this field is used. It makes that resource available
+                                    inside a container.
+                                  type: string
+                                request:
+                                  description: |-
+                                    Request is the name chosen for a request in the referenced claim.
+                                    If empty, everything from the claim is made available, otherwise
+                                    only the result of this request.
+                                  type: string
+                              required:
+                              - name
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          limits:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Limits describes the maximum amount of compute resources allowed.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                          requests:
+                            additionalProperties:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            description: |-
+                              Requests describes the minimum amount of compute resources required.
+                              If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                              otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                              More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                            type: object
+                        type: object
+                    type: object
+                type: object
+            required:
+            - clusterName
+            - domain
+            - platform
+            type: object
+          status:
+            description: OpenCHAMIControlPlaneStatus defines the observed state of
+              OpenCHAMIControlPlane.
+            properties:
+              certExpiryTime:
+                description: CertExpiryTime is the RFC3339 timestamp of the soonest-expiring
+                  TLS certificate.
+                type: string
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              gateway:
+                description: |-
+                  Gateway reports the canonical https:// ingress URL and the
+                  per-service path map clients should use to reach operator-managed
+                  services. Populated once the Envoy Gateway resource reports
+                  Programmed=True; nil while still provisioning.
+                properties:
+                  routes:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Routes maps stable canonical keys to the HTTPRoute path prefix
+                      (or exact path, for the few exact-match routes tokensmith
+                      mounts at the origin root). The keys are stable across operator
+                      releases so consumers can rely on lookups by name.
+
+                      Currently exposed keys:
+
+                        - smd                    → SMD HSM API base prefix
+                        - boot-service           → boot-service iPXE/bootscript base prefix
+                        - metadata-service       → cloud-init metadata (public) prefix
+                        - metadata-service-admin → cloud-init admin prefix (JWT-gated)
+                        - tokensmith-jwks        → OIDC JWKS discovery path (exact)
+                        - tokensmith-token       → RFC 8693 token-exchange path (exact)
+                    type: object
+                  url:
+                    description: |-
+                      URL is the canonical https:// origin clients use to reach the
+                      operator-managed control plane. Hostname matches `spec.domain`;
+                      scheme is always https (the operator's HTTP listener
+                      301-redirects to HTTPS unconditionally).
+                    type: string
+                required:
+                - url
+                type: object
+              logBucket:
+                description: LogBucket is the resolved S3 bucket name for log collection.
+                type: string
+              managedByVersion:
+                description: ManagedByVersion is the operator semver that last reconciled
+                  this cluster.
+                type: string
+              namespace:
+                description: Namespace is the Kubernetes namespace created for this
+                  cluster.
+                type: string
+              networkProbe:
+                description: NetworkProbe reports probe state for each node.
+                properties:
+                  nodesWithBMCAccess:
+                    description: NodesWithBMCAccess lists node names where the BMC
+                      probe passes.
+                    items:
+                      type: string
+                    type: array
+                  nodesWithProvisionAccess:
+                    description: NodesWithProvisionAccess lists node names where the
+                      provision/PXE probe passes.
+                    items:
+                      type: string
+                    type: array
+                  probeReady:
+                    description: |-
+                      ProbeReady is true when the DaemonSet is running and at least one node
+                      passes each configured probe type.
+                    type: boolean
+                required:
+                - probeReady
+                type: object
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                description: ClusterPhase is the high-level lifecycle phase of an
+                  OpenCHAMIControlPlane.
+                type: string
+              services:
+                additionalProperties:
+                  description: ServiceStatus reports runtime state for a single operator-managed
+                    service.
+                  properties:
+                    endpoint:
+                      type: string
+                    message:
+                      type: string
+                    ready:
+                      type: boolean
+                  required:
+                  - ready
+                  type: object
+                description: Services reports per-service readiness and internal endpoint.
+                type: object
+              topologyVersion:
+                description: TopologyVersion is the SHA-256 of the current topology
+                  ConfigMap content.
+                type: string
+              vaultPathPrefix:
+                description: VaultPathPrefix is the Vault KV path prefix in use.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

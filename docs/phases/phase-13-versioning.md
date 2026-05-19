@@ -5,10 +5,10 @@ Verify the check at the top of `reconcileAll` exists and has a unit test.
 
 ## Unit test: version pin
 ```go
-// internal/controller/openchamicluster_controller_test.go
+// internal/controller/openchamicontrolplane_controller_test.go
 It("should not reconcile when cluster is pinned to a different version", func() {
-    cluster := &v1alpha1.OpenCHAMICluster{
-        Spec: v1alpha1.OpenCHAMIClusterSpec{
+    cluster := &v1alpha1.OpenCHAMIControlPlane{
+        Spec: v1alpha1.OpenCHAMIControlPlaneSpec{
             OperatorChannel: "pinned",
             PinnedVersion:   "0.1.0",
             // ...minimal valid spec...
@@ -42,10 +42,10 @@ None.
 
 ## Upgrade procedure
 1. Pin production clusters before upgrading:
-   kubectl patch openchamicluster <name> --type=merge \
+   kubectl patch openchamicontrolplane <name> --type=merge \
      -p '{"spec":{"operatorChannel":"pinned","pinnedVersion":"<current>"}}'
 2. Deploy new operator
-3. Validate staging clusters: kubectl get openchamicluster -A
+3. Validate staging clusters: kubectl get openchamicontrolplane -A
 4. Unpin production clusters one at a time
 5. Verify status.managedByVersion matches new version
 ```

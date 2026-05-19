@@ -12,7 +12,7 @@ If your change would violate any invariant, stop and either rework or open a dis
 
 ## Adding a sub-reconciler
 
-1. **Decide where it sits in the reconcile order.** The order is in `internal/controller/openchamicluster_controller.go::reconcileAll`. Insert your reconciler at the position that respects its dependencies.
+1. **Decide where it sits in the reconcile order.** The order is in `internal/controller/openchamicontrolplane_controller.go::reconcileAll`. Insert your reconciler at the position that respects its dependencies.
 2. **Pick a condition type.** Add it to `internal/conditions/types.go` (`ConditionFooReady`).
 3. **Pick reason constants.** Add them to `internal/conditions/reasons.go`. Each one needs a runbook page; see [runbook-conventions](runbook-conventions.md).
 4. **Create `internal/reconcilers/foo.go`:**
@@ -23,7 +23,7 @@ If your change would violate any invariant, stop and either rework or open a dis
        // ... extra deps (vault, s3, etc.) as needed
    }
 
-   func (r *FooReconciler) Reconcile(ctx context.Context, cluster *v1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
+   func (r *FooReconciler) Reconcile(ctx context.Context, cluster *v1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
        log := logging.Enrich(ctx, cluster, "foo")  // INVARIANT 8
 
        // Skip if disabled
@@ -60,7 +60,7 @@ If your change would violate any invariant, stop and either rework or open a dis
        return ctrl.Result{}, nil
    }
 
-   func (r *FooReconciler) Describe(cluster *v1alpha1.OpenCHAMICluster) ([]client.Object, error) {
+   func (r *FooReconciler) Describe(cluster *v1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
        // No I/O. Just build the would-be objects.
        return []client.Object{r.buildFoo(cluster)}, nil
    }
@@ -76,11 +76,11 @@ If your change would violate any invariant, stop and either rework or open a dis
 
 ## Adding a CRD field
 
-1. **Edit `api/v1alpha1/openchamicluster_types.go`.** Add the field with `+kubebuilder:` markers for validation, defaulting, and required-ness.
+1. **Edit `api/v1alpha1/openchamicontrolplane_types.go`.** Add the field with `+kubebuilder:` markers for validation, defaulting, and required-ness.
 2. **Run `make generate manifests`.** This regenerates `zz_generated.deepcopy.go` and `config/crd/bases/...yaml`. Commit both.
-3. **Update defaulting in `api/v1alpha1/openchamicluster_webhook.go::Default`** if the field needs a default value. (Prefer `+kubebuilder:default=` markers when possible — they live with the type.)
+3. **Update defaulting in `api/v1alpha1/openchamicontrolplane_webhook.go::Default`** if the field needs a default value. (Prefer `+kubebuilder:default=` markers when possible — they live with the type.)
 4. **Update validation in the same file's `ValidateCreate`/`ValidateUpdate`** if the field needs cross-field checks (the markers handle most simple cases).
-5. **Add unit tests in `api/v1alpha1/openchamicluster_webhook_test.go`.** Cover defaulting, validation accept, validation reject.
+5. **Add unit tests in `api/v1alpha1/openchamicontrolplane_webhook_test.go`.** Cover defaulting, validation accept, validation reject.
 6. **Update consuming reconcilers.** Read the field where it's needed.
 7. **Update [crd-reference.md](crd-reference.md).** Add the field, its type, its default.
 8. **If the field requires a CRD schema migration:**
@@ -91,8 +91,8 @@ If your change would violate any invariant, stop and either rework or open a dis
 
 1. **Decide if it's a defaulting or validating concern.**
    - Defaulting fills gaps; validating rejects invalid configurations.
-2. **Edit `api/v1alpha1/openchamicluster_webhook.go`.** Add the check to `Default()` or `ValidateCreate()`/`ValidateUpdate()`.
-3. **Add unit tests** in `openchamicluster_webhook_test.go`. Cover the full grid: missing field, valid field, invalid field, immutable-update attempt.
+2. **Edit `api/v1alpha1/openchamicontrolplane_webhook.go`.** Add the check to `Default()` or `ValidateCreate()`/`ValidateUpdate()`.
+3. **Add unit tests** in `openchamicontrolplane_webhook_test.go`. Cover the full grid: missing field, valid field, invalid field, immutable-update attempt.
 4. **Update [webhooks.md](webhooks.md).**
 5. **Run the gauntlet.**
 

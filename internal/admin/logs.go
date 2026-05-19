@@ -62,7 +62,7 @@ var logsDuckDBBinary = logsDefaultDuckDBPath
 
 // logsOpts holds every flag value common to `query` and `export`.
 type logsOpts struct {
-	cluster     string
+	cp          string
 	s3Endpoint  string
 	s3Bucket    string
 	s3AccessKey string
@@ -124,7 +124,7 @@ func logsExportCmd() *cobra.Command {
 
 // bindCommonFlags wires the flags shared by `query` and `export`.
 func (o *logsOpts) bindCommonFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.cluster, "cluster", "", "Cluster name (required; used to derive the default bucket)")
+	f.StringVar(&o.cp, "cluster", "", "Cluster name (required; used to derive the default bucket)")
 	f.StringVar(&o.s3Endpoint, "s3-endpoint", "", "S3 endpoint URL (required, e.g. http://versitygw:10000)")
 	f.StringVar(&o.s3Bucket, "s3-bucket", "", "S3 bucket holding Parquet logs (default: <cluster>-logs)")
 	f.StringVar(&o.s3AccessKey, "s3-access-key", "", "S3 access key (falls back to $"+logsEnvAccessKey+")")
@@ -175,7 +175,7 @@ func (o *logsOpts) runExport(ctx context.Context, stdout, stderr io.Writer) erro
 
 // validate enforces the documented common flag constraints.
 func (o *logsOpts) validate() error {
-	if o.cluster == "" {
+	if o.cp == "" {
 		return fmt.Errorf("--cluster is required")
 	}
 	if o.s3Endpoint == "" {
@@ -208,7 +208,7 @@ func (o *logsOpts) resolveBucket() string {
 	if o.s3Bucket != "" {
 		return o.s3Bucket
 	}
-	return o.cluster + logsBucketSuffix
+	return o.cp + logsBucketSuffix
 }
 
 // resolveCredentials picks up credentials from flags, falling back to the

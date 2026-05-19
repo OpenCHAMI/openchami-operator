@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-// Package conditions defines condition type constants for OpenCHAMICluster.
+// Package conditions defines condition type constants for OpenCHAMIControlPlane.
 package conditions
 
 const (
@@ -69,6 +69,14 @@ const (
 	// ConditionNetworkPoliciesReady is true when all per-cluster
 	// NetworkPolicies have been applied to the cluster namespace.
 	ConditionNetworkPoliciesReady = "NetworkPoliciesReady"
+
+	// ConditionServiceIdentityReady is true when the per-cluster
+	// service-identity CA has issued the tokensmith server cert and
+	// every per-service client cert that consumer Deployments mount
+	// for mTLS to tokensmith. Used to gate tokensmith's HTTPS listener
+	// rollout and the BackendTLSPolicy that lets envoy trust the CA
+	// when fetching JWKS over HTTPS.
+	ConditionServiceIdentityReady = "ServiceIdentityReady"
 )
 
 // Reasons used across multiple conditions.
@@ -84,4 +92,18 @@ const (
 	ReasonExpired             = "Expired"
 	ReasonAwaitingCertificate = "AwaitingCertificate"
 	ReasonNotProgrammed       = "NotProgrammed"
+	// ReasonAwaitingTokensmith is set on ConditionGatewayReady when the
+	// gateway reconciler has held back JWT-protected HTTPRoutes +
+	// SecurityPolicies because tokensmith isn't Ready yet. Applying the
+	// SecurityPolicies before tokensmith can serve `/.well-known/jwks.json`
+	// poisons envoy's JWT-filter cache: the async JWKS fetch fails at
+	// envoy startup and never recovers, leaving every JWT-gated route
+	// returning 500 `direct_response`. So we wait.
+	ReasonAwaitingTokensmith = "AwaitingTokensmith"
+	// ReasonAwaitingServiceIdentity is set on ConditionServiceIdentityReady
+	// (and on dependent conditions) while cert-manager has not yet
+	// populated the per-cluster CA / server / client Secrets that the
+	// mTLS service-identity flow depends on. Idempotent: clears once
+	// every Secret is present and well-formed.
+	ReasonAwaitingServiceIdentity = "AwaitingServiceIdentity"
 )

@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 OpenCHAMI a Series of LF Projects, LLC
+#
+# SPDX-License-Identifier: MIT
+#
+# selfsigned-dev: a cert-manager ClusterIssuer used by the dev fixtures
+# under test/fixtures/. cert-manager doesn't ship a default ClusterIssuer,
+# so without this resource the gateway Certificate created by the
+# OpenCHAMIControlPlane reconciler stays in 'Issuing' forever and
+# CertificatesValid never reaches True.
+#
+# Production deployments configure their own issuer (e.g. ACME pointing
+# at Let's Encrypt). This resource is dev only — applied by `make dev-up`
+# via `make dev-install-prereqs`, never by the operator itself.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-dev
+spec:
+  selfSigned: {}

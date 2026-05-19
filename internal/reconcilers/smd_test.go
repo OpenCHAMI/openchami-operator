@@ -20,13 +20,13 @@ import (
 
 func TestSMDReconciler_DisabledSkips(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.SMD.Enabled = false
-	cluster.Spec.Services.SMD.Replicas = 1
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.SMD.Enabled = false
+	cp.Spec.Services.SMD.Replicas = 1
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &SMDReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -36,30 +36,30 @@ func TestSMDReconciler_DisabledSkips(t *testing.T) {
 
 	dep := &appsv1.Deployment{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceSMD,
 	}, dep)
 	if !apierrors.IsNotFound(getErr) {
 		t.Errorf("expected smd Deployment to be absent when disabled, got err=%v", getErr)
 	}
-	if _, ok := cluster.Status.Services[ServiceSMD]; ok {
+	if _, ok := cp.Status.Services[ServiceSMD]; ok {
 		t.Errorf("expected no status entry when disabled")
 	}
 }
 
 func TestSMDReconciler_AppliesDeploymentServicePDB(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.SMD.Enabled = true
-	cluster.Spec.Services.SMD.Replicas = 2
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.SMD.Enabled = true
+	cp.Spec.Services.SMD.Replicas = 2
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &SMDReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	ns := ClusterNamespace(cluster)
+	ns := ControlPlaneNamespace(cp)
 
 	// Deployment.
 	dep := &appsv1.Deployment{}
@@ -84,8 +84,11 @@ func TestSMDReconciler_AppliesDeploymentServicePDB(t *testing.T) {
 		t.Fatalf("expected 1 container, got %d", len(dep.Spec.Template.Spec.Containers))
 	}
 	container := dep.Spec.Template.Spec.Containers[0]
-	if container.Image != defaultSMDImage {
-		t.Errorf("expected default image %q, got %q", defaultSMDImage, container.Image)
+	// Default to the release-stream image — the release tag lives in
+	// builtInImages and bumps with operator releases.
+	wantImage, _ := ResolveImage(cp, ServiceSMD)
+	if container.Image != wantImage {
+		t.Errorf("expected resolved image %q, got %q", wantImage, container.Image)
 	}
 	if len(container.Ports) != 1 || container.Ports[0].ContainerPort != smdPort {
 		t.Errorf("expected single port %d, got %+v", smdPort, container.Ports)
@@ -94,17 +97,17 @@ func TestSMDReconciler_AppliesDeploymentServicePDB(t *testing.T) {
 	// SMD_DBPASS env var must reference the right secret/key.
 	var foundDBPass bool
 	for _, e := range container.Env {
-		if e.Name == "SMD_DBPASS" {
+		if e.Name == smdDBPassEnvName {
 			foundDBPass = true
 			if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
 				t.Fatalf("SMD_DBPASS missing secretKeyRef")
 			}
-			wantSecret := SecretName(cluster, SuffixDBCredentials)
+			wantSecret := SecretName(cp, SuffixSMDDB)
 			if e.ValueFrom.SecretKeyRef.Name != wantSecret {
 				t.Errorf("expected SMD_DBPASS secret=%q, got %q", wantSecret, e.ValueFrom.SecretKeyRef.Name)
 			}
-			if e.ValueFrom.SecretKeyRef.Key != VaultKeySMDPassword {
-				t.Errorf("expected SMD_DBPASS key=%q, got %q", VaultKeySMDPassword, e.ValueFrom.SecretKeyRef.Key)
+			if e.ValueFrom.SecretKeyRef.Key != VaultKeyDBPassword {
+				t.Errorf("expected SMD_DBPASS key=%q, got %q", VaultKeyDBPassword, e.ValueFrom.SecretKeyRef.Key)
 			}
 		}
 	}
@@ -133,20 +136,20 @@ func TestSMDReconciler_AppliesDeploymentServicePDB(t *testing.T) {
 
 func TestSMDReconciler_RequeuesUntilAvailable(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.SMD.Enabled = true
-	cluster.Spec.Services.SMD.Replicas = 1
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.SMD.Enabled = true
+	cp.Spec.Services.SMD.Replicas = 1
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &SMDReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if res.RequeueAfter == 0 {
 		t.Errorf("expected requeue while smd not yet available, got %+v", res)
 	}
-	st, ok := cluster.Status.Services[ServiceSMD]
+	st, ok := cp.Status.Services[ServiceSMD]
 	if !ok {
 		t.Fatalf("expected status.services[smd] to be set")
 	}
@@ -157,35 +160,35 @@ func TestSMDReconciler_RequeuesUntilAvailable(t *testing.T) {
 
 func TestSMDReconciler_ReadyWhenAvailable(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Services.SMD.Enabled = true
-	cluster.Spec.Services.SMD.Replicas = 1
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.SMD.Enabled = true
+	cp.Spec.Services.SMD.Replicas = 1
 
 	// Pre-create the Deployment with status.AvailableReplicas=1 so the
 	// reconciler's read-back observes a ready deployment.
 	existing := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceSMD,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DeploymentStatus{AvailableReplicas: 1},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.Deployment{}).
 		WithObjects(existing).
 		Build()
 
 	r := &SMDReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if res.RequeueAfter != 0 {
 		t.Errorf("expected no requeue when smd available, got %+v", res)
 	}
-	st, ok := cluster.Status.Services[ServiceSMD]
+	st, ok := cp.Status.Services[ServiceSMD]
 	if !ok {
 		t.Fatalf("expected status.services[smd] to be set")
 	}
@@ -196,14 +199,14 @@ func TestSMDReconciler_ReadyWhenAvailable(t *testing.T) {
 
 func TestSMDReconciler_TwoClustersIsolated(t *testing.T) {
 	scheme := newScheme(t)
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
-		cluster.Spec.Services.SMD.Enabled = true
-		cluster.Spec.Services.SMD.Replicas = 1
-		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
+		cp.Spec.Services.SMD.Enabled = true
+		cp.Spec.Services.SMD.Replicas = 1
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 		r := &SMDReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 

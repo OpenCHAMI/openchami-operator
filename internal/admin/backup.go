@@ -42,7 +42,7 @@ const (
 	backupTokensmithHeader = "=== Step 2: Tokensmith PVC snapshot (MANUAL) ==="
 	backupVaultRaftHeader  = "=== Step 3: Vault raft snapshot (MANUAL) ==="
 	backupCNPGHeader       = "=== Step 1: CNPG base backup ==="
-	backupCRYAMLHeader     = "=== Step 4: OpenCHAMICluster CR YAML ==="
+	backupCRYAMLHeader     = "=== Step 4: OpenCHAMIControlPlane CR YAML ==="
 
 	backupTimestampFormat = "20060102-150405"
 )
@@ -74,7 +74,7 @@ func BackupCmd() *cobra.Command {
 		Use:   "backup",
 		Short: "Snapshot cluster infrastructure state to object storage",
 		Long: "Snapshot cluster infrastructure state. Automates the CNPG base " +
-			"backup CR and OpenCHAMICluster CR YAML dump; emits manual " +
+			"backup CR and OpenCHAMIControlPlane CR YAML dump; emits manual " +
 			"copy-paste-ready commands on stderr for the Tokensmith PVC " +
 			"snapshot and Vault raft snapshot steps.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -102,8 +102,8 @@ func BackupCmd() *cobra.Command {
 
 // bindFlags wires flag values into o.
 func (o *backupOpts) bindFlags(f *pflag.FlagSet) {
-	f.StringVar(&o.clusterName, "cluster-name", "", "OpenCHAMICluster name (required)")
-	f.StringVar(&o.namespace, "namespace", backupDefaultNamespace, "Namespace where the OpenCHAMICluster CR lives")
+	f.StringVar(&o.clusterName, "cluster-name", "", "OpenCHAMIControlPlane name (required)")
+	f.StringVar(&o.namespace, "namespace", backupDefaultNamespace, "Namespace where the OpenCHAMIControlPlane CR lives")
 	f.StringVar(&o.kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: standard kubeconfig discovery)")
 
 	f.StringVar(&o.vaultAddr, "vault-addr", "", "Vault address (required; used in the printed manual raft snapshot command)")
@@ -179,7 +179,7 @@ func (o *backupOpts) toRunner(stdout, stderr io.Writer) (*backupRunner, error) {
 
 // run executes the backup steps against the supplied client.
 func (r *backupRunner) run(ctx context.Context, c client.Client) error {
-	cluster, err := r.fetchCluster(ctx, c)
+	cp, err := r.fetchCluster(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -188,7 +188,7 @@ func (r *backupRunner) run(ctx context.Context, c client.Client) error {
 		return fmt.Errorf("creating output directory %s: %w", r.outputDir, err)
 	}
 
-	yamlPath, err := r.writeClusterYAML(cluster)
+	yamlPath, err := r.writeClusterYAML(cp)
 	if err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func (r *backupRunner) run(ctx context.Context, c client.Client) error {
 		return err
 	}
 
-	r.printManualSteps(cluster)
+	r.printManualSteps(cp)
 	r.printSummary(yamlPath, cnpgBackup)
 	return nil
 }
@@ -232,35 +232,35 @@ func (r *backupRunner) runDryRun(_ context.Context) error {
 	_, _ = fmt.Fprintln(r.stdout, "")
 
 	_, _ = fmt.Fprintln(r.stdout, backupCRYAMLHeader)
-	_, _ = fmt.Fprintln(r.stdout, "  Would write OpenCHAMICluster YAML to "+filepath.Join(r.outputDir, backupClusterYAMLFile))
+	_, _ = fmt.Fprintln(r.stdout, "  Would write OpenCHAMIControlPlane YAML to "+filepath.Join(r.outputDir, backupClusterYAMLFile))
 
 	r.printManualSteps(nil)
 	return nil
 }
 
-// fetchCluster loads the OpenCHAMICluster from --namespace.
-func (r *backupRunner) fetchCluster(ctx context.Context, c client.Client) (*openchamiv1alpha1.OpenCHAMICluster, error) {
-	cluster := &openchamiv1alpha1.OpenCHAMICluster{}
+// fetchCluster loads the OpenCHAMIControlPlane from --namespace.
+func (r *backupRunner) fetchCluster(ctx context.Context, c client.Client) (*openchamiv1alpha1.OpenCHAMIControlPlane, error) {
+	cp := &openchamiv1alpha1.OpenCHAMIControlPlane{}
 	key := types.NamespacedName{Namespace: r.namespace, Name: r.clusterName}
-	if err := c.Get(ctx, key, cluster); err != nil {
+	if err := c.Get(ctx, key, cp); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("OpenCHAMICluster %q not found in namespace %q", r.clusterName, r.namespace)
+			return nil, fmt.Errorf("OpenCHAMIControlPlane %q not found in namespace %q", r.clusterName, r.namespace)
 		}
-		return nil, fmt.Errorf("getting OpenCHAMICluster %s/%s: %w", r.namespace, r.clusterName, err)
+		return nil, fmt.Errorf("getting OpenCHAMIControlPlane %s/%s: %w", r.namespace, r.clusterName, err)
 	}
-	return cluster, nil
+	return cp, nil
 }
 
 // writeClusterYAML marshals the cluster to YAML and writes it to
 // <outputDir>/cluster.yaml. Returns the path written.
-func (r *backupRunner) writeClusterYAML(cluster *openchamiv1alpha1.OpenCHAMICluster) (string, error) {
+func (r *backupRunner) writeClusterYAML(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (string, error) {
 	// Strip the managedFields and resourceVersion noise — the result should
 	// be re-applyable by `kubectl apply -f`.
-	cluster.ManagedFields = nil
-	cluster.ResourceVersion = ""
-	cluster.UID = ""
+	cp.ManagedFields = nil
+	cp.ResourceVersion = ""
+	cp.UID = ""
 
-	out, err := yaml.Marshal(cluster)
+	out, err := yaml.Marshal(cp)
 	if err != nil {
 		return "", fmt.Errorf("marshalling cluster YAML: %w", err)
 	}
@@ -307,7 +307,7 @@ func (r *backupRunner) createCNPGBackup(ctx context.Context, c client.Client) (*
 // implementation does not automate. cluster may be nil (dry-run case) — the
 // cluster argument is only consulted for fields that are not yet known from
 // flags. Today we use only flag-derived state, so it is currently advisory.
-func (r *backupRunner) printManualSteps(_ *openchamiv1alpha1.OpenCHAMICluster) {
+func (r *backupRunner) printManualSteps(_ *openchamiv1alpha1.OpenCHAMIControlPlane) {
 	clusterNS := backupCNPGNamePrefix + r.clusterName
 	tokensmithPVC := backupCNPGNamePrefix + r.clusterName + "-tokensmith-keys"
 	raftSnapshotPath := filepath.Join(r.outputDir, "vault-raft.snap")

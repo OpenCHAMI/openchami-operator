@@ -21,16 +21,14 @@ import (
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
 
-const testFunicularNamespace = "openchami-alpha"
-
 func TestFunicularReconciler_DisabledTriviallyReady(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = false
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &FunicularReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -40,14 +38,14 @@ func TestFunicularReconciler_DisabledTriviallyReady(t *testing.T) {
 
 	ds := &appsv1.DaemonSet{}
 	getErr := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceFunicular,
 	}, ds)
 	if !apierrors.IsNotFound(getErr) {
 		t.Errorf("expected funicular DaemonSet absent when logging disabled, got err=%v", getErr)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogCollectorReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogCollectorReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected LogCollectorReady=True/Ready when disabled, got %+v", cond)
 	}
@@ -108,7 +106,7 @@ func assertFunicularEnvValues(t *testing.T, envs map[string]corev1.EnvVar) {
 	t.Helper()
 	cases := map[string]string{
 		"FUNICULAR_CLUSTER_NAME":     "alpha",
-		"FUNICULAR_NAMESPACE":        testFunicularNamespace,
+		"FUNICULAR_NAMESPACE":        testAlphaNamespace,
 		"FUNICULAR_S3_ENDPOINT":      testS3Endpoint,
 		"FUNICULAR_S3_BUCKET":        "alpha-logs",
 		"FUNICULAR_FLUSH_INTERVAL":   "60",
@@ -156,15 +154,15 @@ func assertFunicularSecretRef(t *testing.T, envs map[string]corev1.EnvVar, wantS
 // anyone re-enables auto-scheduling without a valid default image.
 func TestFunicularReconciler_ImageNotConfigured(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
 	// deliberately leave Image nil
-	cluster.Spec.Logging.Image = nil
+	cp.Spec.Logging.Image = nil
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &FunicularReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -174,14 +172,14 @@ func TestFunicularReconciler_ImageNotConfigured(t *testing.T) {
 
 	ds := &appsv1.DaemonSet{}
 	err = c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceFunicular,
 	}, ds)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("expected DaemonSet NOT to be applied when image is unset, got err=%v", err)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogCollectorReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogCollectorReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != reasonImageNotConfigured {
 		t.Fatalf("expected LogCollectorReady=False/ImageNotConfigured, got %+v", cond)
 	}
@@ -189,19 +187,19 @@ func TestFunicularReconciler_ImageNotConfigured(t *testing.T) {
 
 func TestFunicularReconciler_AppliesDaemonSet(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
 	// Empty ImageSpec satisfies the "image required" gate while still
-	// resolving to defaultFunicularImage via funicularImage().
-	cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
-	cluster.Spec.Logging.RetentionDays = 90
-	cluster.Spec.Logging.FlushIntervalSeconds = 60
-	cluster.Spec.Logging.IncludeServices = []string{"smd", "boot-service"}
+	// resolving to the built-in release-stream image via ResolveImage.
+	cp.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
+	cp.Spec.Logging.RetentionDays = 90
+	cp.Spec.Logging.FlushIntervalSeconds = 60
+	cp.Spec.Logging.IncludeServices = []string{"smd", "boot-service"}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	r := &FunicularReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -212,7 +210,7 @@ func TestFunicularReconciler_AppliesDaemonSet(t *testing.T) {
 
 	ds := &appsv1.DaemonSet{}
 	if err := c.Get(context.Background(), types.NamespacedName{
-		Namespace: ClusterNamespace(cluster),
+		Namespace: ControlPlaneNamespace(cp),
 		Name:      ServiceFunicular,
 	}, ds); err != nil {
 		t.Fatalf("getting funicular DaemonSet: %v", err)
@@ -225,8 +223,9 @@ func TestFunicularReconciler_AppliesDaemonSet(t *testing.T) {
 		t.Fatalf("expected 1 container, got %d", len(ds.Spec.Template.Spec.Containers))
 	}
 	container := ds.Spec.Template.Spec.Containers[0]
-	if container.Image != defaultFunicularImage {
-		t.Errorf("expected image=%q, got %q", defaultFunicularImage, container.Image)
+	wantImage, _ := ResolveImage(cp, ServiceFunicular)
+	if container.Image != wantImage {
+		t.Errorf("expected image=%q, got %q", wantImage, container.Image)
 	}
 	assertFunicularLogMount(t, container)
 
@@ -236,11 +235,11 @@ func TestFunicularReconciler_AppliesDaemonSet(t *testing.T) {
 	}
 	assertFunicularEnvValues(t, envs)
 
-	wantSecret := SecretName(cluster, SuffixLogCredentials)
+	wantSecret := SecretName(cp, SuffixLogCredentials)
 	assertFunicularSecretRef(t, envs, wantSecret, "FUNICULAR_ACCESS_KEY", s3AccessKeyKey)
 	assertFunicularSecretRef(t, envs, wantSecret, "FUNICULAR_SECRET_KEY", s3SecretKeyKey)
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogCollectorReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogCollectorReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonProvisioning {
 		t.Fatalf("expected LogCollectorReady=False/Provisioning before pods ready, got %+v", cond)
 	}
@@ -248,28 +247,28 @@ func TestFunicularReconciler_AppliesDaemonSet(t *testing.T) {
 
 func TestFunicularReconciler_ReadyWhenNumberReady(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
-	cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
-	cluster.Spec.Logging.RetentionDays = 30
-	cluster.Spec.Logging.FlushIntervalSeconds = 30
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
+	cp.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
+	cp.Spec.Logging.RetentionDays = 30
+	cp.Spec.Logging.FlushIntervalSeconds = 30
 
 	existingDS := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceFunicular,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DaemonSetStatus{NumberReady: 1},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.DaemonSet{}).
 		WithObjects(existingDS).
 		Build()
 
 	r := &FunicularReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -277,11 +276,11 @@ func TestFunicularReconciler_ReadyWhenNumberReady(t *testing.T) {
 		t.Errorf("expected no requeue when DaemonSet already ready, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogCollectorReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogCollectorReady)
 	if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != conditions.ReasonReady {
 		t.Fatalf("expected LogCollectorReady=True/Ready, got %+v", cond)
 	}
-	st, ok := cluster.Status.Services[ServiceFunicular]
+	st, ok := cp.Status.Services[ServiceFunicular]
 	if !ok {
 		t.Fatalf("expected Status.Services[%q] to be set", ServiceFunicular)
 	}
@@ -292,28 +291,28 @@ func TestFunicularReconciler_ReadyWhenNumberReady(t *testing.T) {
 
 func TestFunicularReconciler_RequeuesUntilReady(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Logging.Enabled = true
-	cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
-	cluster.Spec.Logging.RetentionDays = 30
-	cluster.Spec.Logging.FlushIntervalSeconds = 60
+	cp := newControlPlane("alpha")
+	cp.Spec.Logging.Enabled = true
+	cp.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
+	cp.Spec.Logging.RetentionDays = 30
+	cp.Spec.Logging.FlushIntervalSeconds = 60
 
 	existingDS := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ServiceFunicular,
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 		},
 		Status: appsv1.DaemonSetStatus{NumberReady: 0},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithStatusSubresource(&appsv1.DaemonSet{}).
 		WithObjects(existingDS).
 		Build()
 
 	r := &FunicularReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -321,7 +320,7 @@ func TestFunicularReconciler_RequeuesUntilReady(t *testing.T) {
 		t.Errorf("expected requeue when NumberReady=0, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionLogCollectorReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionLogCollectorReady)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonProvisioning {
 		t.Fatalf("expected LogCollectorReady=False/Provisioning, got %+v", cond)
 	}
@@ -331,22 +330,22 @@ func TestFunicularReconciler_TwoClustersIsolated(t *testing.T) {
 	scheme := newScheme(t)
 	rec := record.NewFakeRecorder(20)
 
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
-		cluster.Spec.Logging.Enabled = true
-		cluster.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
-		cluster.Spec.Logging.RetentionDays = 7
-		cluster.Spec.Logging.FlushIntervalSeconds = 15
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
+		cp.Spec.Logging.Enabled = true
+		cp.Spec.Logging.Image = &openchamiv1alpha1.ImageSpec{}
+		cp.Spec.Logging.RetentionDays = 7
+		cp.Spec.Logging.FlushIntervalSeconds = 15
 
-		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 		r := &FunicularReconciler{Client: c, Recorder: rec}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 
 		ds := &appsv1.DaemonSet{}
 		if err := c.Get(context.Background(), types.NamespacedName{
-			Namespace: ClusterNamespace(cluster),
+			Namespace: ControlPlaneNamespace(cp),
 			Name:      ServiceFunicular,
 		}, ds); err != nil {
 			t.Fatalf("getting funicular DaemonSet for %s: %v", name, err)

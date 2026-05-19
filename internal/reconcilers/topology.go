@@ -68,20 +68,20 @@ type TopologyReconciler struct {
 
 // Reconcile builds the topology document, applies it as a ConfigMap, and
 // records the content hash in cluster.Status.TopologyVersion.
-func (r *TopologyReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "topology")
+func (r *TopologyReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "topology")
 
-	spec := r.buildTopology(cluster)
+	spec := r.buildTopology(cp)
 	hash, err := computeTopologyHash(spec)
 	if err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionTopologyPublished,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("hashing topology: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonError,
 			fmt.Sprintf("could not hash topology: %v", err))
 		return ctrl.Result{}, fmt.Errorf("hashing topology: %w", err)
@@ -91,44 +91,44 @@ func (r *TopologyReconciler) Reconcile(ctx context.Context, cluster *openchamiv1
 
 	payload, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionTopologyPublished,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("marshaling topology: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonError,
 			fmt.Sprintf("could not marshal topology: %v", err))
 		return ctrl.Result{}, fmt.Errorf("marshaling topology: %w", err)
 	}
 
-	cm := r.buildConfigMap(cluster, string(payload))
+	cm := r.buildConfigMap(cp, string(payload))
 	cmLog := logging.EnrichWithResource(log, kindConfigMap, cm.Name)
 	cmLog.Info("applying topology ConfigMap", "version", spec.Version)
 	if err := r.Client.Patch(ctx, cm, client.Apply, //nolint:staticcheck // SSA via Patch
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionTopologyPublished,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("applying topology ConfigMap: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonError,
 			fmt.Sprintf("applying topology ConfigMap failed: %v", err))
 		return ctrl.Result{}, fmt.Errorf("applying topology ConfigMap: %w", err)
 	}
 
-	cluster.Status.TopologyVersion = spec.Version
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	cp.Status.TopologyVersion = spec.Version
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionTopologyPublished,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            "topology ConfigMap applied",
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
@@ -136,8 +136,8 @@ func (r *TopologyReconciler) Reconcile(ctx context.Context, cluster *openchamiv1
 // Describe returns the ConfigMap this reconciler would apply. The version and
 // generatedAt fields are populated so the rendered JSON is stable enough for
 // `ochami-admin describe` to round-trip through `kubectl apply`.
-func (r *TopologyReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	spec := r.buildTopology(cluster)
+func (r *TopologyReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	spec := r.buildTopology(cp)
 	hash, err := computeTopologyHash(spec)
 	if err != nil {
 		return []client.Object{}, fmt.Errorf("hashing topology: %w", err)
@@ -148,7 +148,7 @@ func (r *TopologyReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluste
 	if err != nil {
 		return []client.Object{}, fmt.Errorf("marshaling topology: %w", err)
 	}
-	return []client.Object{r.buildConfigMap(cluster, string(payload))}, nil
+	return []client.Object{r.buildConfigMap(cp, string(payload))}, nil
 }
 
 // now returns the current time, honouring the test-injected nowFunc when set.
@@ -162,52 +162,52 @@ func (r *TopologyReconciler) now() time.Time {
 // buildTopology assembles the TopologySpec from cluster spec and per-service
 // status. The version and generatedAt fields are intentionally left blank
 // here; the caller fills them in after computing the content hash.
-func (r *TopologyReconciler) buildTopology(cluster *openchamiv1alpha1.OpenCHAMICluster) TopologySpec {
-	ns := ClusterNamespace(cluster)
-	clusterName := cluster.Spec.ClusterName
+func (r *TopologyReconciler) buildTopology(cp *openchamiv1alpha1.OpenCHAMIControlPlane) TopologySpec {
+	ns := ControlPlaneNamespace(cp)
+	clusterName := cp.Spec.ClusterName
 	paths := vault.Paths(clusterName)
 
 	return TopologySpec{
 		ClusterName: clusterName,
-		Domain:      cluster.Spec.Domain,
+		Domain:      cp.Spec.Domain,
 		Services: TopologyServices{
 			SMD: TopologyServiceEntry{
 				Endpoint:     serviceURL(ServiceSMD, ns, smdPort),
-				ExternalPath: "/hsm",
-				Ready:        serviceReady(cluster, ServiceSMD),
+				ExternalPath: pathSMDPrefix,
+				Ready:        serviceReady(cp, ServiceSMD),
 			},
 			Tokensmith: TopologyServiceEntry{
 				Endpoint:     serviceURL(ServiceTokensmith, ns, tokensmithPort),
 				ExternalPath: "/oauth",
-				Ready:        serviceReady(cluster, ServiceTokensmith),
-				JWKSURL:      serviceURL(ServiceTokensmith, ns, tokensmithPort) + "/.well-known/jwks.json",
+				Ready:        serviceReady(cp, ServiceTokensmith),
+				JWKSURL:      serviceURL(ServiceTokensmith, ns, tokensmithPort) + pathTokensmithJWKS,
 			},
 			BootService: TopologyServiceEntry{
 				Endpoint:     serviceURL(ServiceBootService, ns, bootServicePort),
-				ExternalPath: "/boot",
-				Ready:        serviceReady(cluster, ServiceBootService),
-				S3Endpoint:   cluster.Spec.Platform.ObjectStorage.Endpoint,
-				S3Bucket:     BootBucketName(cluster),
+				ExternalPath: pathBootPrefix,
+				Ready:        serviceReady(cp, ServiceBootService),
+				S3Endpoint:   cp.Spec.Platform.ObjectStorage.Endpoint,
+				S3Bucket:     BootBucketName(cp),
 			},
 			MetadataService: TopologyServiceEntry{
 				Endpoint:     serviceURL(ServiceMetadataService, ns, metadataServicePort),
-				ExternalPath: "/cloud-init",
-				Ready:        serviceReady(cluster, ServiceMetadataService),
+				ExternalPath: pathMetadataPrefix,
+				Ready:        serviceReady(cp, ServiceMetadataService),
 			},
 		},
 		Platform: TopologyPlatform{
 			Vault: TopologyVault{
-				Address:    cluster.Spec.Platform.Vault.Address,
+				Address:    cp.Spec.Platform.Vault.Address,
 				KVMount:    paths.KVMount,
 				PathPrefix: paths.SecretPrefix,
 			},
 			ObjectStorage: TopologyObjectStorage{
-				Endpoint: cluster.Spec.Platform.ObjectStorage.Endpoint,
-				Bucket:   BootBucketName(cluster),
+				Endpoint: cp.Spec.Platform.ObjectStorage.Endpoint,
+				Bucket:   BootBucketName(cp),
 			},
 			Logging: TopologyLogging{
-				Endpoint:      cluster.Spec.Platform.ObjectStorage.Endpoint,
-				Bucket:        LogBucketName(cluster),
+				Endpoint:      cp.Spec.Platform.ObjectStorage.Endpoint,
+				Bucket:        LogBucketName(cp),
 				ParquetPrefix: "logs/",
 			},
 		},
@@ -219,15 +219,15 @@ func (r *TopologyReconciler) buildTopology(cluster *openchamiv1alpha1.OpenCHAMIC
 }
 
 // buildConfigMap returns the operator-managed topology ConfigMap.
-func (r *TopologyReconciler) buildConfigMap(cluster *openchamiv1alpha1.OpenCHAMICluster, payload string) *corev1.ConfigMap {
+func (r *TopologyReconciler) buildConfigMap(cp *openchamiv1alpha1.OpenCHAMIControlPlane, payload string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindConfigMap},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      topologyConfigMapName(cluster),
-			Namespace: ClusterNamespace(cluster),
+			Name:      topologyConfigMapName(cp),
+			Namespace: ControlPlaneNamespace(cp),
 			Labels: map[string]string{
 				topologyLabelKey: topologyLabelValue,
-				clusterLabelKey:  cluster.Spec.ClusterName,
+				clusterLabelKey:  cp.Spec.ClusterName,
 				labelManagedBy:   managedByValue,
 			},
 		},
@@ -239,8 +239,8 @@ func (r *TopologyReconciler) buildConfigMap(cluster *openchamiv1alpha1.OpenCHAMI
 
 // topologyConfigMapName returns the canonical ConfigMap name for the cluster
 // topology document.
-func topologyConfigMapName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	return "openchami-" + cluster.Spec.ClusterName + "-topology"
+func topologyConfigMapName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	return "openchami-" + cp.Spec.ClusterName + "-topology"
 }
 
 // serviceURL returns the in-cluster URL for a service running in the given
@@ -258,8 +258,8 @@ func postgresEndpoint(clusterName, namespace, role string) string {
 
 // serviceReady reports whether the named service has reported Ready in the
 // cluster status. Absent or not-yet-ready services map to false.
-func serviceReady(cluster *openchamiv1alpha1.OpenCHAMICluster, name string) bool {
-	st, ok := cluster.Status.Services[name]
+func serviceReady(cp *openchamiv1alpha1.OpenCHAMIControlPlane, name string) bool {
+	st, ok := cp.Status.Services[name]
 	return ok && st.Ready
 }
 

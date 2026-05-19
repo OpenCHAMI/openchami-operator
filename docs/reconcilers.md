@@ -12,7 +12,7 @@ Namespace → RBAC → Vault → Bucket → Database
   → Funicular → LogBucket → Topology → ServiceMonitor
 ```
 
-The order is fixed in `internal/controller/openchamicluster_controller.go::reconcileAll`. Reordering is a breaking change.
+The order is fixed in `internal/controller/openchamicontrolplane_controller.go::reconcileAll`. Reordering is a breaking change.
 
 ## Namespace
 - **File:** `internal/reconcilers/namespace.go`
@@ -42,7 +42,7 @@ The order is fixed in `internal/controller/openchamicluster_controller.go::recon
 
 ## Database
 - **File:** `internal/reconcilers/database.go`
-- **Owns:** a CloudNativePG `Cluster` per `OpenCHAMICluster`. Replicas, storage size, backup configuration come from `spec.database`.
+- **Owns:** a CloudNativePG `Cluster` per `OpenCHAMIControlPlane`. Replicas, storage size, backup configuration come from `spec.database`.
 - **Condition:** `DatabaseReady`.
 - **Depends on:** Vault (for the bootstrap superuser secret), Bucket (for backup target).
 - **Tokensmith specifics:** Tokensmith is the one Deployment that owns its own PVC instead of going through CNPG. See `tokensmith.go`.

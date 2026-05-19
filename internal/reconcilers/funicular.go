@@ -29,20 +29,12 @@ import (
 const (
 	funicularRequeueAfter = 30 * time.Second
 
-	// defaultFunicularImage is the placeholder ghcr path. As of 2026-05
-	// no public image is published at this address — `kubelet` will get
-	// 403 from the anonymous-token endpoint. The reconciler treats the
-	// absence of `LoggingSpec.Image` as `ImageNotConfigured` and refuses
-	// to schedule the DaemonSet, so the placeholder is only ever pulled
-	// when an operator deliberately overrides Image to this value.
-	defaultFunicularImage = "ghcr.io/openchami/funicular-collector:latest"
-
 	funicularHostLogPath = "/var/log/pods"
 	funicularLogVolume   = "varlogpods"
 
 	// reasonImageNotConfigured is set on LogCollectorReady when logging is
 	// enabled but no funicular image override is supplied. Surfaces in
-	// `kubectl describe openchamicluster` so the missing config is obvious.
+	// `kubectl describe openchamicontrolplane` so the missing config is obvious.
 	reasonImageNotConfigured = "ImageNotConfigured"
 )
 
@@ -61,17 +53,17 @@ type FunicularReconciler struct {
 // Reconcile applies the funicular-collector DaemonSet (when logging is
 // enabled) and reports ConditionLogCollectorReady from the DaemonSet's
 // NumberReady status.
-func (r *FunicularReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "funicular")
+func (r *FunicularReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "funicular")
 
-	if !cluster.Spec.Logging.Enabled {
+	if !cp.Spec.Logging.Enabled {
 		log.Info("logging disabled, skipping funicular collector")
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogCollectorReady,
 			Status:             metav1.ConditionTrue,
 			Reason:             conditions.ReasonReady,
 			Message:            "logging disabled",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{}, nil
 	}
@@ -82,19 +74,19 @@ func (r *FunicularReconciler) Reconcile(ctx context.Context, cluster *openchamiv
 	// ImagePullBackOff with no clear hint that the *operator* expected
 	// the user to set `.spec.logging.image`. Surface that as an explicit
 	// condition reason instead of letting kubelet's pull error speak for us.
-	if cluster.Spec.Logging.Image == nil {
+	if cp.Spec.Logging.Image == nil {
 		log.Info("logging enabled but spec.logging.image is unset; skipping DaemonSet apply")
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogCollectorReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             reasonImageNotConfigured,
 			Message:            "spec.logging.image is required when spec.logging.enabled=true (no default funicular-collector image is published yet)",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: funicularRequeueAfter}, nil
 	}
 
-	ds := r.buildDaemonSet(cluster)
+	ds := r.buildDaemonSet(cp)
 	dsLog := logging.EnrichWithResource(log, kindDaemonSet, ds.Name)
 	dsLog.Info("applying funicular-collector DaemonSet")
 	if err := r.Client.Patch(ctx, ds, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -113,90 +105,68 @@ func (r *FunicularReconciler) Reconcile(ctx context.Context, cluster *openchamiv
 	}
 
 	endpoint := fmt.Sprintf("daemonset/%s.%s", ds.Name, ds.Namespace)
-	if cluster.Status.Services == nil {
-		cluster.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
+	if cp.Status.Services == nil {
+		cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
 
 	if numberReady == 0 {
-		cluster.Status.Services[ServiceFunicular] = openchamiv1alpha1.ServiceStatus{
+		cp.Status.Services[ServiceFunicular] = openchamiv1alpha1.ServiceStatus{
 			Ready:    false,
 			Endpoint: endpoint,
 			Message:  "waiting for funicular-collector DaemonSet pods to become ready",
 		}
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionLogCollectorReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonProvisioning,
 			Message:            "waiting for funicular-collector DaemonSet pods to become ready",
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: funicularRequeueAfter}, nil
 	}
 
-	cluster.Status.Services[ServiceFunicular] = openchamiv1alpha1.ServiceStatus{
+	cp.Status.Services[ServiceFunicular] = openchamiv1alpha1.ServiceStatus{
 		Ready:    true,
 		Endpoint: endpoint,
 		Message:  fmt.Sprintf("funicular-collector DaemonSet ready (numberReady=%d)", numberReady),
 	}
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionLogCollectorReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            fmt.Sprintf("funicular-collector DaemonSet ready (numberReady=%d)", numberReady),
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when logging is disabled.
-func (r *FunicularReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	if !cluster.Spec.Logging.Enabled {
+func (r *FunicularReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	if !cp.Spec.Logging.Enabled {
 		return []client.Object{}, nil
 	}
-	return []client.Object{r.buildDaemonSet(cluster)}, nil
-}
-
-// funicularImage resolves the container image, preferring the per-cluster
-// spec override and falling back to defaultFunicularImage. The reconciler
-// guards against an unset Image elsewhere; this helper only runs after
-// that guard, so it always has a non-nil ImageSpec to read from.
-func funicularImage(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	img := cluster.Spec.Logging.Image
-	if img == nil {
-		return defaultFunicularImage
-	}
-	repo, tag := img.Repository, img.Tag
-	switch {
-	case repo == "" && tag == "":
-		return defaultFunicularImage
-	case repo == "":
-		return "ghcr.io/openchami/funicular-collector:" + tag
-	case tag == "":
-		return repo + ":latest"
-	default:
-		return repo + ":" + tag
-	}
+	return []client.Object{r.buildDaemonSet(cp)}, nil
 }
 
 // funicularPodLabels returns the canonical label set for funicular pods.
-func funicularPodLabels(cluster *openchamiv1alpha1.OpenCHAMICluster) map[string]string {
+func funicularPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]string {
 	return map[string]string{
 		labelAppName:   ServiceFunicular,
-		labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 		labelManagedBy: managedByValue,
 	}
 }
 
-func (r *FunicularReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAMICluster) *appsv1.DaemonSet {
-	labels := funicularPodLabels(cluster)
+func (r *FunicularReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.DaemonSet {
+	labels := funicularPodLabels(cp)
 	tmpVol, tmpMount := TmpVolume()
 
-	ns := ClusterNamespace(cluster)
-	bucket := LogBucketName(cluster)
-	credsSecret := SecretName(cluster, SuffixLogCredentials)
-	flushInterval := strconv.Itoa(int(cluster.Spec.Logging.FlushIntervalSeconds))
-	includeServices := strings.Join(cluster.Spec.Logging.IncludeServices, ",")
+	ns := ControlPlaneNamespace(cp)
+	bucket := LogBucketName(cp)
+	credsSecret := SecretName(cp, SuffixLogCredentials)
+	flushInterval := strconv.Itoa(int(cp.Spec.Logging.FlushIntervalSeconds))
+	includeServices := strings.Join(cp.Spec.Logging.IncludeServices, ",")
 
 	hostPathType := corev1.HostPathDirectory
 	logVol := corev1.Volume{
@@ -215,9 +185,9 @@ func (r *FunicularReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAM
 	}
 
 	env := []corev1.EnvVar{
-		{Name: "FUNICULAR_CLUSTER_NAME", Value: cluster.Spec.ClusterName},
+		{Name: "FUNICULAR_CLUSTER_NAME", Value: cp.Spec.ClusterName},
 		{Name: "FUNICULAR_NAMESPACE", Value: ns},
-		{Name: "FUNICULAR_S3_ENDPOINT", Value: cluster.Spec.Platform.ObjectStorage.Endpoint},
+		{Name: "FUNICULAR_S3_ENDPOINT", Value: cp.Spec.Platform.ObjectStorage.Endpoint},
 		{Name: "FUNICULAR_S3_BUCKET", Value: bucket},
 		{Name: "FUNICULAR_FLUSH_INTERVAL", Value: flushInterval},
 		{
@@ -241,10 +211,11 @@ func (r *FunicularReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAM
 		{Name: "FUNICULAR_INCLUDE_SERVICES", Value: includeServices},
 	}
 
+	image, pullPolicy := ResolveImage(cp, ServiceFunicular)
 	container := corev1.Container{
 		Name:            ServiceFunicular,
-		Image:           funicularImage(cluster),
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
 		SecurityContext: CommonSecurityContext(),
 		Env:             env,
 		VolumeMounts:    []corev1.VolumeMount{tmpMount, readOnlyMount},
@@ -263,6 +234,7 @@ func (r *FunicularReconciler) buildDaemonSet(cluster *openchamiv1alpha1.OpenCHAM
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: ServiceFunicular,
+					EnableServiceLinks: DisableServiceLinks(),
 					SecurityContext:    CommonPodSecurityContext(),
 					// Collect logs from every node, including control-plane.
 					Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},

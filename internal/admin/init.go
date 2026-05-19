@@ -30,7 +30,7 @@ const (
 	initDefaultVaultAuth      = "kubernetes"
 	initVaultAuthAppRole      = "appRole"
 	initAPIVersion            = "openchami.openchami.org/v1alpha1"
-	initKind                  = "OpenCHAMICluster"
+	initKind                  = "OpenCHAMIControlPlane"
 	initStdoutSentinel        = "-"
 	initDHCPClusterLabel      = "openchami.org/dhcp-cluster"
 	initOIDCProviderVault     = "vault"
@@ -68,14 +68,14 @@ type initOpts struct {
 }
 
 // InitCmd returns the `ochami-admin init` command. The command emits a
-// ready-to-apply OpenCHAMICluster YAML to stdout (or `--output` file) without
+// ready-to-apply OpenCHAMIControlPlane YAML to stdout (or `--output` file) without
 // contacting Kubernetes.
 func InitCmd() *cobra.Command {
 	o := &initOpts{}
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Generate a ready-to-apply OpenCHAMICluster manifest",
-		Long: "Generate a ready-to-apply OpenCHAMICluster manifest from flags. " +
+		Short: "Generate a ready-to-apply OpenCHAMIControlPlane manifest",
+		Long: "Generate a ready-to-apply OpenCHAMIControlPlane manifest from flags. " +
 			"Does not contact Kubernetes. The output may be piped to `kubectl apply -f -` " +
 			"or written to a file with --output.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -127,8 +127,8 @@ func (o *initOpts) run(stdout, stderr io.Writer) error {
 		_, _ = fmt.Fprintln(stderr, "note: --skip-checks is set; pre-flight connectivity validation is not performed.")
 	}
 
-	cluster := o.buildCluster()
-	out, err := yaml.Marshal(cluster)
+	cp := o.buildCluster()
+	out, err := yaml.Marshal(cp)
 	if err != nil {
 		return fmt.Errorf("marshalling cluster manifest: %w", err)
 	}
@@ -209,15 +209,15 @@ func (o *initOpts) validate() error {
 	return nil
 }
 
-// buildCluster materialises the OpenCHAMICluster object. Empty/zero fields
+// buildCluster materialises the OpenCHAMIControlPlane object. Empty/zero fields
 // are dropped at marshal time by the JSON `omitempty` tags so they don't
 // clobber kubebuilder defaults.
-func (o *initOpts) buildCluster() *openchamiv1alpha1.OpenCHAMICluster {
+func (o *initOpts) buildCluster() *openchamiv1alpha1.OpenCHAMIControlPlane {
 	probeEnabled := o.provisionSubnet != "" || o.bmcSubnet != ""
 	dhcpEnabled := o.provisionSubnet != "" || o.dhcpRange != ""
 	magellanEnabled := o.bmcSubnet != ""
 
-	c := &openchamiv1alpha1.OpenCHAMICluster{
+	c := &openchamiv1alpha1.OpenCHAMIControlPlane{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: initAPIVersion,
 			Kind:       initKind,
@@ -226,7 +226,7 @@ func (o *initOpts) buildCluster() *openchamiv1alpha1.OpenCHAMICluster {
 			Name:      o.clusterName,
 			Namespace: initDefaultNamespace,
 		},
-		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
 			ClusterName: o.clusterName,
 			Domain:      o.domain,
 			Platform: openchamiv1alpha1.PlatformSpec{
@@ -336,11 +336,11 @@ func (o *initOpts) printNextSteps(stderr io.Writer) {
 	if target == initStdoutSentinel {
 		target = "<output>"
 	}
-	_, _ = fmt.Fprintf(stderr, "Wrote OpenCHAMICluster manifest for %q.\n", o.clusterName)
+	_, _ = fmt.Fprintf(stderr, "Wrote OpenCHAMIControlPlane manifest for %q.\n", o.clusterName)
 	_, _ = fmt.Fprintln(stderr, "Next steps:")
 	_, _ = fmt.Fprintf(stderr, "  1. Verify the spec: cat %s | yq\n", target)
 	_, _ = fmt.Fprintf(stderr, "  2. Apply: kubectl apply -f %s\n", target)
-	_, _ = fmt.Fprintf(stderr, "  3. Watch: kubectl get openchamicluster %s -w\n", o.clusterName)
+	_, _ = fmt.Fprintf(stderr, "  3. Watch: kubectl get openchamicontrolplane %s -w\n", o.clusterName)
 }
 
 // initSplitDHCPRange parses "start-end" into (start, end). Both halves must

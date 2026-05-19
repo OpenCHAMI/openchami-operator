@@ -25,18 +25,18 @@ spec:
 
 1. **Pin production clusters before upgrading.**
    ```sh
-   kubectl patch openchamicluster <name> --type=merge \
+   kubectl patch openchamicontrolplane <name> --type=merge \
      -p '{"spec":{"operatorChannel":"pinned","pinnedVersion":"<current>"}}'
    ```
 2. **Deploy the new operator** (helm upgrade, image bump, whatever your distribution uses). The new operator will see pinned clusters as `pinnedVersion != myVersion` and skip them.
 3. **Validate staging clusters first.** Unpin one staging cluster:
    ```sh
-   kubectl patch openchamicluster staging-foo --type=merge \
+   kubectl patch openchamicontrolplane staging-foo --type=merge \
      -p '{"spec":{"operatorChannel":"stable"}}'
    ```
    Watch `status.managedByVersion` advance to the new version. Verify `status.phase=Ready` and that no reconciler reports a regression.
 4. **Unpin production clusters one at a time.** Same patch as step 3, on each in turn. Wait for `status.managedByVersion` to advance and `phase=Ready` between clusters.
-5. **Verify the rollout.** `kubectl get openchamicluster -A -o jsonpath='{.items[*].status.managedByVersion}' | tr ' ' '\n' | sort | uniq -c` — every count should be the new version.
+5. **Verify the rollout.** `kubectl get openchamicontrolplane -A -o jsonpath='{.items[*].status.managedByVersion}' | tr ' ' '\n' | sort | uniq -c` — every count should be the new version.
 
 This is the procedure documented in `UPGRADE.md`. It's lifted there so each release can amend it without forking docs.
 
@@ -49,7 +49,7 @@ Different from the operator version: the CRD has its own version axis. Today the
    ```sh
    hack/migrate-storage-version.sh
    ```
-   This script no-op patches every `OpenCHAMICluster` in every namespace, forcing the API server to re-encode it at the current storage version. Safe to re-run.
+   This script no-op patches every `OpenCHAMIControlPlane` in every namespace, forcing the API server to re-encode it at the current storage version. Safe to re-run.
 3. **Once every CR is at the new storage version**, the next operator release can drop `v1alpha1` from `served` (it stays as a conversion source).
 
 The storage-version migration is **mandatory** before dropping the old version from `served`. Skipping it leaves cached objects unreadable to the new API server.

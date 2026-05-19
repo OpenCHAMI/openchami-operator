@@ -11,8 +11,7 @@ repos:
     -   id: check-yaml
         # Skip the kustomize patches under config/ — they include schema-violating
         # template fields that controller-gen emits and yamllint trips on.
-        # Also skip fixtures intentionally containing multiple YAML documents.
-        exclude: ^(config/.*\.yaml$|test/fixtures/.*\.yaml$)
+        exclude: ^config/.*\.yaml$
     -   id: check-added-large-files
     -   id: check-merge-conflict
     -   id: detect-private-key

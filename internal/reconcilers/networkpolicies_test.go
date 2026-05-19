@@ -51,18 +51,18 @@ const (
 //
 // Production code never hits this path: real apiservers do not depend on the
 // fake client's converter wiring.
-func newNetworkPolicyClient(scheme *runtime.Scheme, cluster *openchamiv1alpha1.OpenCHAMICluster) client.Client {
+func newNetworkPolicyClient(scheme *runtime.Scheme, cp *openchamiv1alpha1.OpenCHAMIControlPlane) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(cluster).
+		WithObjects(cp).
 		WithTypeConverters(managedfields.NewDeducedTypeConverter()).
 		Build()
 }
 
 // newInClusterNetworkPolicyCluster returns a cluster wired for in-cluster
 // Vault and VersityGW so the namespaceSelector code path is exercised.
-func newInClusterNetworkPolicyCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
-	c := newCluster(name)
+func newInClusterNetworkPolicyCluster(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
+	c := newControlPlane(name)
 	c.Spec.Platform.Vault.Address = testInClusterVaultAddr
 	c.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr
 	return c
@@ -86,6 +86,7 @@ func expectedPolicyNames() []string {
 		policyMagellan,
 		policyNetworkProbe,
 		policyFunicular,
+		policyPostgresIngress,
 	}
 	sort.Strings(names)
 	return names
@@ -112,15 +113,15 @@ func policyByName(list *networkingv1.NetworkPolicyList, name string) *networking
 
 func TestNetworkPoliciesReconciler_AppliesAllPolicies(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newInClusterNetworkPolicyCluster("alpha")
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	list := listPolicies(t, c, ClusterNamespace(cluster))
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
 	assertAllExpectedPolicies(t, list)
 	assertDefaultDenyAll(t, list)
 	assertAllowDNSEgress(t, list)
@@ -261,15 +262,15 @@ func assertSMDPolicy(t *testing.T, list *networkingv1.NetworkPolicyList) {
 
 func TestNetworkPoliciesReconciler_VaultEgressInCluster(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newInClusterNetworkPolicyCluster("alpha")
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	list := listPolicies(t, c, ClusterNamespace(cluster))
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
 	policy := policyByName(list, policyAllowVaultEgress)
 	if policy == nil {
 		t.Fatalf("missing %s", policyAllowVaultEgress)
@@ -288,17 +289,17 @@ func TestNetworkPoliciesReconciler_VaultEgressInCluster(t *testing.T) {
 
 func TestNetworkPoliciesReconciler_VaultEgressExternal(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Platform.Vault.Address = testExternalVaultAddr
-	cluster.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.Address = testExternalVaultAddr
+	cp.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	list := listPolicies(t, c, ClusterNamespace(cluster))
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
 	policy := policyByName(list, policyAllowVaultEgress)
 	if policy == nil {
 		t.Fatalf("missing %s", policyAllowVaultEgress)
@@ -314,15 +315,15 @@ func TestNetworkPoliciesReconciler_VaultEgressExternal(t *testing.T) {
 
 func TestNetworkPoliciesReconciler_VersityGWEgressInCluster(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newInClusterNetworkPolicyCluster("alpha")
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	list := listPolicies(t, c, ClusterNamespace(cluster))
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
 	policy := policyByName(list, policyAllowVersityGWEgress)
 	if policy == nil {
 		t.Fatalf("missing %s", policyAllowVersityGWEgress)
@@ -338,17 +339,17 @@ func TestNetworkPoliciesReconciler_VersityGWEgressInCluster(t *testing.T) {
 
 func TestNetworkPoliciesReconciler_VersityGWEgressExternal(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Platform.Vault.Address = testInClusterVaultAddr
-	cluster.Spec.Platform.ObjectStorage.Endpoint = testExternalVersityGWAddr
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.Address = testInClusterVaultAddr
+	cp.Spec.Platform.ObjectStorage.Endpoint = testExternalVersityGWAddr
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	list := listPolicies(t, c, ClusterNamespace(cluster))
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
 	policy := policyByName(list, policyAllowVersityGWEgress)
 	if policy == nil {
 		t.Fatalf("missing %s", policyAllowVersityGWEgress)
@@ -364,17 +365,17 @@ func TestNetworkPoliciesReconciler_VersityGWEgressExternal(t *testing.T) {
 
 func TestNetworkPoliciesReconciler_Idempotent(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newInClusterNetworkPolicyCluster("alpha")
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
 	for i := range 2 {
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile pass %d: %v", i, err)
 		}
 	}
 
-	list := listPolicies(t, c, ClusterNamespace(cluster))
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
 	if len(list.Items) != len(expectedPolicyNames()) {
 		t.Errorf("expected %d policies after idempotent passes, got %d",
 			len(expectedPolicyNames()), len(list.Items))
@@ -385,15 +386,15 @@ func TestNetworkPoliciesReconciler_TwoClustersIsolated(t *testing.T) {
 	scheme := newScheme(t)
 	rec := record.NewFakeRecorder(40)
 
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newInClusterNetworkPolicyCluster(name)
-		c := newNetworkPolicyClient(scheme, cluster)
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newInClusterNetworkPolicyCluster(name)
+		c := newNetworkPolicyClient(scheme, cp)
 		r := &NetworkPoliciesReconciler{Client: c, Recorder: rec}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 
-		ns := ClusterNamespace(cluster)
+		ns := ControlPlaneNamespace(cp)
 		list := listPolicies(t, c, ns)
 		if len(list.Items) != len(expectedPolicyNames()) {
 			t.Errorf("cluster %s: expected %d policies in %s, got %d",
@@ -408,9 +409,9 @@ func TestNetworkPoliciesReconciler_TwoClustersIsolated(t *testing.T) {
 
 		// Cross-namespace check: nothing should exist in the *other* cluster's
 		// namespace within this client (each cluster uses its own client).
-		other := testClusterBlue
-		if name == testClusterBlue {
-			other = testClusterRed
+		other := testControlPlaneBlue
+		if name == testControlPlaneBlue {
+			other = testControlPlaneRed
 		}
 		otherList := listPolicies(t, c, "openchami-"+other)
 		if len(otherList.Items) != 0 {
@@ -428,13 +429,13 @@ func TestNetworkPoliciesReconciler_TwoClustersIsolated(t *testing.T) {
 // was made.
 func TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVault(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Platform.Vault.Address = "https://test.invalid:8200"
-	cluster.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.Address = "https://test.invalid:8200"
+	cp.Spec.Platform.ObjectStorage.Endpoint = testInClusterVersityGWAddr
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(5)}
-	objs, err := r.Describe(cluster)
+	objs, err := r.Describe(cp)
 	if err != nil {
 		t.Fatalf("describe with unresolvable vault host: %v", err)
 	}
@@ -456,13 +457,13 @@ func TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVault(t *testing.T) {
 // Vault test for VersityGW; same rationale.
 func TestNetworkPoliciesReconciler_DescribeNoDNS_ExternalVersityGW(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	cluster.Spec.Platform.Vault.Address = testInClusterVaultAddr
-	cluster.Spec.Platform.ObjectStorage.Endpoint = "https://test.invalid:10000"
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.Address = testInClusterVaultAddr
+	cp.Spec.Platform.ObjectStorage.Endpoint = "https://test.invalid:10000"
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(5)}
-	objs, err := r.Describe(cluster)
+	objs, err := r.Describe(cp)
 	if err != nil {
 		t.Fatalf("describe with unresolvable versitygw host: %v", err)
 	}
@@ -495,15 +496,15 @@ func findDescribedPolicy(t *testing.T, objs []client.Object, name string) *netwo
 
 func TestNetworkPoliciesReconciler_ConditionSet(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newInClusterNetworkPolicyCluster("alpha")
-	c := newNetworkPolicyClient(scheme, cluster)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
 
 	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionNetworkPoliciesReady)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkPoliciesReady)
 	if cond == nil {
 		t.Fatalf("expected ConditionNetworkPoliciesReady to be set")
 	}

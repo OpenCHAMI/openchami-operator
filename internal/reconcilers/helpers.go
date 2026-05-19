@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -47,46 +48,102 @@ func RecordConditionEvent(
 // When spec.networkProbe.enabled is false, returns the manually specified
 // NodeSelector from the relevant service spec.
 func EffectiveNodeSelector(
-	cluster *openchamiv1alpha1.OpenCHAMICluster,
+	cp *openchamiv1alpha1.OpenCHAMIControlPlane,
 	probeType string, // "provision" or "bmc"
 ) map[string]string {
-	if cluster.Spec.NetworkProbe.Enabled {
+	if cp.Spec.NetworkProbe.Enabled {
 		key := fmt.Sprintf(probeNetworkReadyLabelFmt,
-			cluster.Spec.ClusterName, probeType)
+			cp.Spec.ClusterName, probeType)
 		return map[string]string{key: probeLabelValueTrue}
 	}
 	switch probeType {
 	case probeTypeProvision:
-		return cluster.Spec.Services.CoreDHCP.NodeSelector
+		return cp.Spec.Services.CoreDHCP.NodeSelector
 	case probeTypeBMC:
-		return cluster.Spec.Services.Magellan.NodeSelector
+		return cp.Spec.Services.Magellan.NodeSelector
 	}
 	return nil
 }
 
-// ClusterNamespace returns the canonical Kubernetes namespace for a cluster.
-func ClusterNamespace(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	return "openchami-" + cluster.Spec.ClusterName
+// ControlPlaneNamespace returns the canonical Kubernetes namespace for a cluster.
+func ControlPlaneNamespace(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	return "openchami-" + cp.Spec.ClusterName
 }
 
 // SecretName returns the canonical name for a per-cluster Kubernetes Secret
 // (also used as the VSO destination Secret name).
-func SecretName(cluster *openchamiv1alpha1.OpenCHAMICluster, suffix string) string {
-	return "openchami-" + cluster.Spec.ClusterName + "-" + suffix
+func SecretName(cp *openchamiv1alpha1.OpenCHAMIControlPlane, suffix string) string {
+	return "openchami-" + cp.Spec.ClusterName + "-" + suffix
 }
 
-// SuffixDBCredentials, SuffixS3Credentials, etc. name the standard
-// VSO-synced secrets in each cluster namespace.
-const (
-	SuffixDBCredentials  = "db-credentials"
-	SuffixS3Credentials  = "s3-credentials"
-	SuffixLogCredentials = "log-credentials"
-	SuffixTokensmithOIDC = "tokensmith-oidc"
+// ptrBool returns a pointer to the supplied bool. Useful for filling
+// out *bool fields in Kubernetes API types (Optional, etc.) inline.
+func ptrBool(b bool) *bool { return &b }
 
-	// VaultKeySMDPassword and VaultKeyBootServicePassword are the keys
-	// inside the db-credentials KV/Secret.
-	VaultKeySMDPassword         = "SMD_DB_PASSWORD"
-	VaultKeyBootServicePassword = "BOOT_SERVICE_DB_PASSWORD"
+// SuffixSMDDB, SuffixBootServiceDB, SuffixS3Credentials, etc. name the
+// standard VSO-synced secrets in each cluster namespace.
+//
+// Database credentials are split per-service so CNPG's managed.roles
+// declarative role management (introduced 2026-05-08, modeled on
+// kube-deploy) can reference each service role's password Secret
+// directly. Each per-service Secret carries `username` and `password`
+// keys — the kubernetes.io/basic-auth shape CNPG and the consumer
+// Deployments both expect.
+const (
+	SuffixSMDDB                  = "smd-db"
+	SuffixBootServiceDB          = "boot-service-db"
+	SuffixS3Credentials          = "s3-credentials"
+	SuffixLogCredentials         = "log-credentials"
+	SuffixTokensmithOIDC         = "tokensmith-oidc"
+	SuffixBootServiceBootstr     = "boot-service-bootstrap-token"
+	SuffixMetadataServiceBootstr = "metadata-service-bootstrap-token"
+
+	// SuffixServiceIdentityCA is the secret holding the per-cluster
+	// service-identity CA (kubernetes.io/tls keys plus a ca.crt copy).
+	// Mirrored into a ConfigMap of the same name so BackendTLSPolicy's
+	// caCertificateRefs (Core support: ConfigMap with key ca.crt) can
+	// reference it without granting envoy gateway Secret read access.
+	SuffixServiceIdentityCA = "service-identity-ca"
+
+	// SuffixTokensmithServerTLS is the secret holding tokensmith's
+	// HTTPS server cert+key (signed by the service-identity CA).
+	// Mounted into the tokensmith pod at TOKENSMITH_TLS_CERT_FILE /
+	// TOKENSMITH_TLS_KEY_FILE.
+	SuffixTokensmithServerTLS = "tokensmith-server-tls"
+
+	// SuffixBootServiceIdentity and SuffixMetadataServiceIdentity are
+	// the secrets holding per-consumer mTLS client certs whose
+	// Subject.CommonName matches the tokensmith bootstrap-token-policy
+	// subject. The consumer's tokensmith client library presents
+	// these to tokensmith's /service-identity/session endpoint to
+	// obtain a fresh access+refresh pair on every startup — replacing
+	// the single-use RFC 8693 bootstrap-token flow.
+	SuffixBootServiceIdentity     = "boot-service-identity"
+	SuffixMetadataServiceIdentity = "metadata-service-identity"
+
+	// ServiceIdentityCAKey is the data key the operator stores the
+	// CA certificate under in both the CA Secret and the mirrored
+	// ConfigMap. Matches the BackendTLSPolicy "Core" support level
+	// requirement for ConfigMap CA references.
+	ServiceIdentityCAKey = "ca.crt"
+
+	// VaultKeyDBUsername / VaultKeyDBPassword are the keys inside each
+	// per-service db Secret. They match what CNPG's RoleConfiguration.PasswordSecret
+	// reads (`password`) and what Deployment env-vars map to via
+	// SecretKeyRef (`username` for *_DBUSER, `password` for *_DBPASS).
+	VaultKeyDBUsername = "username"
+	VaultKeyDBPassword = "password"
+
+	// BootstrapTokenKey is the key inside the boot-service bootstrap
+	// Secret. boot-service reads its `tokensmith-bootstrap-token` flag
+	// from this value via SecretKeyRef.
+	BootstrapTokenKey = "token"
+
+	// BootstrapTokenMintedAtAnnotation records when the operator last
+	// minted a fresh bootstrap token via tokensmith. The reconciler
+	// re-mints when the timestamp is missing or older than
+	// bootstrapTokenRefreshAge — see internal/reconcilers/tokensmith.go.
+	BootstrapTokenMintedAtAnnotation = "openchami.org/bootstrap-token-minted-at"
 )
 
 // Canonical service names. Used as ServiceAccount names, database owners,
@@ -136,22 +193,41 @@ func servicePort(svc string) int32 {
 // never the in-cluster template directly, so that externalEndpoint is
 // honoured uniformly. The unit test
 // TestServiceURL_HonoursExternalEndpoint asserts the override path.
-func ServiceURL(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string) string {
-	if ext := externalEndpointFor(cluster, svc); ext != "" {
+func ServiceURL(cp *openchamiv1alpha1.OpenCHAMIControlPlane, svc string) string {
+	if ext := externalEndpointFor(cp, svc); ext != "" {
 		return ext
 	}
 	port := servicePort(svc)
 	if port == 0 {
 		return ""
 	}
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", svc, ClusterNamespace(cluster), port)
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", svc, ControlPlaneNamespace(cp), port)
+}
+
+// TokensmithBaseURL is the canonical https:// URL the operator advertises
+// for tokensmith. Distinct from ServiceURL(cp, ServiceTokensmith) only in
+// the scheme — service-identity has already pinned tokensmith's single
+// listener to HTTPS, so every consumer and the gateway's JWT provider
+// must dial https, never http. When the site has supplied an
+// externalEndpoint we honour it verbatim; otherwise we synthesise the
+// in-cluster .svc URL with https://.
+func TokensmithBaseURL(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	if ext := externalEndpointFor(cp, ServiceTokensmith); ext != "" {
+		return ext
+	}
+	port := servicePort(ServiceTokensmith)
+	if port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("https://%s.%s.svc.cluster.local:%d",
+		ServiceTokensmith, ControlPlaneNamespace(cp), port)
 }
 
 // externalEndpointFor returns spec.services.<svc>.externalEndpoint when set,
 // or "" otherwise. Centralised so the per-service spec walking lives in one
 // place; callers must not reach into spec.services themselves.
-func externalEndpointFor(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string) string {
-	s := &cluster.Spec.Services
+func externalEndpointFor(cp *openchamiv1alpha1.OpenCHAMIControlPlane, svc string) string {
+	s := &cp.Spec.Services
 	switch svc {
 	case ServiceSMD:
 		if s.SMD.ExternalEndpoint != nil {
@@ -178,8 +254,8 @@ func externalEndpointFor(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string
 // service is disabled OR when it is provided externally — in either case
 // the sub-reconciler should not create Deployment / Service / etc.
 // objects for it.
-func ServiceDeployedInCluster(cluster *openchamiv1alpha1.OpenCHAMICluster, svc string) bool {
-	s := &cluster.Spec.Services
+func ServiceDeployedInCluster(cp *openchamiv1alpha1.OpenCHAMIControlPlane, svc string) bool {
+	s := &cp.Spec.Services
 	switch svc {
 	case ServiceSMD:
 		return s.SMD.Enabled && s.SMD.ExternalEndpoint == nil
@@ -193,20 +269,176 @@ func ServiceDeployedInCluster(cluster *openchamiv1alpha1.OpenCHAMICluster, svc s
 	return false
 }
 
-// BootBucketName returns the S3 bucket name for boot images.
-func BootBucketName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	if cluster.Spec.Platform.ObjectStorage.Bucket != "" {
-		return cluster.Spec.Platform.ObjectStorage.Bucket
+// ServiceIdentityCASecretName returns the canonical Secret name for the
+// per-cluster service-identity CA (kubernetes.io/tls keys + ca.crt).
+func ServiceIdentityCASecretName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	return SecretName(cp, SuffixServiceIdentityCA)
+}
+
+// ServiceIdentityCAConfigMapName returns the canonical ConfigMap name for
+// the mirrored CA cert that BackendTLSPolicy references.
+func ServiceIdentityCAConfigMapName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	return SecretName(cp, SuffixServiceIdentityCA)
+}
+
+// ServiceIdentityClientCertSecretName returns the canonical Secret name
+// for a consumer service's mTLS client cert+key. Maps the service name
+// to the canonical suffix; returns "" for non-mTLS services so callers
+// can short-circuit at a single point.
+func ServiceIdentityClientCertSecretName(cp *openchamiv1alpha1.OpenCHAMIControlPlane, svc string) string {
+	switch svc {
+	case ServiceBootService:
+		return SecretName(cp, SuffixBootServiceIdentity)
+	case ServiceMetadataService:
+		return SecretName(cp, SuffixMetadataServiceIdentity)
 	}
-	return cluster.Spec.ClusterName + "-boot-images"
+	return ""
+}
+
+// serviceIdentityClientCertMountPath is the in-container directory where
+// consumer pods see their mTLS client cert + the trusted CA. tls.crt and
+// tls.key come from the per-service Secret; ca.crt comes from the
+// service-identity CA Secret. See serviceIdentityVolumesAndMounts for
+// the wiring.
+const serviceIdentityClientCertMountPath = "/etc/openchami/service-identity"
+
+// serviceIdentityCAMountSubPath is the subPath name inside the
+// projected volume that holds the CA cert. Consumer code reads it from
+// serviceIdentityClientCertMountPath + "/" + this value.
+const serviceIdentityCAMountSubPath = "ca.crt"
+
+// serviceIdentityCertMountSubPath / serviceIdentityKeyMountSubPath are
+// the subPath names for the per-service client cert and key inside the
+// shared projected volume.
+const (
+	serviceIdentityCertMountSubPath = "tls.crt"
+	serviceIdentityKeyMountSubPath  = "tls.key"
+)
+
+// serviceIdentityCertFilePath / serviceIdentityKeyFilePath return the
+// in-container absolute paths consumers pass to the tokensmith client
+// library via the cert / key flags. The CA cert is consumed through
+// the subPath system-trust mount (systemCATrustFilePath), not via an
+// env var, so its in-container path is internal to the volume wiring
+// and not surfaced here.
+func serviceIdentityCertFilePath() string {
+	return serviceIdentityClientCertMountPath + "/" + serviceIdentityCertMountSubPath
+}
+func serviceIdentityKeyFilePath() string {
+	return serviceIdentityClientCertMountPath + "/" + serviceIdentityKeyMountSubPath
+}
+
+// systemCATrustFilePath is where consumer pods receive a copy of the
+// service-identity CA inside the default Go TLS trust scan directory.
+// Mounting via subPath drops a single file alongside the image's
+// existing /etc/ssl/certs bundle without making the dir writable, so
+// Go's loadSystemRoots() picks up our CA on top of the system roots.
+// The file basename has to live under /etc/ssl/certs/ — Go's default
+// linux cert dir — because we don't set SSL_CERT_DIR (which would
+// REPLACE the default list and break trust for any other HTTPS
+// endpoint the service talks to, e.g. an external S3).
+const systemCATrustFilePath = "/etc/ssl/certs/openchami-service-identity-ca.crt"
+
+// serviceIdentityVolumesAndMounts returns the projected volume + mounts
+// every consumer pod needs to use mTLS service-identity. Two mounts:
+//
+//   - <serviceIdentityClientCertMountPath>/{tls.crt,tls.key,ca.crt}
+//     — what the tokensmith client library reads when WithServiceIdentityCertKey
+//     is set on the consumer.
+//   - /etc/ssl/certs/openchami-service-identity-ca.crt — subPath mount
+//     that drops the CA into Go's default trust dir so HTTPS dials to
+//     tokensmith (now serving its single port over TLS) verify
+//     successfully against the in-namespace CA. Side-effect-free for
+//     other HTTPS endpoints since the image's own ca-certificates.crt
+//     bundle stays in place.
+//
+// Returns (vols, mounts, true) when the service has a registered mTLS
+// client cert; (nil, nil, false) otherwise. Callers that pass an
+// unsupported service name get an empty result and should fall through
+// to the legacy bootstrap-token path.
+func serviceIdentityVolumesAndMounts(cp *openchamiv1alpha1.OpenCHAMIControlPlane, svc string) ([]corev1.Volume, []corev1.VolumeMount, bool) {
+	certSecret := ServiceIdentityClientCertSecretName(cp, svc)
+	if certSecret == "" {
+		return nil, nil, false
+	}
+	caSecret := ServiceIdentityCASecretName(cp)
+
+	// Single projected volume so all three files share one in-container
+	// directory; a separate single-file subPath mount drops the CA into
+	// /etc/ssl/certs for system-trust pickup. Two volumes are needed
+	// because subPath mounts cannot live inside a directory mount on
+	// some k8s versions (volumeMounts conflict), so we re-source the
+	// CA Secret as its own volume for the trust-store mount.
+	clientVol := corev1.Volume{
+		Name: "service-identity",
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						Secret: &corev1.SecretProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: certSecret},
+							Items: []corev1.KeyToPath{
+								{Key: corev1.TLSCertKey, Path: serviceIdentityCertMountSubPath},
+								{Key: corev1.TLSPrivateKeyKey, Path: serviceIdentityKeyMountSubPath},
+							},
+							Optional: ptrBool(true),
+						},
+					},
+					{
+						Secret: &corev1.SecretProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: caSecret},
+							Items: []corev1.KeyToPath{
+								{Key: ServiceIdentityCAKey, Path: serviceIdentityCAMountSubPath},
+							},
+							Optional: ptrBool(true),
+						},
+					},
+				},
+			},
+		},
+	}
+	caVol := corev1.Volume{
+		Name: "service-identity-ca",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: caSecret,
+				Items: []corev1.KeyToPath{
+					{Key: ServiceIdentityCAKey, Path: serviceIdentityCAMountSubPath},
+				},
+				Optional: ptrBool(true),
+			},
+		},
+	}
+
+	readOnly := true
+	clientMount := corev1.VolumeMount{
+		Name:      clientVol.Name,
+		MountPath: serviceIdentityClientCertMountPath,
+		ReadOnly:  readOnly,
+	}
+	trustMount := corev1.VolumeMount{
+		Name:      caVol.Name,
+		MountPath: systemCATrustFilePath,
+		SubPath:   serviceIdentityCAMountSubPath,
+		ReadOnly:  readOnly,
+	}
+	return []corev1.Volume{clientVol, caVol}, []corev1.VolumeMount{clientMount, trustMount}, true
+}
+
+// BootBucketName returns the S3 bucket name for boot images.
+func BootBucketName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	if cp.Spec.Platform.ObjectStorage.Bucket != "" {
+		return cp.Spec.Platform.ObjectStorage.Bucket
+	}
+	return cp.Spec.ClusterName + "-boot-images"
 }
 
 // LogBucketName returns the S3 bucket name for log collection.
-func LogBucketName(cluster *openchamiv1alpha1.OpenCHAMICluster) string {
-	if cluster.Spec.Logging.LogBucket != "" {
-		return cluster.Spec.Logging.LogBucket
+func LogBucketName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	if cp.Spec.Logging.LogBucket != "" {
+		return cp.Spec.Logging.LogBucket
 	}
-	return cluster.Spec.ClusterName + "-logs"
+	return cp.Spec.ClusterName + "-logs"
 }
 
 // SyntaxOnlyExternalCIDR is the placeholder ipBlock used by the *Syntax
@@ -252,9 +484,21 @@ func parseEgressHost(addr, kind string) (host string, peer networkingv1.NetworkP
 // resolveExternalPeer turns an external hostname/IP into a /32 ipBlock peer.
 // Performs DNS via net.LookupHost — only call from Reconcile paths, never from
 // Describe (see VaultEgressPeerSyntax / VersityGWEgressPeerSyntax).
+//
+// When OPENCHAMI_BEST_EFFORT_DNS=true is set in the environment, an
+// unresolvable host degrades to a syntax-only sentinel peer (0.0.0.0/0)
+// rather than aborting the entire policy build. This is the off-cluster
+// `make dev-run` mode where the operator's local resolver cannot see
+// kind-network or compose-network internal hostnames; in-cluster
+// deployments (the prod path) leave it unset and stay strict.
 func resolveExternalPeer(host, kind string) (networkingv1.NetworkPolicyPeer, error) {
 	addrs, err := net.LookupHost(host)
 	if err != nil {
+		if os.Getenv("OPENCHAMI_BEST_EFFORT_DNS") == "true" { //nolint:goconst // env value, not a label
+			return networkingv1.NetworkPolicyPeer{
+				IPBlock: &networkingv1.IPBlock{CIDR: SyntaxOnlyExternalCIDR},
+			}, nil
+		}
 		return networkingv1.NetworkPolicyPeer{}, fmt.Errorf("resolving %s host %q: %w", kind, host, err)
 	}
 	if len(addrs) == 0 {
@@ -395,4 +639,44 @@ func TmpVolume() (corev1.Volume, corev1.VolumeMount) {
 	}
 	mount := corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"}
 	return vol, mount
+}
+
+// DataVolumeAt returns a memory-backed emptyDir volume named "data" mounted at
+// the supplied path. Services whose binaries write to a relative ./data path
+// at startup (boot-service, metadata-service) need this because
+// readOnlyRootFilesystem=true makes the image's WORKDIR (typically /app)
+// read-only. The mount path therefore has to match the binary's WORKDIR/data
+// resolution rather than the literal /data, since the upstream services
+// have a viper alias bug — `mapstructure:"data_dir"` on the struct field
+// vs. `--data-dir` (with a dash) on the cobra flag, no
+// `viper.RegisterAlias("data_dir", "data-dir")` — that makes
+// --data-dir / BOOT_SERVICE_DATA_DIR / METADATA_DATA_DIR all silently
+// ignored. The only way to redirect storage is to make ./data resolve to
+// a writable location, which means matching the WORKDIR.
+//
+// The volume is per-pod ephemeral; nothing the services write under ./data
+// (cache, in-flight session state) should be expected to survive a restart.
+func DataVolumeAt(mountPath string) (corev1.Volume, corev1.VolumeMount) {
+	medium := corev1.StorageMediumMemory
+	vol := corev1.Volume{
+		Name: "data",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{Medium: medium},
+		},
+	}
+	mount := corev1.VolumeMount{Name: "data", MountPath: mountPath}
+	return vol, mount
+}
+
+// DisableServiceLinks returns the constant *bool=false that every operator-
+// managed PodSpec sets for EnableServiceLinks. With it true (the kubelet
+// default) Kubernetes injects <SERVICE_NAME>_PORT=tcp://...:port environment
+// variables for every Service in the namespace into every Pod, which collides
+// with viper/cobra-style auto-binding of --port and --host flags in the
+// OpenCHAMI services. Disabling these injections is a no-op for code that
+// doesn't read them (the cluster DNS still resolves Services by name) and a
+// fix for code that does. This is also a CIS benchmark hardening requirement.
+func DisableServiceLinks() *bool {
+	v := false
+	return &v
 }

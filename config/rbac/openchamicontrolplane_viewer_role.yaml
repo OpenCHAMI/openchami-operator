@@ -1,0 +1,29 @@
+# This rule is not used by the project openchami-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants read-only access to openchami.openchami.org resources.
+# This role is intended for users who need visibility into these resources
+# without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: openchami-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: openchamicontrolplane-viewer-role
+rules:
+- apiGroups:
+  - openchami.openchami.org
+  resources:
+  - openchamicontrolplanes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - openchami.openchami.org
+  resources:
+  - openchamicontrolplanes/status
+  verbs:
+  - get

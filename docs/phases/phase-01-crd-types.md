@@ -1,6 +1,6 @@
 # Phase 1 — CRD Type Definition
 
-**File:** `api/v1alpha1/openchamicluster_types.go`
+**File:** `api/v1alpha1/openchamicontrolplane_types.go`
 
 **Goal:** Complete CRD spec, status, and supporting types with markers.
 
@@ -46,18 +46,18 @@ Implement in this order to satisfy Go's forward-declaration rules:
 14. `DatabaseSpec`
 15. `LoggingSpec`
 16. `ObservabilitySpec`
-17. `OpenCHAMIClusterSpec`
+17. `OpenCHAMIControlPlaneSpec`
 18. `ServiceStatus`
 19. `NetworkProbeStatus`
 20. `ClusterPhase` + constants
-21. `OpenCHAMIClusterStatus`
-22. `OpenCHAMICluster` + `OpenCHAMIClusterList`
+21. `OpenCHAMIControlPlaneStatus`
+22. `OpenCHAMIControlPlane` + `OpenCHAMIControlPlaneList`
 
 ## Conversion webhook hub
-In `api/v1alpha1/openchamicluster_conversion.go`:
+In `api/v1alpha1/openchamicontrolplane_conversion.go`:
 ```go
 // Hub marks v1alpha1 as the conversion hub version.
-func (r *OpenCHAMICluster) Hub() {}
+func (r *OpenCHAMIControlPlane) Hub() {}
 ```
 
 ## After implementing

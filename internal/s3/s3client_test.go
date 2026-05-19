@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-const testS3Endpoint = "http://s3.example"
-
 // The constructor's validation paths are the only S3 logic worth covering
 // in pure unit tests — exercising the AWS SDK against a real or mocked
 // gateway belongs in an integration suite (LocalStack/VersityGW). A
@@ -31,13 +29,14 @@ func TestNewClient_RejectsEmptyEndpoint(t *testing.T) {
 }
 
 func TestNewClient_RejectsMissingCredentials(t *testing.T) {
+	const exampleEndpoint = "http://s3.example"
 	cases := []struct {
 		name string
 		cfg  Config
 	}{
-		{"no access key", Config{Endpoint: testS3Endpoint, SecretKey: "s"}},
-		{"no secret key", Config{Endpoint: testS3Endpoint, AccessKey: "k"}},
-		{"both empty", Config{Endpoint: testS3Endpoint}},
+		{"no access key", Config{Endpoint: exampleEndpoint, SecretKey: "s"}},
+		{"no secret key", Config{Endpoint: exampleEndpoint, AccessKey: "k"}},
+		{"both empty", Config{Endpoint: exampleEndpoint}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

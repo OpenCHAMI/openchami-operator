@@ -36,12 +36,24 @@ const (
 	// every Namespace; selectors target it instead of guessing custom labels.
 	kubernetesMetadataNameLabel = "kubernetes.io/metadata.name"
 
+	// cnpgClusterLabel is the per-pod label CNPG stamps onto every Postgres
+	// instance Pod identifying which CNPG Cluster the pod belongs to.
+	// NetworkPolicies use it to select Postgres pods by Cluster name.
+	cnpgClusterLabel = "cnpg.io/cluster"
+
 	// versityGWPort is the listening port for VersityGW's S3 endpoint. The
 	// operator does not deploy VersityGW (invariant #1) but allows egress to it.
 	versityGWPort int32 = 10000
 
 	// postgresPort is the listening port of the CNPG primary service.
 	postgresPort int32 = 5432
+
+	// cnpgInstanceStatusPort is the port CNPG's instance manager listens
+	// on inside each postgres pod for the controller to scrape pod status.
+	// Without ingress on this port from cnpg-system, the Cluster phase
+	// stays in "Instance Status Extraction Error: HTTP communication
+	// issue" and DatabaseReady never reaches True.
+	cnpgInstanceStatusPort int32 = 8000
 
 	// vaultPort is the conventional listening port for the external Vault
 	// instance. The actual hostname/IP comes from spec.platform.vault.address.
@@ -70,6 +82,7 @@ const (
 	policyMagellan             = "magellan-policy"
 	policyNetworkProbe         = "networkprobe-policy"
 	policyFunicular            = "funicular-policy"
+	policyPostgresIngress      = "postgres-ingress-policy"
 )
 
 // NetworkPoliciesReconciler ensures the per-cluster zero-trust NetworkPolicies
@@ -86,19 +99,19 @@ type NetworkPoliciesReconciler struct {
 // Reconcile applies every per-cluster NetworkPolicy and reports
 // ConditionNetworkPoliciesReady. Failures are reported as Ready=False with
 // Reason=Error and an Event linking to the standard runbook.
-func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "networkpolicies")
+func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "networkpolicies")
 
-	policies, err := r.buildPolicies(cluster, true)
+	policies, err := r.buildPolicies(cp, true)
 	if err != nil {
-		apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkPoliciesReady,
 			Status:             metav1.ConditionFalse,
 			Reason:             conditions.ReasonError,
 			Message:            fmt.Sprintf("building network policies: %v", err),
-			ObservedGeneration: cluster.Generation,
+			ObservedGeneration: cp.Generation,
 		})
-		RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 			conditions.ReasonError,
 			fmt.Sprintf("could not build network policies: %v", err))
 		return ctrl.Result{}, fmt.Errorf("building network policies: %w", err)
@@ -110,26 +123,26 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *open
 		pLog.Info("applying network policy")
 		if err := r.Client.Patch(ctx, p, client.Apply, //nolint:staticcheck // SSA via Patch
 			client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
-			apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 				Type:               conditions.ConditionNetworkPoliciesReady,
 				Status:             metav1.ConditionFalse,
 				Reason:             conditions.ReasonError,
 				Message:            fmt.Sprintf("applying %s: %v", p.Name, err),
-				ObservedGeneration: cluster.Generation,
+				ObservedGeneration: cp.Generation,
 			})
-			RecordConditionEvent(r.Recorder, cluster, corev1.EventTypeWarning,
+			RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning,
 				conditions.ReasonError,
 				fmt.Sprintf("applying network policy %s failed", p.Name))
 			return ctrl.Result{}, fmt.Errorf("applying network policy %s: %w", p.Name, err)
 		}
 	}
 
-	apimeta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:               conditions.ConditionNetworkPoliciesReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
 		Message:            fmt.Sprintf("%d network policies applied", len(policies)),
-		ObservedGeneration: cluster.Generation,
+		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
 }
@@ -142,8 +155,8 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cluster *open
 // allow-vault-egress / allow-versitygw-egress / allow-logs-egress policies
 // reference a sentinel ipBlock 0.0.0.0/0 in place of the resolved /32 peer.
 // Reconcile() resolves the peer for real before applying.
-func (r *NetworkPoliciesReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	policies, err := r.buildPolicies(cluster, false)
+func (r *NetworkPoliciesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	policies, err := r.buildPolicies(cp, false)
 	if err != nil {
 		return []client.Object{}, fmt.Errorf("building network policies: %w", err)
 	}
@@ -163,8 +176,8 @@ func (r *NetworkPoliciesReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAM
 // to produce a /32 ipBlock — this is the Reconcile path. When false, the
 // syntax-only helpers substitute a placeholder ipBlock without touching DNS —
 // this is the Describe path.
-func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openchamiv1alpha1.OpenCHAMICluster, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
-	ns := ClusterNamespace(cluster)
+func (r *NetworkPoliciesReconciler) buildPolicies(cp *openchamiv1alpha1.OpenCHAMIControlPlane, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
+	ns := ControlPlaneNamespace(cp)
 
 	vaultPeerFn := VaultEgressPeerSyntax
 	versityPeerFn := VersityGWEgressPeerSyntax
@@ -173,11 +186,11 @@ func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openchamiv1alpha1.Ope
 		versityPeerFn = VersityGWEgressPeer
 	}
 
-	vaultPeer, err := vaultPeerFn(cluster.Spec.Platform.Vault.Address)
+	vaultPeer, err := vaultPeerFn(cp.Spec.Platform.Vault.Address)
 	if err != nil {
 		return nil, fmt.Errorf("resolving vault egress peer: %w", err)
 	}
-	versityPeer, err := versityPeerFn(cluster.Spec.Platform.ObjectStorage.Endpoint)
+	versityPeer, err := versityPeerFn(cp.Spec.Platform.ObjectStorage.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("resolving versitygw egress peer: %w", err)
 	}
@@ -196,6 +209,7 @@ func (r *NetworkPoliciesReconciler) buildPolicies(cluster *openchamiv1alpha1.Ope
 		r.magellanPolicy(ns),
 		r.networkProbePolicy(ns),
 		r.funicularPolicy(ns, versityPeer),
+		r.postgresIngressPolicy(ns),
 	}, nil
 }
 
@@ -580,6 +594,60 @@ func ptrPodMatch(service string) *metav1.LabelSelector {
 	return &s
 }
 
+// postgresIngressPolicy admits ingress on the CNPG primary pods from the
+// services that legitimately consume the database (SMD, boot-service, and
+// the operator-managed db-init Job). Without this the default-deny-all
+// policy in the namespace blocks all ingress to the CNPG pods, so the
+// "egress allowed" rules in smd-policy and boot-service-policy don't help —
+// the destination side is what enforces the block.
+//
+// CNPG itself does not ship a default ingress policy for its pods (it
+// expects the platform owner to control that), so the operator owns the
+// CNPG-side rule too.
+func (r *NetworkPoliciesReconciler) postgresIngressPolicy(ns string) networkingv1.NetworkPolicy {
+	cnpgClusterName := ns + "-postgres"
+	return networkingv1.NetworkPolicy{
+		TypeMeta:   policyTypeMeta(),
+		ObjectMeta: policyMeta(ns, policyPostgresIngress),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{
+				{
+					// Service-pod data plane: SMD, boot-service, and
+					// instance-to-instance CNPG replication on port 5432.
+					// The previous "db-init" peer (for the operator's
+					// post-init shell-script Job) was removed when
+					// CNPG's managed.roles + Database CRDs took over
+					// role and database creation declaratively.
+					From: []networkingv1.NetworkPolicyPeer{
+						{PodSelector: ptrPodMatch(ServiceSMD)},
+						{PodSelector: ptrPodMatch(ServiceBootService)},
+						{PodSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
+						}},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{portTCP(postgresPort)},
+				},
+				{
+					// CNPG controller scraping the per-pod instance
+					// status endpoint on :8000. Without this, Cluster
+					// phase reports "HTTP communication issue" and
+					// DatabaseReady never reaches True.
+					From: []networkingv1.NetworkPolicyPeer{
+						{NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"kubernetes.io/metadata.name": "cnpg-system"},
+						}},
+					},
+					Ports: []networkingv1.NetworkPolicyPort{portTCP(cnpgInstanceStatusPort)},
+				},
+			},
+		},
+	}
+}
+
 // postgresPeer returns the peer that matches the CNPG primary pods for a
 // cluster. CNPG labels every pod it manages with `cnpg.io/cluster=<cluster>`.
 // The cluster name mirrors the one chosen in DatabaseReconciler.
@@ -592,7 +660,7 @@ func postgresPeer(ns string) networkingv1.NetworkPolicyPeer {
 	cnpgClusterName := ns + "-postgres"
 	return networkingv1.NetworkPolicyPeer{
 		PodSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{"cnpg.io/cluster": cnpgClusterName},
+			MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
 		},
 	}
 }

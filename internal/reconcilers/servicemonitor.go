@@ -51,15 +51,15 @@ type ServiceMonitorReconciler struct {
 
 // Reconcile applies a single ServiceMonitor selecting every operator-managed
 // service in the cluster's namespace.
-func (r *ServiceMonitorReconciler) Reconcile(ctx context.Context, cluster *openchamiv1alpha1.OpenCHAMICluster) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cluster, "servicemonitor")
+func (r *ServiceMonitorReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
+	log := logging.Enrich(ctx, cp, "servicemonitor")
 
-	if !cluster.Spec.Observability.PrometheusOperator {
+	if !cp.Spec.Observability.PrometheusOperator {
 		log.Info("prometheus-operator integration disabled, skipping (existing ServiceMonitor preserved)")
 		return ctrl.Result{}, nil
 	}
 
-	sm := r.buildServiceMonitor(cluster)
+	sm := r.buildServiceMonitor(cp)
 	smLog := logging.EnrichWithResource(log, kindServiceMonitor, sm.Name)
 	smLog.Info("applying ServiceMonitor")
 	if err := r.Client.Patch(ctx, sm, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -71,25 +71,25 @@ func (r *ServiceMonitorReconciler) Reconcile(ctx context.Context, cluster *openc
 
 // Describe returns the ServiceMonitor this reconciler would apply, or an
 // empty slice when prometheus-operator integration is disabled.
-func (r *ServiceMonitorReconciler) Describe(cluster *openchamiv1alpha1.OpenCHAMICluster) ([]client.Object, error) {
-	if !cluster.Spec.Observability.PrometheusOperator {
+func (r *ServiceMonitorReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	if !cp.Spec.Observability.PrometheusOperator {
 		return []client.Object{}, nil
 	}
-	return []client.Object{r.buildServiceMonitor(cluster)}, nil
+	return []client.Object{r.buildServiceMonitor(cp)}, nil
 }
 
 // buildServiceMonitor returns the operator-managed ServiceMonitor object for
 // the cluster. Selector labels are scoped to this cluster's instance so
 // neighbouring clusters in the same Prometheus do not cross-scrape.
-func (r *ServiceMonitorReconciler) buildServiceMonitor(cluster *openchamiv1alpha1.OpenCHAMICluster) *monitoringv1.ServiceMonitor {
+func (r *ServiceMonitorReconciler) buildServiceMonitor(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *monitoringv1.ServiceMonitor {
 	return &monitoringv1.ServiceMonitor{
 		TypeMeta: metav1.TypeMeta{APIVersion: serviceMonitorAPIVersion, Kind: kindServiceMonitor},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "openchami-" + cluster.Spec.ClusterName + "-services",
-			Namespace: ClusterNamespace(cluster),
+			Name:      "openchami-" + cp.Spec.ClusterName + "-services",
+			Namespace: ControlPlaneNamespace(cp),
 			Labels: map[string]string{
 				labelAppPartOf: labelAppPartOfValue,
-				labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+				labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 				labelManagedBy: managedByValue,
 			},
 		},
@@ -97,7 +97,7 @@ func (r *ServiceMonitorReconciler) buildServiceMonitor(cluster *openchamiv1alpha
 			Selector: metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					labelAppPartOf: labelAppPartOfValue,
-					labelAppInst:   "openchami-" + cluster.Spec.ClusterName,
+					labelAppInst:   "openchami-" + cp.Spec.ClusterName,
 				},
 			},
 			Endpoints: []monitoringv1.Endpoint{

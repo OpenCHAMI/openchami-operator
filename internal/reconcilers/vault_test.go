@@ -31,9 +31,9 @@ import (
 // Shared fixture cluster names used across reconciler tests. Extracted to
 // satisfy goconst across sibling test files.
 const (
-	testClusterRed   = "red"
-	testClusterBlue  = "blue"
-	testClusterAlpha = "alpha"
+	testControlPlaneRed  = "red"
+	testControlPlaneBlue = "blue"
+	testClusterAlpha     = "alpha"
 
 	// Shared test fixture values used across the network/coredhcp/magellan
 	// test files. Extracted to satisfy goconst.
@@ -48,7 +48,7 @@ const (
 	testProbeContainer  = "probe"
 
 	// testS3Endpoint is the placeholder ObjectStorage.Endpoint baked into
-	// newCluster(). Centralised here so test asserts can reference the
+	// newControlPlane(). Centralised here so test asserts can reference the
 	// same value without tripping goconst.
 	testS3Endpoint = "http://s3.test:9000"
 )
@@ -80,10 +80,10 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
-func newCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
-	return &openchamiv1alpha1.OpenCHAMICluster{
+func newControlPlane(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
+	return &openchamiv1alpha1.OpenCHAMIControlPlane{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
-		Spec: openchamiv1alpha1.OpenCHAMIClusterSpec{
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
 			ClusterName: name,
 			Domain:      name + ".test.local",
 			Platform: openchamiv1alpha1.PlatformSpec{
@@ -119,19 +119,20 @@ func newCluster(name string) *openchamiv1alpha1.OpenCHAMICluster {
 
 func TestVaultReconciler_HappyPath(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
 
 	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
 	paths := vault.Paths("alpha")
 	v.AssertCalled(t, "IsReachable")
 	v.AssertCalled(t, "EnsureKVMount")
-	v.AssertSecretExists(t, paths.DBCredentials)
+	v.AssertSecretExists(t, paths.DBSMDCredentials)
+	v.AssertSecretExists(t, paths.DBBootServiceCredentials)
 	v.AssertSecretExists(t, paths.S3Credentials)
 	v.AssertSecretExists(t, paths.LogCredentials)
 	v.AssertSecretExists(t, paths.TokensmithOIDC)
@@ -139,12 +140,12 @@ func TestVaultReconciler_HappyPath(t *testing.T) {
 	v.AssertCalled(t, "EnsureKubernetesRole")
 	v.AssertCalled(t, "EnsureOIDCConfig")
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionVaultConfigured)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionVaultConfigured)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Fatalf("expected VaultConfigured=True, got %+v", cond)
 	}
-	if cluster.Status.VaultPathPrefix != paths.SecretPrefix {
-		t.Errorf("expected VaultPathPrefix=%q, got %q", paths.SecretPrefix, cluster.Status.VaultPathPrefix)
+	if cp.Status.VaultPathPrefix != paths.SecretPrefix {
+		t.Errorf("expected VaultPathPrefix=%q, got %q", paths.SecretPrefix, cp.Status.VaultPathPrefix)
 	}
 }
 
@@ -158,20 +159,20 @@ func TestVaultReconciler_HappyPath(t *testing.T) {
 // by the OIDC key (`openchami-<clusterName>`), not the issuer URL.
 func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("alpha")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
 
 	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	issuer, ok := v.OIDCConfigs[cluster.Spec.ClusterName]
+	issuer, ok := v.OIDCConfigs[cp.Spec.ClusterName]
 	if !ok {
-		t.Fatalf("expected OIDCConfig recorded for cluster %q, got %+v", cluster.Spec.ClusterName, v.OIDCConfigs)
+		t.Fatalf("expected OIDCConfig recorded for cluster %q, got %+v", cp.Spec.ClusterName, v.OIDCConfigs)
 	}
-	want := "https://" + cluster.Spec.Domain
+	want := "https://" + cp.Spec.Domain
 	if issuer != want {
 		t.Errorf("expected issuer = %q (scheme + host only), got %q", want, issuer)
 	}
@@ -182,13 +183,13 @@ func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
 
 func TestVaultReconciler_Unreachable(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("beta")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("beta")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
 	v.Errors["IsReachable"] = errors.New("connection refused")
 
 	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
-	res, err := r.Reconcile(context.Background(), cluster)
+	res, err := r.Reconcile(context.Background(), cp)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestVaultReconciler_Unreachable(t *testing.T) {
 		t.Errorf("expected requeue when vault unreachable, got %+v", res)
 	}
 
-	cond := apimeta.FindStatusCondition(cluster.Status.Conditions, conditions.ConditionVaultConfigured)
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionVaultConfigured)
 	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonUnreachable {
 		t.Fatalf("expected VaultConfigured=False/Unreachable, got %+v", cond)
 	}
@@ -205,21 +206,21 @@ func TestVaultReconciler_Unreachable(t *testing.T) {
 
 func TestVaultReconciler_NoOverwriteExistingSecrets(t *testing.T) {
 	scheme := newScheme(t)
-	cluster := newCluster("gamma")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	cp := newControlPlane("gamma")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
 
 	paths := vault.Paths("gamma")
-	v.Secrets[paths.DBCredentials] = map[string]any{VaultKeySMDPassword: "original-value"}
+	v.Secrets[paths.DBSMDCredentials] = map[string]any{VaultKeyDBPassword: "original-value"}
 
 	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
-	if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	got := v.Secrets[paths.DBCredentials]
-	if got[VaultKeySMDPassword] != "original-value" {
-		t.Errorf("expected original DB password preserved, got %v", got[VaultKeySMDPassword])
+	got := v.Secrets[paths.DBSMDCredentials]
+	if got[VaultKeyDBPassword] != "original-value" {
+		t.Errorf("expected original DB password preserved, got %v", got[VaultKeyDBPassword])
 	}
 }
 
@@ -228,23 +229,23 @@ func TestVaultReconciler_TwoClustersIsolated(t *testing.T) {
 	v := vaultfake.NewClient()
 	rec := record.NewFakeRecorder(20)
 
-	for _, name := range []string{testClusterRed, testClusterBlue} {
-		cluster := newCluster(name)
-		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	for _, name := range []string{testControlPlaneRed, testControlPlaneBlue} {
+		cp := newControlPlane(name)
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 		r := &VaultReconciler{Client: c, Recorder: rec, VaultClient: v}
-		if _, err := r.Reconcile(context.Background(), cluster); err != nil {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
 			t.Fatalf("reconcile %s: %v", name, err)
 		}
 	}
 
-	red := vault.Paths(testClusterRed)
-	blue := vault.Paths(testClusterBlue)
+	red := vault.Paths(testControlPlaneRed)
+	blue := vault.Paths(testControlPlaneBlue)
 	if red.SecretPrefix == blue.SecretPrefix {
 		t.Fatalf("two clusters share secret prefix %q", red.SecretPrefix)
 	}
-	v.AssertSecretExists(t, red.DBCredentials)
-	v.AssertSecretExists(t, blue.DBCredentials)
-	if v.Secrets[red.DBCredentials][VaultKeySMDPassword] == v.Secrets[blue.DBCredentials][VaultKeySMDPassword] {
+	v.AssertSecretExists(t, red.DBSMDCredentials)
+	v.AssertSecretExists(t, blue.DBSMDCredentials)
+	if v.Secrets[red.DBSMDCredentials][VaultKeyDBPassword] == v.Secrets[blue.DBSMDCredentials][VaultKeyDBPassword] {
 		t.Errorf("expected distinct random passwords across clusters")
 	}
 }
@@ -259,7 +260,7 @@ func TestVaultReconciler_TwoClustersIsolated(t *testing.T) {
 func TestVaultStaticSecretSuffixesAllResolveToNonEmptyPaths(t *testing.T) {
 	paths := vault.Paths("audit-cluster")
 	if len(vssEntries) == 0 {
-		t.Fatal("vssEntries is empty — at least DBCredentials must be present")
+		t.Fatal("vssEntries is empty — at least the per-service DB credentials must be present")
 	}
 	seen := make(map[string]struct{}, len(vssEntries))
 	for _, e := range vssEntries {
@@ -291,6 +292,6 @@ func TestBuildVaultStaticSecret_UnknownSuffixPanics(t *testing.T) {
 		}
 	}()
 	r := &VaultReconciler{}
-	cluster := newCluster("audit-cluster")
-	_ = r.buildVaultStaticSecret(cluster, "no-such-suffix", vault.Paths("audit-cluster"))
+	cp := newControlPlane("audit-cluster")
+	_ = r.buildVaultStaticSecret(cp, "no-such-suffix", vault.Paths("audit-cluster"))
 }

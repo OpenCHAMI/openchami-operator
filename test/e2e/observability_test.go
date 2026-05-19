@@ -83,7 +83,7 @@ func observabilityKubectlDelete(args ...string) {
 // logging enabled and the specified TLS Secret reference.
 func observabilityApplyVenadoCluster() error {
 	manifest := fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
-kind: OpenCHAMICluster
+kind: OpenCHAMIControlPlane
 metadata:
   name: %s
   namespace: %s
@@ -183,7 +183,7 @@ data:
 // condition on the venado cluster.
 func observabilityFetchConditionReason(condType string) (string, error) {
 	jp := fmt.Sprintf(`jsonpath={.status.conditions[?(@.type=="%s")].reason}`, condType)
-	cmd := exec.Command("kubectl", "get", "openchamicluster",
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane",
 		observabilityVenadoClusterName,
 		"-n", observabilityVenadoCRNamespace,
 		"-o", jp,
@@ -199,7 +199,7 @@ func observabilityFetchConditionReason(condType string) (string, error) {
 // condition on the venado cluster, or an error if missing.
 func observabilityFetchCondition(condType string) (string, error) {
 	jp := fmt.Sprintf(`jsonpath={.status.conditions[?(@.type=="%s")].status}`, condType)
-	cmd := exec.Command("kubectl", "get", "openchamicluster",
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane",
 		observabilityVenadoClusterName,
 		"-n", observabilityVenadoCRNamespace,
 		"-o", jp,
@@ -239,8 +239,8 @@ var _ = Describe("Observability", Ordered, func() {
 	})
 
 	AfterAll(func() {
-		By("removing the venado OpenCHAMICluster CR")
-		observabilityKubectlDelete("openchamicluster",
+		By("removing the venado OpenCHAMIControlPlane CR")
+		observabilityKubectlDelete("openchamicontrolplane",
 			observabilityVenadoClusterName,
 			"-n", observabilityVenadoCRNamespace,
 		)
@@ -269,7 +269,7 @@ var _ = Describe("Observability", Ordered, func() {
 
 			By("applying the venado cluster so the certificates reconciler picks up the existing Secret")
 			Expect(observabilityApplyVenadoCluster()).To(Succeed(),
-				"failed to apply venado OpenCHAMICluster CR")
+				"failed to apply venado OpenCHAMIControlPlane CR")
 
 			By("waiting for ConditionCertificatesValid reason=ExpirationImminent")
 			Eventually(func(g Gomega) {
@@ -296,7 +296,7 @@ var _ = Describe("Observability", Ordered, func() {
 
 			By("verifying status.certExpiryTime is within ~1h of the generated NotAfter")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "openchamicluster",
+				cmd := exec.Command("kubectl", "get", "openchamicontrolplane",
 					observabilityVenadoClusterName,
 					"-n", observabilityVenadoCRNamespace,
 					"-o", "jsonpath={.status.certExpiryTime}",
@@ -323,7 +323,7 @@ var _ = Describe("Observability", Ordered, func() {
 		It("creates the log bucket and applies the configured retention rule", func() {
 			By("applying the venado cluster with logging enabled")
 			Expect(observabilityApplyVenadoCluster()).To(Succeed(),
-				"failed to apply venado OpenCHAMICluster CR")
+				"failed to apply venado OpenCHAMIControlPlane CR")
 
 			By("waiting for ConditionLogBucketReady=True")
 			Eventually(func(g Gomega) {
@@ -363,7 +363,7 @@ var _ = Describe("Observability", Ordered, func() {
 		It("runs the funicular-collector DaemonSet with the expected env", func() {
 			By("ensuring the venado cluster is applied (idempotent)")
 			Expect(observabilityApplyVenadoCluster()).To(Succeed(),
-				"failed to apply venado OpenCHAMICluster CR")
+				"failed to apply venado OpenCHAMIControlPlane CR")
 
 			By("waiting for the funicular DaemonSet to report numberReady>0")
 			Eventually(func(g Gomega) {
@@ -430,7 +430,7 @@ var _ = Describe("Observability", Ordered, func() {
 		It("backs up the cluster to local disk and creates a CNPG Backup CR", func() {
 			By("ensuring the venado cluster is applied (idempotent)")
 			Expect(observabilityApplyVenadoCluster()).To(Succeed(),
-				"failed to apply venado OpenCHAMICluster CR")
+				"failed to apply venado OpenCHAMIControlPlane CR")
 
 			By("waiting for the venado namespace to exist")
 			Eventually(func(g Gomega) {

@@ -225,7 +225,7 @@ replacements:
    targets: # Do not remove or uncomment the following scaffold marker; required to generate code for target CRD.
      - select:
          kind: CustomResourceDefinition
-         name: openchamiclusters.openchami.openchami.org
+         name: openchamicontrolplanes.openchami.openchami.org
        fieldPaths:
          - .metadata.annotations.[cert-manager.io/inject-ca-from]
        options:
@@ -242,7 +242,7 @@ replacements:
    targets: # Do not remove or uncomment the following scaffold marker; required to generate code for target CRD.
      - select:
          kind: CustomResourceDefinition
-         name: openchamiclusters.openchami.openchami.org
+         name: openchamicontrolplanes.openchami.openchami.org
        fieldPaths:
          - .metadata.annotations.[cert-manager.io/inject-ca-from]
        options:
