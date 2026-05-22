@@ -76,9 +76,7 @@ func SecretName(cp *openchamiv1alpha1.OpenCHAMIControlPlane, suffix string) stri
 	return "openchami-" + cp.Spec.ClusterName + "-" + suffix
 }
 
-// ptrBool returns a pointer to the supplied bool. Useful for filling
-// out *bool fields in Kubernetes API types (Optional, etc.) inline.
-func ptrBool(b bool) *bool { return &b }
+var boolTrue = true
 
 // SuffixSMDDB, SuffixBootServiceDB, SuffixS3Credentials, etc. name the
 // standard VSO-synced secrets in each cluster namespace.
@@ -381,7 +379,7 @@ func serviceIdentityVolumesAndMounts(cp *openchamiv1alpha1.OpenCHAMIControlPlane
 								{Key: corev1.TLSCertKey, Path: serviceIdentityCertMountSubPath},
 								{Key: corev1.TLSPrivateKeyKey, Path: serviceIdentityKeyMountSubPath},
 							},
-							Optional: ptrBool(true),
+							Optional: &boolTrue,
 						},
 					},
 					{
@@ -390,7 +388,7 @@ func serviceIdentityVolumesAndMounts(cp *openchamiv1alpha1.OpenCHAMIControlPlane
 							Items: []corev1.KeyToPath{
 								{Key: ServiceIdentityCAKey, Path: serviceIdentityCAMountSubPath},
 							},
-							Optional: ptrBool(true),
+							Optional: &boolTrue,
 						},
 					},
 				},
@@ -405,7 +403,7 @@ func serviceIdentityVolumesAndMounts(cp *openchamiv1alpha1.OpenCHAMIControlPlane
 				Items: []corev1.KeyToPath{
 					{Key: ServiceIdentityCAKey, Path: serviceIdentityCAMountSubPath},
 				},
-				Optional: ptrBool(true),
+				Optional: &boolTrue,
 			},
 		},
 	}
@@ -445,7 +443,7 @@ func serviceIdentityCATrustOnly(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (co
 				Items: []corev1.KeyToPath{
 					{Key: ServiceIdentityCAKey, Path: serviceIdentityCAMountSubPath},
 				},
-				Optional: ptrBool(true),
+				Optional: &boolTrue,
 			},
 		},
 	}

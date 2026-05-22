@@ -164,7 +164,7 @@ func (r *MetadataServiceReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCH
 						Name: SecretName(cp, SuffixMetadataServiceBootstr),
 					},
 					Key:      BootstrapTokenKey,
-					Optional: ptrBool(true),
+					Optional: &boolTrue,
 				},
 			},
 		},

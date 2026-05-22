@@ -214,7 +214,7 @@ func (r *BootServiceReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIC
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{Name: SecretName(cp, SuffixBootServiceBootstr)},
 					Key:                  BootstrapTokenKey,
-					Optional:             ptrBool(true),
+					Optional:             &boolTrue,
 				},
 			},
 		},

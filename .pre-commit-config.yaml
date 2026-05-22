@@ -9,6 +9,7 @@ repos:
     -   id: trailing-whitespace
     -   id: end-of-file-fixer
     -   id: check-yaml
+        args: [--allow-multiple-documents]
         # Skip the kustomize patches under config/ — they include schema-violating
         # template fields that controller-gen emits and yamllint trips on.
         exclude: ^config/.*\.yaml$

@@ -25,4 +25,3 @@ resources:
 - openchamicontrolplane_admin_role.yaml
 - openchamicontrolplane_editor_role.yaml
 - openchamicontrolplane_viewer_role.yaml
-

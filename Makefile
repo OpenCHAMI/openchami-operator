@@ -83,14 +83,12 @@ vet: ## Run go vet
 
 lint-config: ## Verify golangci-lint configuration is valid
 	@which golangci-lint > /dev/null || \
-	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
-	  sh -s -- -b $$(go env GOPATH)/bin
+	  GOBIN=$$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	golangci-lint config verify
 
 lint: ## Run golangci-lint
 	@which golangci-lint > /dev/null || \
-	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
-	  sh -s -- -b $$(go env GOPATH)/bin
+	  GOBIN=$$(go env GOPATH)/bin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	golangci-lint run ./...
 
 ##@ Testing
