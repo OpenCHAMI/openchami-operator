@@ -10,9 +10,11 @@ import (
 	"time"
 
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -178,12 +180,33 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1
 	// can serve JWKS — otherwise envoy's JWT filter caches the failed
 	// RemoteJWKS fetch at startup and every JWT-gated request 500s
 	// with `direct_response` until the proxy pod is restarted.
+	//
+	// Second gate: when tokensmith is in HTTPS mode (mTLS
+	// service-identity active), envoy needs a BackendTLSPolicy to
+	// validate the in-namespace CA against tokensmith's server cert.
+	// BackendTLSPolicy is a gateway-api CRD (promoted from
+	// experimental → standard in gateway-api v1.4); some clusters
+	// don't have it installed. If absent, applying the policy
+	// crashes the reconcile with "no matches for kind". Detect at
+	// runtime and degrade the same way "tokensmith not ready" does:
+	// hold back the JWT-gated routes until the operator user
+	// installs the CRD. The Gateway resource itself + non-JWT
+	// routes still apply, so the cluster stays partially usable.
 	objs := r.objectsAlways(cp)
 	tokensmithReady := tokensmithJWKSReady(cp)
-	if tokensmithReady {
-		objs = append(objs, r.objectsRequiringTokensmith(cp)...)
-	} else {
+	btlsAvailable := r.backendTLSPolicyAvailable(ctx, log)
+	needsBTLS := tokensmithMTLSEnabled(cp)
+	missingBTLSGate := needsBTLS && !btlsAvailable
+
+	switch {
+	case !tokensmithReady:
 		log.Info("deferring JWT-gated routes until tokensmith is Ready")
+	case missingBTLSGate:
+		log.Info("deferring JWT-gated routes — mTLS is on but BackendTLSPolicy CRD is missing; " +
+			"install gateway-api v1.4+ (e.g. kubectl apply -f " +
+			"https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml)")
+	default:
+		objs = append(objs, r.objectsRequiringTokensmith(cp, btlsAvailable)...)
 	}
 	for _, obj := range objs {
 		oLog := logging.EnrichWithResource(log,
@@ -195,7 +218,8 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1
 				obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
 		}
 	}
-	if !tokensmithReady {
+	switch {
+	case !tokensmithReady:
 		// Surface the deferral as a clear GatewayReady=False reason so
 		// `kubectl get ocp` doesn't show a green-by-default cluster
 		// while half the routes are missing. Programmed=True on the
@@ -208,6 +232,19 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1
 			Message:            "deferring JWT-protected routes until tokensmith is Ready (envoy JWKS fetch would otherwise poison)",
 			ObservedGeneration: cp.Generation,
 		})
+		cp.Status.Gateway = nil
+		return ctrl.Result{RequeueAfter: gatewayRequeueAfter}, nil
+	case missingBTLSGate:
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+			Type:               conditions.ConditionGatewayReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             conditions.ReasonMissingCRD,
+			Message:            "BackendTLSPolicy CRD (gateway.networking.k8s.io/v1) is not installed; install gateway-api v1.4+ standard CRDs to enable JWT-gated routes under mTLS",
+			ObservedGeneration: cp.Generation,
+		})
+		RecordConditionEvent(r.Recorder, cp, "Warning",
+			conditions.ReasonMissingCRD,
+			"BackendTLSPolicy CRD missing — JWT-gated gateway routes deferred until installed")
 		cp.Status.Gateway = nil
 		return ctrl.Result{RequeueAfter: gatewayRequeueAfter}, nil
 	}
@@ -281,8 +318,13 @@ func (r *GatewayReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane
 // Returns the full set: Describe() / static snapshots want everything;
 // the Reconcile loop trims to objectsAlways() when tokensmith isn't
 // Ready yet (see that helper for the rationale).
+//
+// Describe() is doc-only — it never runs against a live cluster — so
+// it always claims BackendTLSPolicy is available regardless of which
+// gateway-api version the eventual target cluster has. The Reconcile
+// path does the live RESTMapper check and trims appropriately.
 func (r *GatewayReconciler) objectsToApply(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []client.Object {
-	return append(r.objectsAlways(cp), r.objectsRequiringTokensmith(cp)...)
+	return append(r.objectsAlways(cp), r.objectsRequiringTokensmith(cp, true)...)
 }
 
 // objectsAlways returns the gateway resources that are safe to apply
@@ -325,9 +367,13 @@ func (r *GatewayReconciler) objectsAlways(cp *openchamiv1alpha1.OpenCHAMIControl
 // Skipping it when tokensmith is still on HTTP avoids envoy rejecting
 // the policy as "no matching backend listener TLS" — the policy is
 // inert without a TLS backend.
-func (r *GatewayReconciler) objectsRequiringTokensmith(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []client.Object {
+func (r *GatewayReconciler) objectsRequiringTokensmith(cp *openchamiv1alpha1.OpenCHAMIControlPlane, btlsAvailable bool) []client.Object {
 	var objs []client.Object
-	if ServiceDeployedInCluster(cp, ServiceTokensmith) && tokensmithMTLSEnabled(cp) {
+	// Only include BackendTLSPolicy when (a) mTLS is actually in use
+	// AND (b) the CRD is registered in this cluster. Without the CRD
+	// the apply would 404 `no matches for kind "BackendTLSPolicy"`
+	// and tank the whole reconcile.
+	if ServiceDeployedInCluster(cp, ServiceTokensmith) && tokensmithMTLSEnabled(cp) && btlsAvailable {
 		objs = append(objs, r.buildJWKSBackendTLSPolicy(cp))
 	}
 	if ServiceDeployedInCluster(cp, ServiceSMD) {
@@ -352,6 +398,41 @@ func (r *GatewayReconciler) objectsRequiringTokensmith(cp *openchamiv1alpha1.Ope
 		)
 	}
 	return objs
+}
+
+// backendTLSPolicyAvailable reports whether the cluster has the
+// gateway.networking.k8s.io/v1 BackendTLSPolicy CRD installed.
+// Probed via the client's RESTMapper rather than a discovery client
+// lookup — the controller-runtime cached RESTMapper picks up new
+// CRDs after its periodic refresh, so installing the CRD without
+// restarting the operator eventually unblocks the JWT-gated routes
+// (next reconcile after the cache refresh interval).
+//
+// Returns false on any lookup error (NoKindMatchError = not
+// registered; other errors = treat as not-registered defensively).
+// Errors are logged at Info level so the user sees the cause
+// without the noise of every reconcile emitting a stacktrace.
+// ctx is currently unused but kept in the signature because future
+// controller-runtime client mappers may surface context-aware
+// lookups; trivial to thread through, and a no-op for today.
+func (r *GatewayReconciler) backendTLSPolicyAvailable(_ context.Context, log logr.Logger) bool {
+	gvk := schema.GroupVersionKind{
+		Group:   gwapiv1.GroupVersion.Group,
+		Version: gwapiv1.GroupVersion.Version,
+		Kind:    kindBackendTLSPolicy,
+	}
+	if _, err := r.Client.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			log.Info("BackendTLSPolicy CRD not registered in this cluster — JWT-gated routes will be deferred under mTLS",
+				"gvk", gvk.String(),
+				"remedy", "kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml")
+			return false
+		}
+		log.Info("RESTMapper lookup for BackendTLSPolicy failed; treating as unavailable",
+			"err", err.Error())
+		return false
+	}
+	return true
 }
 
 // tokensmithJWKSReady returns true when JWT-gated routes are safe to

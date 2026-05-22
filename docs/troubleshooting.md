@@ -132,7 +132,7 @@ If Vault is up but unreachable from inside the kind cluster, it's a docker-netwo
 ## When to file a bug
 
 If you've isolated a reproducible failure that:
-- Happens against the canonical `test/fixtures/minimal-cluster.yaml`,
+- Happens against the canonical `test/fixtures/minimal-controlplane.yaml`,
 - Doesn't trace to a missing prereq or environmental issue,
 - Hits the same condition reason on every retry,
 
@@ -222,3 +222,83 @@ Re-deletion + reconcile recreates the Job. (If this fails repeatedly with the sa
 kubectl api-resources --verbs=list -n openchami-<cluster> -o name | xargs -n1 -I{} kubectl get {} -n openchami-<cluster> --ignore-not-found
 ```
 Manual finalizer removal is a last resort; prefer fixing the upstream controller.
+
+### `GatewayReady=False/MissingCRD` after a clean install
+
+**Symptom:** every other condition reports `Status=True`, but `GatewayReady = False [MissingCRD] BackendTLSPolicy CRD (gateway.networking.k8s.io/v1) is not installed`.
+
+**Cause:** the cluster has gateway-api < 1.4 installed. `BackendTLSPolicy` was promoted from `v1alpha3` to `v1` in gateway-api 1.4; the operator targets `v1`. The Envoy Gateway helm chart does **not** install the v1 standard CRDs on its own.
+
+**Diagnosis:**
+```sh
+kubectl get crd backendtlspolicies.gateway.networking.k8s.io \
+  -o jsonpath='{range .spec.versions[*]}{.name}: served={.served} storage={.storage}{"\n"}{end}'
+```
+If `v1` is missing or `served=false`, this is the issue.
+
+**Recovery:**
+```sh
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
+```
+The operator picks up the new RESTMapper on its next reconcile (within ~30s). `GatewayReady` flips to `True/Ready` once Envoy programs the gateway.
+
+### Service pod stuck `0/1 Running` while server log says "Server starting"
+
+**Symptom:** a service pod reaches steady-state `0/1 Running` (not CrashLoopBackOff), the container's stdout shows the server bound its port, yet the pod never becomes Ready. The `Service` has no `Endpoints` and downstream `ServicesReady` stays `False`.
+
+**Cause:** the kubelet readiness probe path doesn't match what the service binary actually serves. Common when an upstream image renames `/health → /healthz` (or vice versa) and the operator's hardcoded probe path drifts. The container is healthy; the probe is wrong.
+
+**Diagnosis:**
+```sh
+kubectl port-forward -n openchami-<cluster> <pod> 18081:<containerPort>
+# in another terminal:
+for path in / /health /healthz /readyz; do
+  echo "  $path -> $(curl -sS -o /dev/null --max-time 2 -w '%{http_code}' http://127.0.0.1:18081$path)"
+done
+```
+If `/healthz` returns 200 but the operator probes `/health` (or vice versa), the operator's probe-path constant disagrees with this image.
+
+**Recovery:** pin the service to an image whose endpoint matches what the operator's reconciler expects (`grep -E '"/health\w*"' internal/reconcilers/<service>.go`). Long-term, the reconciler's probe path is one source of truth — file an issue if the upstream image renames endpoints across a release.
+
+### Two ReplicaSets, both `desired=1`, neither becomes Ready
+
+**Symptom:** `kubectl get rs -n openchami-<cluster> -l app.kubernetes.io/name=<service>` shows two ReplicaSets each with `DESIRED=1, CURRENT=1, READY=0`, and `kubectl rollout status` reports `exceeded its progress deadline`.
+
+**Cause:** a rolling update started, the new ReplicaSet's pod never became Ready, so kube-controller-manager refuses to scale the old ReplicaSet to 0. Common when a recent image bump or env-var change introduced a crash that neither rollout side can pass.
+
+**Diagnosis:** look at each ReplicaSet's pod independently:
+```sh
+kubectl get pods -n openchami-<cluster> -l app.kubernetes.io/name=<service>
+kubectl logs -n openchami-<cluster> <pod> --previous --tail=40   # for each pod
+```
+The two pods usually fail in **different ways** — one for the old reason (now fixed by a config patch), one for a new reason (introduced by the patch). Both must be diagnosed; fixing only the new one doesn't drain the rollout.
+
+**Recovery:** find the actual fix for the *new* ReplicaSet's failure mode, apply it (the operator re-patches the Deployment with a new pod-template-hash on next reconcile), and the now-Ready new pod lets the old ReplicaSet scale to 0 naturally. If both ReplicaSets are wedged on the same cause but you want to force a clean roll, deleting the older ReplicaSet (`kubectl delete rs -n openchami-<cluster> <oldHash>`) is safe — the operator-owned Deployment re-creates it from spec if still needed.
+
+### `coredhcp` / `funicular-collector` / `network-probe` pods rejected by PodSecurity admission
+
+**Symptom:** kube-controller-manager event `pods "<name>" is forbidden: violates PodSecurity "restricted:latest"` and `DHCPReady` / `LogCollectorReady` stuck `Provisioning`.
+
+**Cause:** these three workloads are fundamentally host-namespace (CoreDHCP hostNetwork for UDP 67/68; funicular hostPath for `/var/log/pods`; network-probe hostNetwork). They do not fit the PSA `restricted` or `baseline` profiles.
+
+**Operator behaviour:** the NamespaceReconciler stamps each cluster namespace with `enforce=privileged, warn=restricted, audit=restricted`. There is no PSA level between `baseline` and `privileged` that permits hostNetwork+hostPath+hostPort. The `warn`/`audit` levels still raise admission events when service-tier pods drift outside `restricted`, preserving visibility. Confirmed at `internal/reconcilers/namespace.go:75`.
+
+**Recovery:** if the symptom appears anyway, something downstream of the operator is overriding the namespace labels. Re-applying the CR triggers the operator to reconcile the labels back to `privileged`. For per-pod hardening inside a privileged namespace, layer Kyverno or OPA Gatekeeper.
+
+### Reading pod env vs Deployment spec when chasing config drift
+
+**Symptom:** you applied a fix to the operator, restarted it, and the Deployment's `spec.template.spec.containers[0].env` now looks correct — but the running pod's env (`kubectl get pod -o yaml`) still shows the old values, and the pod is still crashing on the old config.
+
+**Cause:** the Deployment was patched to a new spec, generating a new ReplicaSet — but the old ReplicaSet still has its pod running with the previous config because the rolling update can't replace it until the new pod becomes Ready (see the two-ReplicaSet pattern above).
+
+**Diagnosis:** check **both** sides. The authoritative thing is the per-pod spec, not the Deployment spec:
+```sh
+# Deployment spec (what the operator wrote LAST)
+kubectl get deploy -n openchami-<cluster> <name> -o jsonpath='{.spec.template.spec.containers[0].env}' | jq
+
+# Running pod spec (what is ACTUALLY executing)
+kubectl get pod -n openchami-<cluster> <pod> -o jsonpath='{.spec.containers[0].env}' | jq
+```
+A diff between the two indicates a stuck rollout. The reconciler is doing its job; rollout convergence is the blocker.
+
+**Recovery:** fix the cause of the new pod's failure (port-forward + probe the live pod, read `--previous` logs). The rollout converges once the new pod passes readiness.

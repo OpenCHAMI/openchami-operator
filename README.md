@@ -20,8 +20,10 @@ The operator never deploys Vault or VersityGW; both are external prerequisites. 
 The full documentation tree lives under [`docs/`](docs/README.md). Start with:
 
 - **[Quickstart](docs/quickstart.md)** — local dev cluster + first reconcile in under 15 minutes.
+- **[Install (production)](docs/install-production.md)** — end-to-end walkthrough for a fresh non-dev cluster.
 - **[Architecture](docs/architecture.md)** — controller, sub-reconcilers, reconcile order.
 - **[CRD reference](docs/crd-reference.md)** — every `OpenCHAMIControlPlane` field.
+- **[ochami-admin CLI](docs/cli.md)** — companion CLI: `init` / `describe` / `backup` / `restore` / `logs`.
 - **[Invariants](docs/invariants.md)** — the 10 absolute rules.
 - **[Troubleshooting](docs/troubleshooting.md)** — common failure modes with fixes.
 - **[Contributing](docs/contributing.md)** — adding a sub-reconciler / CRD field / webhook.
@@ -34,7 +36,7 @@ make install-tools
 make dev-up                       # docker-compose Vault+LocalStack, kind cluster, prereq CRDs
 
 # Apply a test cluster
-kubectl apply -f test/fixtures/minimal-cluster.yaml
+kubectl apply -f test/fixtures/minimal-controlplane.yaml
 kubectl get openchamicontrolplane testcluster -w
 
 # Run the operator locally against the dev cluster
@@ -99,7 +101,7 @@ openchami-operator/
 │   └── version/                    operator semver and image tag config
 ├── test/
 │   ├── e2e/                        Ginkgo end-to-end tests
-│   └── fixtures/                   minimal-cluster.yaml, dual-cluster.yaml, full-cluster.yaml
+│   └── fixtures/                   minimal-controlplane.yaml, dual-controlplane.yaml, full-controlplane.yaml, production-controlplane.yaml.example
 ├── SERVICES.md                     pinned default service images for the current release
 ├── UPGRADE.md                      release-to-release upgrade notes
 ├── CLAUDE.md                       agent-specific guidance

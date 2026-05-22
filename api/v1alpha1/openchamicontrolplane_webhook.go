@@ -7,6 +7,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"reflect"
 	"sort"
@@ -247,17 +248,19 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 	)
 	specPath := field.NewPath("spec")
 
-	// 1. Vault address must be https:// — except for dev-mode loopback
-	// addresses (localhost / 127.0.0.1 / ::1), where http:// is permitted
-	// because Vault dev-mode runs without TLS and the dev shakedown
-	// pipeline relies on it. Production endpoints (any non-loopback host)
+	// 1. Vault address must be https:// — except for hosts that are
+	// unreachable from outside the cluster, where http:// is permitted
+	// because dev-mode Vault never serves TLS. See isAllowedVaultAddress
+	// for the full carveout (loopback, cluster-internal DNS, RFC1918
+	// IPs, etc.). Production endpoints — any publicly-routable host —
 	// still require https://.
 	vaultPath := specPath.Child("platform", "vault", "address")
 	if !isAllowedVaultAddress(obj.Spec.Platform.Vault.Address) {
 		allErrs = append(allErrs, field.Invalid(
 			vaultPath,
 			obj.Spec.Platform.Vault.Address,
-			"vault address must use https:// (http:// is allowed only for localhost/127.0.0.1/::1)",
+			"vault address must use https:// (http:// is allowed only for hosts unreachable from outside the cluster: "+
+				"localhost/127.0.0.1/::1, single-label DNS, *.svc/*.svc.cluster.local, RFC1918 IPs, IPv6 ULA/link-local)",
 		))
 	}
 
@@ -468,9 +471,11 @@ func nodeSelectorHasClusterDiscriminator(selector map[string]string, clusterName
 
 // isAllowedVaultAddress reports whether addr satisfies the operator's vault
 // address policy: https:// is always allowed; http:// is allowed only when
-// the host portion is a loopback address (localhost, 127.0.0.1, or ::1)
-// because the dev-mode shakedown stack uses plain HTTP. Production endpoints
-// always end up via the https:// path.
+// the host portion is unreachable from outside the cluster
+// (see isClusterInternalHost for the full list). Public hostnames always
+// require https:// — the policy exists to prevent operators from
+// accidentally shipping prod traffic in plaintext, not to block dev
+// clusters whose Vault genuinely runs without TLS.
 func isAllowedVaultAddress(addr string) bool {
 	if strings.HasPrefix(addr, "https://") {
 		return true
@@ -482,10 +487,46 @@ func isAllowedVaultAddress(addr string) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	host := u.Hostname()
+	return isClusterInternalHost(u.Hostname())
+}
+
+// isClusterInternalHost returns true for hostnames and IPs that are
+// only resolvable / routable from inside the cluster (or on the
+// host running the operator). Plain HTTP to these is acceptable
+// because traffic never crosses a trust boundary; plain HTTP to a
+// public hostname would.
+//
+// Allowed forms:
+//   - explicit loopback: localhost, 127.0.0.1, ::1
+//   - Kubernetes Service DNS: any name ending in `.svc` or
+//     `.svc.cluster.local` (the latter is the canonical form; the
+//     former matches any cluster-DNS suffix the kubelet is
+//     configured with)
+//   - single-label DNS names (no dots) — only resolvable via the
+//     in-cluster search path; reaching one from outside requires
+//     deliberate /etc/hosts manipulation, which is treated as the
+//     operator user's choice
+//   - RFC1918 private IPv4: 10/8, 172.16/12, 192.168/16
+//   - IPv4 link-local: 169.254/16
+//   - IPv6 ULA: fc00::/7
+//   - IPv6 link-local: fe80::/10
+func isClusterInternalHost(host string) bool {
 	switch host {
 	case "localhost", "127.0.0.1", "::1":
 		return true
+	}
+	if strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local") {
+		return true
+	}
+	if !strings.Contains(host, ".") && !strings.Contains(host, ":") {
+		// Single-label DNS — only resolvable in-cluster.
+		// Exclude bracket-less IPv6 (which contains colons).
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return true
+		}
 	}
 	return false
 }

@@ -33,9 +33,10 @@ const (
 	// pod has readOnlyRootFilesystem=true. Also where the WireGuard
 	// state file lives by default.
 	metadataServiceDataDir = "/data"
-	// /health is what cmd/server/server_extensions.go:30 actually
-	// registers (`r.Get("/health", healthHandler)`). The earlier
-	// /cloud-init/health was a guess and 404s.
+	// The metadata-service binary serves its liveness endpoint at /health
+	// (see cmd/server/main.go in OpenCHAMI/metadata-service). A short-lived
+	// pr-14 build briefly exposed /healthz instead; pr-15 reverted to
+	// /health. /healthz currently 404s against the published image.
 	metadataServiceHealthPath = "/health"
 )
 

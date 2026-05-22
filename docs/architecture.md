@@ -140,6 +140,6 @@ This is what divides the operator from the integration-sandbox: the sandbox test
 | `internal/version/` | operator semver and image tag config |
 | `config/` | controller-gen output: CRD, RBAC, webhook manifests |
 | `hack/local-dev/` | docker-compose, kind config, Vault seed |
-| `test/fixtures/` | minimal-cluster.yaml, dual-cluster.yaml, full-cluster.yaml |
+| `test/fixtures/` | minimal-controlplane.yaml, dual-controlplane.yaml, full-controlplane.yaml, production-controlplane.yaml.example |
 | `test/e2e/` | Ginkgo end-to-end tests |
 | `docs/` | this tree |

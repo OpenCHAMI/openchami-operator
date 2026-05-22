@@ -65,7 +65,7 @@ The dev cluster brings up Vault on `127.0.0.1:8200` (root token `dev-root-token`
 ### Apply a test cluster
 
 ```sh
-kubectl apply -f test/fixtures/minimal-cluster.yaml
+kubectl apply -f test/fixtures/minimal-controlplane.yaml
 kubectl get openchamicontrolplane testcluster -w
 ```
 

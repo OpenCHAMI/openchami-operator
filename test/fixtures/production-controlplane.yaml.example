@@ -1,0 +1,206 @@
+# OpenCHAMIControlPlane — production example
+#
+# Worked example for a real (non-dev) deployment. Copy, rename, and edit
+# the values marked CHANGEME before applying. Pairs with the walkthrough
+# in docs/install-production.md.
+#
+# This file is NOT picked up by `make test` or `make e2e` — the .example
+# suffix keeps it out of the test fixture glob. It exists as documentation.
+#
+# Required prerequisites (see docs/external-dependencies.md):
+#   - cert-manager, CloudNativePG, Vault Secrets Operator, Envoy Gateway,
+#     gateway-api v1.4+ standard CRDs already installed.
+#   - A reachable external Vault with KV-v2 and AppRole auth enabled.
+#   - A reachable VersityGW (or other S3-compatible endpoint).
+#   - The per-cluster Vault paths under `openchami/<clusterName>/` already
+#     populated with database, S3, and OIDC client credentials. See
+#     docs/install-production.md §6 for the canonical KV layout.
+#   - A Kubernetes Secret in the OpenCHAMIControlPlane's namespace
+#     containing the AppRole credentials. Keys: `id` (secret_id), and
+#     conventionally `role_id`. The operator wires this into the
+#     VSO VaultAuth.
+#
+apiVersion: openchami.openchami.org/v1alpha1
+kind: OpenCHAMIControlPlane
+metadata:
+  # Convention: `metadata.name` matches `spec.clusterName`.
+  name: venado                            # CHANGEME
+  namespace: default
+  # Optional annotations the operator honours:
+  #   openchami.org/cleanup-vault: "true"    # delete cluster Vault paths on CR delete
+  #   openchami.org/cleanup-s3:    "true"    # delete cluster S3 buckets on CR delete
+  # Both default off. Leave commented for production until you have a
+  # disaster-recovery plan for the cluster's secrets and boot images.
+spec:
+  # `clusterName` is the per-cluster identity. Drives:
+  #   - the namespace name `openchami-<clusterName>`
+  #   - the Vault path prefix `openchami/<clusterName>/`
+  #   - the network-probe label keys `openchami.org/<clusterName>-{provision,bmc}-network-ready`
+  # Pattern: ^[a-z][a-z0-9-]*$. Immutable after creation.
+  clusterName: venado                     # CHANGEME
+
+  # External FQDN for the cluster gateway. Used as the SNI / route host on
+  # the Envoy Gateway and as the OIDC issuer base URL.
+  domain: venado.hpc.example.com          # CHANGEME
+
+  platform:
+    vault:
+      # The Vault server is EXTERNAL (invariant 1). The operator never
+      # deploys Vault. https:// is required for non-loopback hosts; the
+      # validating webhook only accepts http:// for localhost / 127.0.0.1.
+      address: https://vault.hpc.example.com:8200    # CHANGEME
+
+      # AppRole auth is the common production choice. `kubernetes` auth is
+      # also supported when Vault is configured to trust the cluster's
+      # service-account JWKS.
+      authMethod: appRole
+
+      # Kubernetes Secret holding the AppRole secret_id (key: `id`). VSO
+      # reads it from the per-cluster namespace `openchami-<clusterName>`,
+      # so the namespace must exist and contain the Secret BEFORE the CR
+      # is applied (the operator creates `openchami-<clusterName>` itself,
+      # but VSO's first auth round happens early enough that pre-staging is
+      # the reliable path).
+      #
+      # Provision step (run once, out of band):
+      #
+      #   kubectl create namespace openchami-venado
+      #   ROLE_ID=$(vault read  -field=role_id auth/approle/role/openchami-venado-services/role-id)
+      #   SECRET_ID=$(vault write -f -field=secret_id auth/approle/role/openchami-venado-services/secret-id)
+      #   kubectl -n openchami-venado create secret generic venado-vault-approle \
+      #     --from-literal=id="$SECRET_ID" \
+      #     --from-literal=role_id="$ROLE_ID"
+      #
+      # See docs/install-production.md §6 for the matching Vault policy.
+      appRoleSecretRef:
+        name: venado-vault-approle        # CHANGEME
+
+      # When Vault uses a private CA, supply the trust bundle so the
+      # operator can verify the TLS certificate.
+      caBundleSecretRef:
+        name: corporate-ca-bundle         # optional; remove if Vault uses a public CA
+
+    objectStorage:
+      # VersityGW (or any S3-compatible endpoint) is EXTERNAL. Path-style
+      # addressing is used unconditionally; the endpoint may be HTTP for
+      # in-cluster S3 gateways or HTTPS for public endpoints.
+      endpoint: https://versitygw.hpc.example.com:7070   # CHANGEME
+
+      # Defaults to "<clusterName>-boot-images" if unset.
+      bucket: venado-boot-images
+      tlsInsecure: false   # never true in production
+
+  # Network probing labels eligible nodes for the host-network DaemonSets
+  # (CoreDHCP, Magellan). Disable and set explicit nodeSelectors if your
+  # site already labels nodes through another mechanism.
+  networkProbe:
+    enabled: true
+    intervalSeconds: 300
+    provisionNetwork:
+      subnet: 10.42.0.0/16                # CHANGEME — PXE/provision network CIDR
+      validateHost: 10.42.0.1             # gateway/DHCP server IP
+      validatePort: 22                    # any reachable TCP port
+      validateTimeout: 3s
+    bmcNetwork:
+      subnet: 10.43.0.0/16                # CHANGEME — BMC network CIDR
+      validateHost: 10.43.0.1
+      validatePort: 623                   # IPMI
+      validateTimeout: 5s
+
+  services:
+    # Each `*Service` block uses the ServiceDefaults shape:
+    #   enabled, replicas, image (repository/tag/pullPolicy), resources,
+    #   externalEndpoint (HTTP services only).
+    #
+    # Default images for the operator release you are running are listed in
+    # SERVICES.md. The `image:` blocks below are commented out so the
+    # operator uses those defaults. Uncomment and pin only when you need a
+    # specific tag (security patch, validated build, etc.) for one service.
+    smd:
+      enabled: true
+      replicas: 3
+      # image:
+      #   repository: ghcr.io/openchami/smd
+      #   tag: v2.20.3
+      #   pullPolicy: IfNotPresent
+      resources:
+        requests: { cpu: 200m, memory: 256Mi }
+        limits:   { cpu: 1,   memory: 1Gi  }
+
+    tokensmith:
+      enabled: true
+      # Replicas always 1 — tokensmith holds key material and is not horizontally scaled.
+      oidcProvider: vault
+
+    bootService:
+      enabled: true
+      replicas: 3
+
+    metadataService:
+      enabled: true
+      replicas: 3
+      preserveClientIP: false
+
+    coreDHCP:
+      enabled: true
+      # nodeSelector left unset on purpose — the network-probe DaemonSet
+      # populates labels matching openchami.org/venado-provision-network-ready=true.
+      # If networkProbe is disabled, set this explicitly per invariant 4
+      # (no two clusters target the same node).
+      leaseRanges:
+        - subnet: 10.42.0.0/16
+          start:  10.42.10.1
+          end:    10.42.250.254
+      unknownLeaseDuration: 5m
+      knownLeaseDuration:   24h
+
+    magellan:
+      enabled: true
+      bmcSubnet: 10.43.0.0/16             # must match networkProbe.bmcNetwork.subnet
+      schedule: "*/15 * * * *"            # cron
+      concurrencyPolicy: Forbid
+
+  networking:
+    gatewayClass: envoy
+    tls:
+      # Production: reference a cert-manager Issuer or ClusterIssuer you
+      # already manage (typically a Let's Encrypt ACME issuer or an
+      # internal-CA Vault-PKI issuer). The operator creates the
+      # Certificate resource and waits for cert-manager to issue.
+      issuer: vault-pki-issuer            # CHANGEME
+      # Optional override; defaults to "<clusterName>-tls".
+      secretName: venado-gateway-tls
+
+  database:
+    instances: 3                          # 3 for HA + automatic failover
+    storageSize: 200Gi
+    storageClass: fast-ssd                # CHANGEME — must exist as a StorageClass in-cluster
+    backupEnabled: true                   # requires the bucket above to be writeable
+
+  logging:
+    enabled: false   # flip to true only once you have a working collector image
+    logBucket: venado-logs
+    retentionDays: 90
+    flushIntervalSeconds: 60
+    # When enabled, supply an image. The default container repo
+    # (`ghcr.io/openchami/funicular-collector`) has historically not been
+    # published; until it is, point this at a working fluent-bit, vector,
+    # or otel-collector build configured for the funicular schema.
+    # image:
+    #   repository: docker.io/fluent/fluent-bit
+    #   tag: 3.1.0
+
+  observability:
+    # Set true if the cluster has kube-prometheus-stack (or any
+    # distribution shipping monitoring.coreos.com/v1) installed. Operator
+    # emits ServiceMonitor resources per service when true.
+    prometheusOperator: true
+
+  # Operator version coupling:
+  #   - `stable`: the operator adopts new service defaults from each
+  #     release of itself. Recommended for steady-state operations.
+  #   - `pinned` + `pinnedVersion`: the operator refuses to reconcile if
+  #     its own running version doesn't match. Use during a controlled
+  #     upgrade window or when the cluster must not change while you
+  #     audit operator releases.
+  operatorChannel: stable

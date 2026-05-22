@@ -150,7 +150,7 @@ dev-up: ## Start local development environment
 	@echo "  make dev-deploy             # build + load + deploy the operator INTO the kind cluster"
 	@echo ""
 	@echo "Then apply a test cluster:"
-	@echo "  kubectl apply -f test/fixtures/minimal-cluster.yaml"
+	@echo "  kubectl apply -f test/fixtures/minimal-controlplane.yaml"
 	@echo "  kubectl get openchamicontrolplane testcluster -w"
 
 dev-down: ## Tear down local development environment
@@ -292,7 +292,7 @@ dev-deploy: docker-build ## Build operator image, load into kind, and deploy in-
 	kubectl -n openchami-operator-system rollout status deploy/openchami-operator-controller-manager --timeout=120s
 	@echo ""
 	@echo "Operator deployed. Trigger a reconcile or apply a fixture:"
-	@echo "  kubectl apply -f test/fixtures/minimal-cluster.yaml"
+	@echo "  kubectl apply -f test/fixtures/minimal-controlplane.yaml"
 	@echo "  kubectl get openchamicontrolplane testcluster -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{\"\\n\"}{end}'"
 
 dev-run: build install ## Run operator locally against dev cluster (installs CRDs first)

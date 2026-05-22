@@ -180,10 +180,21 @@ vaultconnections.secrets.hashicorp.com
 vaultauths.secrets.hashicorp.com
 gateways.gateway.networking.k8s.io
 httproutes.gateway.networking.k8s.io
+backendtlspolicies.gateway.networking.k8s.io       # gateway-api v1.4+ (standard channel)
 securitypolicies.gateway.envoyproxy.io
 backendtrafficpolicies.gateway.envoyproxy.io
 certificates.cert-manager.io
+issuers.cert-manager.io                            # used by the service-identity reconciler
 ```
+
+`backendtlspolicies` is **degradable**: when missing, the gateway
+reconciler skips publishing JWT-gated routes under mTLS and surfaces
+`GatewayReady=False/MissingCRD`. The cluster stays partially usable;
+the operator user has to install gateway-api v1.4+ standard CRDs
+(e.g. `kubectl apply -f .../gateway-api/.../v1.5.1/standard-install.yaml`)
+to get the JWT-gated routes back online. See `gateway.go`'s
+`backendTLSPolicyAvailable` for the runtime check pattern — replicate
+it for any future CRD whose absence shouldn't crash the reconcile.
 
 ---
 

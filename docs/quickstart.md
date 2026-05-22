@@ -75,7 +75,7 @@ make deploy IMG=ghcr.io/openchami/openchami-operator:v1.2.3
 After **either** Path A or Path B is running:
 
 ```sh
-kubectl apply -f test/fixtures/minimal-cluster.yaml
+kubectl apply -f test/fixtures/minimal-controlplane.yaml
 kubectl get openchamicontrolplane testcluster -w
 ```
 

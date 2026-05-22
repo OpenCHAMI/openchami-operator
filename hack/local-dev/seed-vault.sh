@@ -27,19 +27,24 @@ vault write pki/root/generate/internal \
 
 # Write test credentials
 PREFIX="openchami/$CLUSTER"
-# DB credentials carry four keys:
-#   - username + password: consumed by CNPG bootstrap.InitDB.Secret
-#   - SMD_DB_PASSWORD: consumed by the SMD service Deployment (aliased to
-#     password so the CNPG-created user and the running service share one
-#     credential)
-#   - BOOT_SERVICE_DB_PASSWORD: consumed by the boot-service Deployment
-#     and by the post-init Job that creates the boot_service role
-SMD_PW="test-smd-password-$(openssl rand -hex 8)"
-vault kv put "$PREFIX/db/credentials" \
+# DB credentials: one per-role path per dbRoleSpec in
+# internal/reconcilers/database.go. The vault reconciler reads from
+# $PREFIX/db/{smd,boot-service} (see VaultPaths.DBSMDCredentials and
+# DBBootServiceCredentials in internal/vault/paths.go) using the
+# `username` and `password` keys (VaultKeyDBUsername / VaultKeyDBPassword
+# in internal/reconcilers/helpers.go).
+#
+# EnsureSecret(..., overwrite=false) means: if the path already has a
+# secret, leave it alone; if empty, the operator generates random
+# credentials itself. Seeding here lets the dev cluster start with
+# deterministic passwords so `vault kv get` reproduces them.
+vault kv put "$PREFIX/db/smd" \
   username="smd" \
-  password="$SMD_PW" \
-  SMD_DB_PASSWORD="$SMD_PW" \
-  BOOT_SERVICE_DB_PASSWORD="test-boot-password-$(openssl rand -hex 8)"
+  password="test-smd-password-$(openssl rand -hex 8)"
+
+vault kv put "$PREFIX/db/boot-service" \
+  username="boot_service" \
+  password="test-boot-password-$(openssl rand -hex 8)"
 
 vault kv put "$PREFIX/s3/versitygw" \
   access_key="test-access-$(openssl rand -hex 8)" \

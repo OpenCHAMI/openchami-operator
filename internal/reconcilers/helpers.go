@@ -425,6 +425,39 @@ func serviceIdentityVolumesAndMounts(cp *openchamiv1alpha1.OpenCHAMIControlPlane
 	return []corev1.Volume{clientVol, caVol}, []corev1.VolumeMount{clientMount, trustMount}, true
 }
 
+// serviceIdentityCATrustOnly returns the single Volume + VolumeMount
+// pair needed by services that have to *trust* tokensmith's HTTPS
+// server cert but don't themselves present a client cert. SMD is the
+// canonical case — it pulls JWKS from tokensmith over HTTPS to
+// validate inbound JWTs, but it isn't an mTLS service-identity
+// subject.
+//
+// Same subPath shape as serviceIdentityVolumesAndMounts uses for its
+// CA mount — a single file dropped into /etc/ssl/certs/ so Go's
+// loadSystemRoots() picks it up on top of the image's existing
+// ca-certificates bundle. No SSL_CERT_DIR override needed.
+func serviceIdentityCATrustOnly(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (corev1.Volume, corev1.VolumeMount) {
+	vol := corev1.Volume{
+		Name: "service-identity-ca",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: ServiceIdentityCASecretName(cp),
+				Items: []corev1.KeyToPath{
+					{Key: ServiceIdentityCAKey, Path: serviceIdentityCAMountSubPath},
+				},
+				Optional: ptrBool(true),
+			},
+		},
+	}
+	mount := corev1.VolumeMount{
+		Name:      vol.Name,
+		MountPath: systemCATrustFilePath,
+		SubPath:   serviceIdentityCAMountSubPath,
+		ReadOnly:  true,
+	}
+	return vol, mount
+}
+
 // BootBucketName returns the S3 bucket name for boot images.
 func BootBucketName(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 	if cp.Spec.Platform.ObjectStorage.Bucket != "" {

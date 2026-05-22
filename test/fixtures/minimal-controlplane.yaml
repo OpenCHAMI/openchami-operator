@@ -1,23 +1,32 @@
 apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMIControlPlane
 metadata:
-  name: testcluster
+  name: frodo
   namespace: default
   annotations:
     # Safety: don't clean up Vault or S3 when this test cluster is deleted
     # openchami.org/cleanup-vault: "true"
     # openchami.org/cleanup-s3: "true"
 spec:
-  clusterName: testcluster
-  domain: testcluster.local
+  clusterName: frodo
+  domain: frodo.local
 
   platform:
     vault:
-      # Container hostname on the 'kind' docker network. dev-up attaches
-      # the compose-managed openchami-vault-dev container to that network
-      # so VSO inside the cluster can resolve it. From the host you can
-      # still reach this Vault on http://localhost:8200.
-      address: "http://openchami-vault-dev:8200"  # Vault dev mode — no TLS in dev
+      # Single-label docker hostname on the 'kind' docker network.
+      # dev-up attaches the openchami-vault-dev container to that
+      # network; CoreDNS forwards to the kind node's resolver, which
+      # in turn talks to docker's embedded DNS, so VSO running
+      # inside the cluster can dial this host by name. From the
+      # host you can also reach the same Vault on http://localhost:8200.
+      #
+      # The scheme is http:// (NOT https://) because dev-mode Vault
+      # never serves TLS. The operator's webhook accepts http:// for
+      # cluster-internal hosts (loopback / single-label DNS /
+      # *.svc[.cluster.local] / RFC1918 / IPv6 ULA-link-local) — see
+      # isAllowedVaultAddress in api/v1alpha1/openchamicontrolplane_webhook.go.
+      # Public hostnames still require https://.
+      address: "http://openchami-vault-dev:8200"
       authMethod: appRole
       appRoleSecretRef:
         name: testcluster-approle     # created by hack/local-dev/seed-vault.sh
@@ -34,6 +43,9 @@ spec:
     smd:
       enabled: true
       replicas: 1
+      image:
+        tag: v2.20.3
+        pullPolicy: Always
     tokensmith:
       enabled: true
       image:

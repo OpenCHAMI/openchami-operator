@@ -64,9 +64,10 @@ Phase 15 (`docs/phases/phase-15-e2e.md`) carries the named test IDs and the faul
 
 | File | Cluster spec |
 |---|---|
-| `test/fixtures/minimal-cluster.yaml` | `testcluster`. Probes disabled. All services enabled. 1 DB replica. AppRole auth. localhost:8200 / localstack:4566. |
-| `test/fixtures/full-cluster.yaml` | Same name, 3 DB replicas, backup enabled. |
-| `test/fixtures/dual-cluster.yaml` | Two clusters: `venado` and `frontier`. Used for cross-cluster isolation tests. |
+| `test/fixtures/minimal-controlplane.yaml` | `testcluster`. Probes disabled. All services enabled. 1 DB replica. AppRole auth. Container-hostname Vault + LocalStack. |
+| `test/fixtures/full-controlplane.yaml` | `venado-prod`. Network probing enabled. 3 DB replicas. Backup enabled. ServiceMonitor enabled. |
+| `test/fixtures/dual-controlplane.yaml` | Two clusters (`venado` and `frontier`) for cross-cluster isolation tests. |
+| `test/fixtures/production-controlplane.yaml.example` | Heavily-annotated production-shaped example. Not picked up by tests; intended to be copied and edited. |
 
 ## Integration sandbox
 

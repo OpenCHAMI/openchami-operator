@@ -106,4 +106,14 @@ const (
 	// mTLS service-identity flow depends on. Idempotent: clears once
 	// every Secret is present and well-formed.
 	ReasonAwaitingServiceIdentity = "AwaitingServiceIdentity"
+
+	// ReasonMissingCRD is set on ConditionGatewayReady when a required
+	// CRD is absent from the cluster — most commonly
+	// gateway.networking.k8s.io/v1 BackendTLSPolicy, which gateway-api
+	// promoted from experimental to standard in v1.4. The operator
+	// still works without it (JWT-gated routes get deferred the same
+	// way they would if tokensmith were down), but the user must
+	// install the missing CRD before envoy can validate the
+	// in-namespace CA on the JWKS fetch.
+	ReasonMissingCRD = "MissingCRD"
 )

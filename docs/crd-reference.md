@@ -227,8 +227,9 @@ See [webhooks.md](webhooks.md) for defaulting, validation, and conversion behavi
 
 Three fixtures ship with the repo:
 
-- `test/fixtures/minimal-cluster.yaml` — single cluster `testcluster`, networkProbe disabled, all services enabled with defaults, 1 DB replica.
-- `test/fixtures/full-cluster.yaml` — same shape with 3 DB replicas + backup enabled.
-- `test/fixtures/dual-cluster.yaml` — two clusters (`venado`, `frontier`) for concurrency testing.
+- `test/fixtures/minimal-controlplane.yaml` — single cluster `testcluster`, networkProbe disabled, all services enabled with defaults, 1 DB replica.
+- `test/fixtures/full-controlplane.yaml` — `venado-prod` shape with network probing on, 3 DB replicas + backup enabled.
+- `test/fixtures/dual-controlplane.yaml` — two clusters (`venado`, `frontier`) for concurrency testing.
+- `test/fixtures/production-controlplane.yaml.example` — heavily-annotated production-shaped example; see [install-production.md](install-production.md).
 
 Apply any of them with `kubectl apply -f` and watch with `kubectl get openchamicontrolplane -A -w`.

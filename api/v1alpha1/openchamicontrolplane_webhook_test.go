@@ -269,14 +269,46 @@ func TestValidateCreate_VaultAddressAllowsLoopbackHTTP(t *testing.T) {
 	}
 }
 
-// TestValidateCreate_VaultAddressRejectsNonLoopbackHTTP keeps the strict
-// rule for non-loopback hosts. Without this, the loopback exemption could
-// drift into a generic "any http://" allow-list.
-func TestValidateCreate_VaultAddressRejectsNonLoopbackHTTP(t *testing.T) {
+// TestValidateCreate_VaultAddressAllowsClusterInternalHTTP locks in
+// the broadened carveout: dev-mode Vault on a Kubernetes Service DNS
+// name, a single-label hostname (the dev shakedown harness's
+// `openchami-vault-dev`), or an RFC1918 / link-local IP is permitted
+// over http:// because none of those resolve outside the cluster, so
+// no trust boundary is crossed.
+func TestValidateCreate_VaultAddressAllowsClusterInternalHTTP(t *testing.T) {
+	for _, addr := range []string{
+		"http://vault.openchami-system.svc:8200",               // .svc form
+		"http://vault.openchami-system.svc.cluster.local:8200", // canonical
+		"http://openchami-vault-dev:8200",                      // single-label
+		"http://vault-prod:8200",                               // single-label (still in-cluster)
+		"http://10.0.0.5:8200",                                 // RFC1918 10/8
+		"http://172.16.0.5:8200",                               // RFC1918 172.16/12
+		"http://192.168.1.5:8200",                              // RFC1918 192.168/16
+		"http://169.254.1.5:8200",                              // IPv4 link-local
+		"http://[fd12:3456::1]:8200",                           // IPv6 ULA
+		"http://[fe80::1]:8200",                                // IPv6 link-local
+	} {
+		t.Run(addr, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.Address = addr
+			if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+				t.Fatalf("expected cluster-internal http:// vault address %q to be accepted, got %v", addr, err)
+			}
+		})
+	}
+}
+
+// TestValidateCreate_VaultAddressRejectsPublicHTTP keeps the strict
+// rule for publicly-routable hosts. Without this, the carveout could
+// drift into a generic "any http://" allow-list and a production
+// deployment could ship traffic in plaintext by accident.
+func TestValidateCreate_VaultAddressRejectsPublicHTTP(t *testing.T) {
 	for _, addr := range []string{
 		"http://vault.example.com:8200",
-		"http://10.0.0.5:8200",
-		"http://vault-prod:8200",
+		"http://vault.openchami.org:8200",
+		"http://8.8.8.8:8200",       // public IPv4
+		"http://[2001:db8::1]:8200", // public IPv6 (documentation range, but isPrivate=false)
 	} {
 		t.Run(addr, func(t *testing.T) {
 			w := newWebhook(t)

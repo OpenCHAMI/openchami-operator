@@ -164,10 +164,34 @@ func (r *SMDReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIControlPl
 
 	dbHost := fmt.Sprintf("openchami-%s-postgres-rw.%s.svc.cluster.local",
 		cp.Spec.ClusterName, ns)
-	jwksURL := ServiceURL(cp, ServiceTokensmith) + "/.well-known/jwks.json"
+	// JWKS URL must switch to https:// once tokensmith is in mTLS
+	// mode — otherwise SMD plaintext-curls tokensmith's HTTPS port
+	// and gets HTTP 400 / TLS-handshake errors, then CrashLoopBackOff
+	// after legacy-auth's six fetch retries. Same gate the consumer
+	// reconcilers use; see TokensmithBaseURL for the rationale.
+	tokensmithURL := ServiceURL(cp, ServiceTokensmith)
+	if tokensmithMTLSEnabled(cp) {
+		tokensmithURL = TokensmithBaseURL(cp)
+	}
+	jwksURL := tokensmithURL + "/.well-known/jwks.json"
 	dbCredsSecret := SecretName(cp, SuffixSMDDB)
 
 	image, pullPolicy := ResolveImage(cp, ServiceSMD)
+
+	// When mTLS is on, SMD's Go HTTP client needs the in-namespace CA
+	// in its trust store to validate tokensmith's HTTPS cert (which
+	// is signed by the per-cluster service-identity CA, not by any
+	// public root). Drop the CA into /etc/ssl/certs via a subPath
+	// mount — same pattern boot-service and metadata-service use,
+	// minus the client-cert half since SMD isn't an mTLS subject.
+	smdVolumes := []corev1.Volume{tmpVol}
+	smdMounts := []corev1.VolumeMount{tmpMount}
+	if tokensmithMTLSEnabled(cp) {
+		caVol, caMount := serviceIdentityCATrustOnly(cp)
+		smdVolumes = append(smdVolumes, caVol)
+		smdMounts = append(smdMounts, caMount)
+	}
+
 	container := corev1.Container{
 		Name:            ServiceSMD,
 		Image:           image,
@@ -194,7 +218,7 @@ func (r *SMDReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIControlPl
 			},
 			{Name: "SMD_JWKS_URL", Value: jwksURL},
 		},
-		VolumeMounts: []corev1.VolumeMount{tmpMount},
+		VolumeMounts: smdMounts,
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -289,7 +313,7 @@ func (r *SMDReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIControlPl
 					SecurityContext:    CommonPodSecurityContext(),
 					InitContainers:     []corev1.Container{initContainer},
 					Containers:         []corev1.Container{container},
-					Volumes:            []corev1.Volume{tmpVol},
+					Volumes:            smdVolumes,
 					TopologySpreadConstraints: []corev1.TopologySpreadConstraint{{
 						MaxSkew:           1,
 						TopologyKey:       topologyHostKey,

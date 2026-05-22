@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -21,6 +22,26 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
+
+// restMapperWithBackendTLSPolicy returns a RESTMapper that recognises
+// the gateway.networking.k8s.io/v1 BackendTLSPolicy GVK so the
+// production code's runtime CRD-presence check sees it as installed.
+// The controller-runtime fake client builds an empty default RESTMapper
+// even when you pass a fully-populated scheme; tests that exercise
+// CRD-presence-aware code paths have to supply one explicitly.
+func restMapperWithBackendTLSPolicy() apimeta.RESTMapper {
+	// gwapiv1.GroupVersion is a metav1.GroupVersion; the
+	// schema-flavour alias (used by NewDefaultRESTMapper) is
+	// SchemeGroupVersion. They carry the same Group/Version but
+	// satisfy different package types.
+	gv := schema.GroupVersion{
+		Group:   gwapiv1.GroupVersion.Group,
+		Version: gwapiv1.GroupVersion.Version,
+	}
+	m := apimeta.NewDefaultRESTMapper([]schema.GroupVersion{gv})
+	m.Add(gv.WithKind("BackendTLSPolicy"), apimeta.RESTScopeNamespace)
+	return m
+}
 
 // markServiceIdentityReady is a tiny helper used by every wiring test
 // below to satisfy the precondition the production code reads.
@@ -252,7 +273,10 @@ func TestGatewayReconciler_BackendTLSPolicyWhenMTLSReady(t *testing.T) {
 	cp.Status.Services[ServiceTokensmith] = openchamiv1alpha1.ServiceStatus{Ready: true}
 	markServiceIdentityReady(cp)
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(restMapperWithBackendTLSPolicy()).
+		WithObjects(cp).Build()
 	r := &GatewayReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -274,5 +298,76 @@ func TestGatewayReconciler_BackendTLSPolicyWhenMTLSReady(t *testing.T) {
 		policy.Spec.Validation.CACertificateRefs[0].Name != gwapiv1.ObjectName(ServiceIdentityCAConfigMapName(cp)) {
 		t.Errorf("BackendTLSPolicy must reference the CA ConfigMap, got %+v",
 			policy.Spec.Validation.CACertificateRefs)
+	}
+}
+
+// TestGatewayReconciler_DefersWhenBackendTLSPolicyCRDMissing covers the
+// graceful-degrade path: when mTLS is on but the cluster doesn't have
+// gateway.networking.k8s.io/v1 BackendTLSPolicy registered, the operator
+// must NOT crash the reconcile (`no matches for kind "BackendTLSPolicy"`)
+// and must surface the gap as GatewayReady=False/MissingCRD so an
+// operator user can spot and resolve it. The Gateway resource and
+// non-JWT routes still apply.
+//
+// This test deliberately uses the default fake-client RESTMapper (no
+// BackendTLSPolicy registered) so the production code's runtime check
+// returns false — same shape as a real cluster without gateway-api
+// v1.4+ standard CRDs installed.
+func TestGatewayReconciler_DefersWhenBackendTLSPolicyCRDMissing(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane(testClusterAlpha)
+	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+		Type:   conditions.ConditionCertificatesValid,
+		Status: metav1.ConditionTrue,
+		Reason: conditions.ReasonReady,
+	})
+	if cp.Status.Services == nil {
+		cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
+	}
+	cp.Status.Services[ServiceTokensmith] = openchamiv1alpha1.ServiceStatus{Ready: true}
+	markServiceIdentityReady(cp)
+
+	// No WithRESTMapper — fake builder's default has zero entries, so
+	// the production helper's RESTMapping lookup returns NoMatchError.
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	r := &GatewayReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile must not error when BackendTLSPolicy CRD is missing, got %v", err)
+	}
+
+	// The Gateway itself should still have been applied (it doesn't
+	// depend on the missing CRD).
+	gw := &gwapiv1.Gateway{}
+	if err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: ControlPlaneNamespace(cp), Name: gatewayName,
+	}, gw); err != nil {
+		t.Errorf("Gateway must still be applied when BackendTLSPolicy CRD is missing, got err=%v", err)
+	}
+
+	// The BackendTLSPolicy must NOT have been attempted.
+	policy := &gwapiv1.BackendTLSPolicy{}
+	err := c.Get(context.Background(), types.NamespacedName{
+		Namespace: ControlPlaneNamespace(cp), Name: jwksBackendTLSPolicyName,
+	}, policy)
+	if err == nil {
+		t.Errorf("BackendTLSPolicy must NOT be applied when its CRD is missing — got an existing policy %+v",
+			policy)
+	}
+
+	// And the user-visible signal: GatewayReady=False/MissingCRD.
+	cond := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionGatewayReady)
+	if cond == nil {
+		t.Fatalf("expected ConditionGatewayReady to be set")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("ConditionGatewayReady.Status = %v, want False", cond.Status)
+	}
+	if cond.Reason != conditions.ReasonMissingCRD {
+		t.Errorf("ConditionGatewayReady.Reason = %q, want %q",
+			cond.Reason, conditions.ReasonMissingCRD)
+	}
+	if !strings.Contains(cond.Message, "BackendTLSPolicy") {
+		t.Errorf("ConditionGatewayReady.Message should mention BackendTLSPolicy for operator-user diagnosis, got %q",
+			cond.Message)
 	}
 }
