@@ -35,7 +35,9 @@ path = [
   ".dockerignore",
   ".golangci.yml",
   ".custom-gcl.yml",
+  ".goreleaser.yml",
   "Dockerfile",
+  "Dockerfile.goreleaser",
   "Makefile",
 ]
 precedence = "aggregate"

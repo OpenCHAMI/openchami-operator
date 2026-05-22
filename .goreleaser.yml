@@ -1,0 +1,123 @@
+# Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+#
+# SPDX-License-Identifier: MIT
+
+version: 2
+
+project_name: openchami-operator
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  # Operator — Linux only; binary name "manager" to match the existing Dockerfile convention.
+  - id: operator
+    binary: manager
+    main: ./cmd/operator
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/openchami/openchami-operator/internal/version.Version={{.Version}}
+      - -X github.com/openchami/openchami-operator/internal/version.GitCommit={{.Commit}}
+      - -X github.com/openchami/openchami-operator/internal/version.BuildDate={{.Date}}
+
+  # Admin CLI — ships for Linux and macOS on both architectures.
+  - id: ochami-admin
+    binary: ochami-admin
+    main: ./cmd/ochami-admin
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/openchami/openchami-operator/internal/version.Version={{.Version}}
+      - -X github.com/openchami/openchami-operator/internal/version.GitCommit={{.Commit}}
+      - -X github.com/openchami/openchami-operator/internal/version.BuildDate={{.Date}}
+
+  # Network probe — Linux only (depends on netlink for live route checks).
+  - id: probe
+    binary: probe
+    main: ./cmd/probe
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/openchami/openchami-operator/internal/version.Version={{.Version}}
+      - -X github.com/openchami/openchami-operator/internal/version.GitCommit={{.Commit}}
+      - -X github.com/openchami/openchami-operator/internal/version.BuildDate={{.Date}}
+
+archives:
+  # ochami-admin ships as a tarball so users can extract and place in $PATH.
+  - id: ochami-admin
+    ids:
+      - ochami-admin
+    formats: tar.gz
+    name_template: "ochami-admin_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  # probe ships as a tarball for Linux node deployment.
+  - id: probe
+    ids:
+      - probe
+    formats: tar.gz
+    name_template: "probe_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  # operator binary is container-only; no archive.
+
+# Multi-arch manifest: goreleaser builds one docker buildx call covering both platforms
+# and publishes a manifest list with the version tag and (for stable releases) latest.
+dockers_v2:
+  - id: operator
+    ids:
+      - operator
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - "ghcr.io/openchami/openchami-operator"
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    annotations:
+      "org.opencontainers.image.created": "{{.Date}}"
+      "org.opencontainers.image.title": "{{.ProjectName}}"
+      "org.opencontainers.image.revision": "{{.FullCommit}}"
+      "org.opencontainers.image.version": "{{.Version}}"
+      "org.opencontainers.image.source": "https://github.com/OpenCHAMI/openchami-operator"
+      "org.opencontainers.image.licenses": "MIT"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+release:
+  github:
+    owner: OpenCHAMI
+    name: openchami-operator
+  # Pre-release tags (e.g. v1.2.3-rc.1) are marked as pre-release on GitHub.
+  prerelease: auto

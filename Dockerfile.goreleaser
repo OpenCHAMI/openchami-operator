@@ -1,0 +1,14 @@
+# Copyright © 2026 OpenCHAMI a Series of LF Projects, LLC
+#
+# SPDX-License-Identifier: MIT
+
+# Goreleaser pre-builds the operator binary for each target platform and copies
+# it into the build context under $TARGETPLATFORM/ before invoking docker buildx.
+# The development Dockerfile (./Dockerfile) retains the multi-stage build for
+# use with `make docker-build`.
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/manager .
+USER 65532:65532
+ENTRYPOINT ["/manager"]

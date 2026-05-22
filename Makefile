@@ -26,7 +26,7 @@ IMAGE_NAME     ?= openchami-operator
 IMAGE_TAG      ?= $(VERSION)
 IMG            ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
-.PHONY: all build generate manifests fmt vet lint test docker-build \
+.PHONY: all build generate manifests fmt vet lint lint-config test test-e2e docker-build \
         dev-up dev-down e2e migrate-storage-version \
         check-tools install-tools help
 
@@ -81,6 +81,12 @@ fmt: ## Run goimports
 vet: ## Run go vet
 	go vet ./...
 
+lint-config: ## Verify golangci-lint configuration is valid
+	@which golangci-lint > /dev/null || \
+	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+	  sh -s -- -b $$(go env GOPATH)/bin
+	golangci-lint config verify
+
 lint: ## Run golangci-lint
 	@which golangci-lint > /dev/null || \
 	  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
@@ -92,7 +98,7 @@ lint: ## Run golangci-lint
 ENVTEST_ASSETS_DIR := $(shell pwd)/testbin
 ENVTEST_K8S_VERSION := 1.31.x
 
-test: ## Run unit tests with envtest
+test: envtest ## Run unit tests with envtest
 	@mkdir -p $(ENVTEST_ASSETS_DIR)
 	KUBEBUILDER_ASSETS=$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_ASSETS_DIR) -p path) \
 	  go test -race -count=1 -timeout 5m ./internal/... ./api/... ./cmd/...
@@ -111,6 +117,8 @@ test-cover: ## Run tests with coverage report
 
 e2e: ## Run end-to-end tests (requires make dev-up first)
 	go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/...
+
+test-e2e: e2e ## Alias for e2e target (used by CI workflow)
 
 ##@ Local development
 
