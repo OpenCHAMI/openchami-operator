@@ -27,7 +27,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Check linter configuration
-        run: make lint-config
-      - name: Run linter
-        run: make lint
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        with:
+          version: v9.2.1
+          install-mode: goinstall

@@ -17,7 +17,7 @@ LDFLAGS := \
   -X $(VERSION_PKG).BuildDate=$(DATE)
 
 # Tool versions
-CONTROLLER_GEN_VERSION := v0.16.0
+CONTROLLER_GEN_VERSION := v0.21.0
 ENVTEST_VERSION        := latest
 
 # Image
