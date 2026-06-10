@@ -182,6 +182,8 @@ func (r *OpenCHAMIControlPlaneReconciler) reconcileAll(ctx context.Context, cp *
 		&reconcilers.ServiceMonitorReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.LogBucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: r.S3Client},
 		&reconcilers.FunicularReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.LogqCompactorReconciler{Client: r.Client, Recorder: r.Recorder},
+		&reconcilers.LogqQueryReconciler{Client: r.Client, Recorder: r.Recorder},
 	}
 
 	var longestRequeue time.Duration

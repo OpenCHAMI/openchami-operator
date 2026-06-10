@@ -404,6 +404,46 @@ type LoggingSpec struct {
 	// is true and Image is unset.
 	// +optional
 	Image *ImageSpec `json:"image,omitempty"`
+
+	// CompactorEnabled gates the logq-compactor CronJob that converts NDJSON
+	// to Parquet daily. Defaults to false. When true, requires CompactorImage
+	// to be set (no default image published yet).
+	// +kubebuilder:default=false
+	// +optional
+	CompactorEnabled bool `json:"compactorEnabled,omitempty"`
+
+	// CompactorImage overrides the logq-compactor container image.
+	// +optional
+	CompactorImage *ImageSpec `json:"compactorImage,omitempty"`
+
+	// CompactorSchedule is the cron schedule for the compactor CronJob.
+	// Defaults to "0 2 * * *" (daily at 2 AM).
+	// +kubebuilder:default="0 2 * * *"
+	// +optional
+	CompactorSchedule string `json:"compactorSchedule,omitempty"`
+
+	// QueryEnabled gates the logq-query Deployment that provides a query
+	// service for Parquet logs. Defaults to false. When true, requires
+	// QueryImage to be set (no default image published yet).
+	// +kubebuilder:default=false
+	// +optional
+	QueryEnabled bool `json:"queryEnabled,omitempty"`
+
+	// QueryImage overrides the logq-query container image.
+	// +optional
+	QueryImage *ImageSpec `json:"queryImage,omitempty"`
+
+	// QueryReplicas is the number of logq-query pods to run.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=5
+	// +kubebuilder:default=1
+	// +optional
+	QueryReplicas int32 `json:"queryReplicas,omitempty"`
+
+	// QueryPort is the HTTP port the query service listens on.
+	// +kubebuilder:default=8080
+	// +optional
+	QueryPort int32 `json:"queryPort,omitempty"`
 }
 
 // ObservabilitySpec configures observability integrations.

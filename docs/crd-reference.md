@@ -17,6 +17,7 @@ Group/version: `openchami.openchami.org/v1alpha1`. Kind: `OpenCHAMIControlPlane`
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
+| `images` | object | `stream=release` | See [ImagesSpec](#imagesspec). Controls container image tag selection. |
 | `networkProbe` | object | disabled | See [NetworkProbeSpec](#networkprobespec). |
 | `services` | object | each subfield enabled | See [ServicesSpec](#servicesspec). |
 | `networking` | object | gatewayClass=`envoy`, issuer auto | See [NetworkingSpec](#networkingspec). |
@@ -54,6 +55,130 @@ spec:
 ```
 
 VersityGW is **external** (invariant 1). The operator never creates a gateway.
+
+### ImagesSpec
+
+Controls how the operator selects container image tags for all managed services. Three strategies (streams) are available:
+
+```yaml
+spec:
+  images:
+    stream: release              # default; uses curated tags from SERVICES.md
+```
+
+```yaml
+spec:
+  images:
+    stream: bleedingEdge         # uses :latest for all services (dev only)
+```
+
+```yaml
+spec:
+  images:
+    stream: pinned               # requires explicit tag for every enabled service
+    pinned:
+      smd: v2.20.3
+      tokensmith: v0.4.1
+      bootService: v0.1.5
+      metadataService: v0.1.0
+      coredhcp: latest
+      magellan: v0.5.1
+      funicular: latest
+      networkProbe: v1.0.0
+```
+
+#### Image stream reference
+
+| Stream | Behavior | Pull Policy | Use Case |
+|---|---|---|---|
+| `release` | Uses curated tags baked into the operator binary (see [SERVICES.md](../SERVICES.md)). Reproducible across reconciles. | `IfNotPresent` for versioned tags, `Always` for `:latest` | **Production (recommended)** |
+| `bleedingEdge` | Uses `:latest` for every service. Pulls fresh images on every pod restart. | `Always` | Development and testing only |
+| `pinned` | Uses tags from `spec.images.pinned` map. Validating webhook rejects CRs with missing entries for enabled services. | `IfNotPresent` for versioned tags, `Always` for `:latest` | Lock a cluster to a specific tested service set |
+
+#### Precedence
+
+Image selection follows this priority (highest to lowest):
+
+1. **Per-service override** — `spec.services.<name>.image.tag` (see [ServicesSpec](#servicesspec))
+2. **Image stream** — `spec.images.stream` + `spec.images.pinned`
+3. **Build-time defaults** — from `internal/reconcilers/images.go`
+
+#### Examples
+
+##### Example 1: Production cluster using curated defaults
+
+```yaml
+spec:
+  images:
+    stream: release   # or omit — release is the default
+  services:
+    smd:
+      enabled: true   # uses ghcr.io/openchami/smd:v2.20.3 (from SERVICES.md)
+```
+
+##### Example 2: Pin entire cluster to a tested service set
+
+```yaml
+spec:
+  images:
+    stream: pinned
+    pinned:
+      smd: v2.19.0              # one version behind current release
+      tokensmith: v0.4.1
+      bootService: v0.1.5
+      metadataService: v0.1.0
+      coredhcp: latest
+      magellan: v0.5.1
+  services:
+    smd:
+      enabled: true             # uses ghcr.io/openchami/smd:v2.19.0
+```
+
+##### Example 3: Override a single service for testing
+
+```yaml
+spec:
+  images:
+    stream: release             # most services use curated defaults
+  services:
+    smd:
+      enabled: true
+      image:
+        tag: v2.21.0-rc1        # override: test a pre-release SMD
+        pullPolicy: Always
+```
+
+##### Example 4: Development cluster with bleeding-edge builds
+
+```yaml
+spec:
+  images:
+    stream: bleedingEdge        # all services use :latest
+```
+
+**Warning:** `bleedingEdge` is non-deterministic. Never use in production.
+
+#### Service names for pinned map
+
+When using `stream: pinned`, the map keys must match the operator's canonical service names:
+
+| Service | Key in `pinned` map |
+|---|---|
+| SMD | `smd` |
+| Tokensmith | `tokensmith` |
+| Boot service | `bootService` |
+| Metadata service | `metadataService` |
+| CoreDHCP | `coredhcp` |
+| Magellan | `magellan` |
+| Funicular (log collector) | `funicular` |
+| Network probe | `networkProbe` |
+
+The validating webhook enforces that every **enabled** service has a corresponding entry. Disabled services do not require an entry.
+
+#### Related documentation
+
+- [SERVICES.md](../SERVICES.md) — current build-time defaults and how to update them
+- [Upgrade and versioning](upgrade-and-versioning.md) — operator upgrade policy
 
 ### NetworkProbeSpec
 
@@ -108,7 +233,7 @@ spec:
       resources: {}
 ```
 
-The default image for each service is set by the constants in `internal/reconcilers/<service>.go` (`defaultSMDImage`, `defaultTokensmithImage`, …). See [SERVICES.md](../SERVICES.md) for current values.
+The default image for each service is determined by the image stream (see [ImagesSpec](#imagesspec)). The `release` stream (default) uses curated tags from [SERVICES.md](../SERVICES.md).
 
 #### Per-service overrides
 
@@ -118,7 +243,7 @@ Every service spec embeds `ServiceDefaults`, which provides four uniform knobs:
 |---|---|---|
 | `enabled` | `true` | When `false`, the operator does not create any in-cluster objects for the service. |
 | `replicas` | `2` (1 for tokensmith) | Replica count for `Deployment`-backed services. Ignored for the DaemonSet (CoreDHCP) and CronJob (Magellan). |
-| `image` | per-service constant | Override `repository`, `tag`, and `pullPolicy`. |
+| `image` | from [ImagesSpec](#imagesspec) | Override `repository`, `tag`, and `pullPolicy`. Takes precedence over the image stream. |
 | `resources` | none | Standard `corev1.ResourceRequirements` (requests + limits). |
 | `externalEndpoint` | unset | Declares the service is provided **externally** at the given http(s) URL. The operator skips deploying it and wires *consumers* to this URL instead of the in-cluster Service DNS. |
 

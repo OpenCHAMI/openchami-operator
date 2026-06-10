@@ -9,7 +9,7 @@
 package v1alpha1
 
 import (
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -174,6 +174,16 @@ func (in *LoggingSpec) DeepCopyInto(out *LoggingSpec) {
 	}
 	if in.Image != nil {
 		in, out := &in.Image, &out.Image
+		*out = new(ImageSpec)
+		**out = **in
+	}
+	if in.CompactorImage != nil {
+		in, out := &in.CompactorImage, &out.CompactorImage
+		*out = new(ImageSpec)
+		**out = **in
+	}
+	if in.QueryImage != nil {
+		in, out := &in.QueryImage, &out.QueryImage
 		*out = new(ImageSpec)
 		**out = **in
 	}

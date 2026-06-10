@@ -63,6 +63,14 @@ const (
 	// collector DaemonSet has NumberReady > 0.
 	ConditionLogCollectorReady = "LogCollectorReady"
 
+	// ConditionLogCompactorReady is true when the logq-compactor CronJob
+	// has been applied successfully.
+	ConditionLogCompactorReady = "LogCompactorReady"
+
+	// ConditionLogQueryReady is true when the logq-query Deployment
+	// has availableReplicas >= 1.
+	ConditionLogQueryReady = "LogQueryReady"
+
 	// ConditionMagellanReady is true when the Magellan CronJob exists.
 	ConditionMagellanReady = "MagellanReady"
 

@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: openchamicontrolplanes.openchami.openchami.org
 spec:
   group: openchami.openchami.org
@@ -156,6 +156,36 @@ spec:
                   Log schema and query patterns are defined by legendary-funicular and the
                   services — not by the operator.
                 properties:
+                  compactorEnabled:
+                    default: false
+                    description: |-
+                      CompactorEnabled gates the logq-compactor CronJob that converts NDJSON
+                      to Parquet daily. Defaults to false. When true, requires CompactorImage
+                      to be set (no default image published yet).
+                    type: boolean
+                  compactorImage:
+                    description: CompactorImage overrides the logq-compactor container
+                      image.
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy describes a policy for if/when to
+                          pull a container image
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                      repository:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
+                  compactorSchedule:
+                    default: 0 2 * * *
+                    description: |-
+                      CompactorSchedule is the cron schedule for the compactor CronJob.
+                      Defaults to "0 2 * * *" (daily at 2 AM).
+                    type: string
                   enabled:
                     default: false
                     description: |-
@@ -203,6 +233,43 @@ spec:
                       LogBucket is the S3 bucket for collected logs.
                       Defaults to "{clusterName}-logs".
                     type: string
+                  queryEnabled:
+                    default: false
+                    description: |-
+                      QueryEnabled gates the logq-query Deployment that provides a query
+                      service for Parquet logs. Defaults to false. When true, requires
+                      QueryImage to be set (no default image published yet).
+                    type: boolean
+                  queryImage:
+                    description: QueryImage overrides the logq-query container image.
+                    properties:
+                      pullPolicy:
+                        description: PullPolicy describes a policy for if/when to
+                          pull a container image
+                        enum:
+                        - Always
+                        - Never
+                        - IfNotPresent
+                        type: string
+                      repository:
+                        type: string
+                      tag:
+                        type: string
+                    type: object
+                  queryPort:
+                    default: 8080
+                    description: QueryPort is the HTTP port the query service listens
+                      on.
+                    format: int32
+                    type: integer
+                  queryReplicas:
+                    default: 1
+                    description: QueryReplicas is the number of logq-query pods to
+                      run.
+                    format: int32
+                    maximum: 5
+                    minimum: 1
+                    type: integer
                   retentionDays:
                     default: 90
                     description: RetentionDays is how long Parquet objects are kept.

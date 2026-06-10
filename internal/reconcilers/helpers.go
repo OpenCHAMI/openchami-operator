@@ -155,6 +155,8 @@ const (
 	ServiceMagellan        = "magellan"
 	ServiceNetworkProbe    = "network-probe"
 	ServiceFunicular       = "funicular-collector"
+	ServiceLogqCompactor   = "logq-compactor"
+	ServiceLogqQuery       = "logq-query"
 )
 
 // servicePort returns the canonical container port for an HTTP-facing

@@ -50,14 +50,17 @@ const imageTagLatest = "latest"
 var builtInImages = map[string]imageDefaults{
 	ServiceSMD:             {Repository: "ghcr.io/openchami/smd", ReleaseTag: "v2.20.3"},
 	ServiceTokensmith:      {Repository: "ghcr.io/openchami/tokensmith", ReleaseTag: "v0.4.1"},
-	ServiceBootService:     {Repository: "ghcr.io/openchami/boot-service", ReleaseTag: "v0.1.5"},
+	ServiceBootService:     {Repository: "ghcr.io/openchami/boot-service", ReleaseTag: "v0.1.6"},
 	ServiceMetadataService: {Repository: "ghcr.io/openchami/metadata-service", ReleaseTag: "v0.1.0"},
-	ServiceCoreDHCP:        {Repository: "ghcr.io/openchami/coredhcp", ReleaseTag: ""},
+	ServiceCoreDHCP:        {Repository: "ghcr.io/openchami/coredhcp", ReleaseTag: "v0.3.1"},
 	ServiceMagellan:        {Repository: "ghcr.io/openchami/magellan", ReleaseTag: "v0.5.1"},
 	// network-probe runs the operator's own binary with `probe`
 	// subcommand, so its default repository is the operator image.
 	ServiceNetworkProbe: {Repository: "ghcr.io/openchami/openchami-operator", ReleaseTag: ""},
 	ServiceFunicular:    {Repository: "ghcr.io/openchami/legendary-funicular", ReleaseTag: ""},
+	// logq-compactor and logq-query are from legendary-funicular PR #1
+	ServiceLogqCompactor: {Repository: "ghcr.io/openchami/openchami-logq-compactor", ReleaseTag: "pr-1"},
+	ServiceLogqQuery:     {Repository: "ghcr.io/openchami/openchami-logq-query", ReleaseTag: "pr-1"},
 }
 
 // ResolveImage returns the container image reference and pull policy
@@ -134,6 +137,10 @@ func perServiceImageOverride(cp *openchamiv1alpha1.OpenCHAMIControlPlane, servic
 		return cp.Spec.NetworkProbe.Image
 	case ServiceFunicular:
 		return cp.Spec.Logging.Image
+	case ServiceLogqCompactor:
+		return cp.Spec.Logging.CompactorImage
+	case ServiceLogqQuery:
+		return cp.Spec.Logging.QueryImage
 	}
 	return nil
 }
@@ -216,6 +223,12 @@ func EnabledServiceNamesForPinning(cp *openchamiv1alpha1.OpenCHAMIControlPlane) 
 	}
 	if cp.Spec.Logging.Enabled {
 		names = append(names, ServiceFunicular)
+		if cp.Spec.Logging.CompactorEnabled {
+			names = append(names, ServiceLogqCompactor)
+		}
+		if cp.Spec.Logging.QueryEnabled {
+			names = append(names, ServiceLogqQuery)
+		}
 	}
 	return names
 }

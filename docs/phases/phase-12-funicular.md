@@ -50,6 +50,67 @@ Env vars (confirm names against legendary-funicular README):
 
 Condition: `LogCollectorReady=True` when DaemonSet NumberReady>0.
 
+## Logq Compactor CronJob — `internal/reconcilers/logq_compactor.go`
+
+If `spec.logging.compactorEnabled=false`: skip. Set `LogCompactorReady=True` trivially.
+
+```
+CronJob:     logq-compactor
+Namespace:   openchami-{clusterName}
+Schedule:    spec.logging.compactorSchedule (default: "0 2 * * *")
+SA:          logq-compactor
+
+Security: CommonSecurityContext() — no elevated privileges needed.
+
+Volumes:
+  emptyDir memory → /tmp
+
+Env vars:
+  LOGQ_CLUSTER_NAME       = spec.clusterName
+  LOGQ_NAMESPACE          = openchami-{clusterName}
+  LOGQ_S3_ENDPOINT        = spec.platform.objectStorage.endpoint
+  LOGQ_S3_BUCKET          = helpers.LogBucketName(cluster)
+  LOGQ_S3_ACCESS_KEY      secretKeyRef: openchami-{name}-s3-logs-creds, key: access_key
+  LOGQ_S3_SECRET_KEY      secretKeyRef: openchami-{name}-s3-logs-creds, key: secret_key
+```
+
+Condition: `LogCompactorReady=True` when CronJob is applied.
+
+## Logq Query Deployment — `internal/reconcilers/logq_query.go`
+
+If `spec.logging.queryEnabled=false`: skip.
+
+```
+Deployment:  logq-query
+Namespace:   openchami-{clusterName}
+Replicas:    spec.logging.queryReplicas (default: 1)
+SA:          logq-query
+
+Security: CommonSecurityContext() — no elevated privileges needed.
+
+Volumes:
+  emptyDir memory → /tmp
+
+Env vars:
+  LOGQ_CLUSTER_NAME       = spec.clusterName
+  LOGQ_NAMESPACE          = openchami-{clusterName}
+  LOGQ_S3_ENDPOINT        = spec.platform.objectStorage.endpoint
+  LOGQ_S3_BUCKET          = helpers.LogBucketName(cluster)
+  LOGQ_HTTP_PORT          = spec.logging.queryPort (default: 8080)
+  LOGQ_S3_ACCESS_KEY      secretKeyRef: openchami-{name}-s3-logs-creds, key: access_key
+  LOGQ_S3_SECRET_KEY      secretKeyRef: openchami-{name}-s3-logs-creds, key: secret_key
+
+Service:
+  Type: ClusterIP
+  Port: spec.logging.queryPort (default: 8080)
+  
+Health checks:
+  LivenessProbe:  HTTP GET /health
+  ReadinessProbe: HTTP GET /health
+```
+
+Condition: `LogQueryReady=True` when Deployment availableReplicas >= 1.
+
 ```bash
 tools/check-phase.sh 12
 ```

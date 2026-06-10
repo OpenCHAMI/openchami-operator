@@ -23,6 +23,7 @@ The full documentation tree lives under [`docs/`](docs/README.md). Start with:
 - **[Install (production)](docs/install-production.md)** — end-to-end walkthrough for a fresh non-dev cluster.
 - **[Architecture](docs/architecture.md)** — controller, sub-reconcilers, reconcile order.
 - **[CRD reference](docs/crd-reference.md)** — every `OpenCHAMIControlPlane` field.
+- **[SERVICES.md](SERVICES.md)** — default container versions and how to control them at build time and runtime.
 - **[ochami-admin CLI](docs/cli.md)** — companion CLI: `init` / `describe` / `backup` / `restore` / `logs`.
 - **[Invariants](docs/invariants.md)** — the 10 absolute rules.
 - **[Troubleshooting](docs/troubleshooting.md)** — common failure modes with fixes.
