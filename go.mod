@@ -9,7 +9,7 @@ require (
 	github.com/aws/smithy-go v1.25.1
 	github.com/cert-manager/cert-manager v1.20.2
 	github.com/cloudnative-pg/cloudnative-pg v1.29.0
-	github.com/envoyproxy/gateway v1.7.2
+	github.com/envoyproxy/gateway v1.7.4
 	github.com/go-logr/logr v1.4.3
 	github.com/hashicorp/vault-secrets-operator v1.3.0
 	github.com/hashicorp/vault/api v1.23.0
@@ -83,7 +83,7 @@ require (
 	github.com/google/pprof v0.0.0-20260115054156-294ebfa9ad83 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.3 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
