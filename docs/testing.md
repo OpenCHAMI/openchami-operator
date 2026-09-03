@@ -20,8 +20,8 @@ make test-cover         # with coverage; outputs cover.html
 ```
 
 Behind the scenes:
-- `make test` runs `go test -count=1 ./internal/... ./api/...`.
-- `setup-envtest` is invoked the first time to provision Kubernetes binaries (etcd, kube-apiserver) into `testbin/`.
+- `make test` runs `go test -race -count=1 ./internal/... ./api/... ./cmd/...`.
+- `setup-envtest` is invoked the first time to provision Kubernetes 1.35.x binaries (etcd, kube-apiserver) into `testbin/`.
 - The test suite uses `controller-runtime`'s envtest to spin up a faked API server per test package.
 
 Envtest exercises the **real** reconcile loop — fake API server, real reconcilers, real client. It does not exercise:
@@ -102,9 +102,11 @@ linked from [relationship-to-integration-sandbox](relationship-to-integration-sa
 
 `.github/workflows/` (your distribution's wiring) should run:
 
-1. `make generate manifests fmt vet lint test` on every PR.
-2. `make e2e` on every PR with the `e2e` label, plus on every push to `main`.
-3. The [integration sandbox][sandbox] `make ci` separately (in its own repo's CI), optionally with `SBX_*_IMAGE` overrides for the service under test.
+1. `go mod tidy`, `make generate manifests fmt`, and `git diff --exit-code` on every PR.
+2. `make vet validate-invariants build test` on every PR.
+3. A Docker build and image smoke test on every PR. Same-repository PRs push `ghcr.io/openchami/openchami-operator:pr-<number>` and `:pr-<number>-<head-sha>` without SBOM or provenance attestations; fork PRs do not push.
+4. `make e2e` on every PR with the `e2e` label, plus on every push to `main`.
+5. The [integration sandbox][sandbox] `make ci` separately (in its own repo's CI), optionally with `SBX_*_IMAGE` overrides for the service under test.
 
 Phase 0 (`docs/phases/phase-00-bootstrap.md`) describes the canonical CI shape.
 
@@ -115,7 +117,8 @@ Phase 0 (`docs/phases/phase-00-bootstrap.md`) describes the canonical CI shape.
 make test
 
 # Snapshot before pushing: full pipeline
-make generate manifests fmt vet lint test validate-invariants
+make generate manifests fmt vet lint test validate-invariants build
+make docker-build IMG=ghcr.io/openchami/openchami-operator:local
 
 # Big change: e2e (slow, but catches webhook + Gateway API surprises)
 make dev-up

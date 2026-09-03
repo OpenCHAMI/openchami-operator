@@ -4,7 +4,7 @@ Local dev cluster, first reconcile, in under fifteen minutes.
 
 ## Prerequisites
 
-- Go 1.24.6+
+- Go 1.26.3+
 - Docker 17.03+ (28+ recommended; the project tests run on Docker 29.x)
 - `kubectl`
 - `kind` (for the local dev cluster)
@@ -85,10 +85,25 @@ You should see the `phase` walk through `Provisioning` → `Ready` (or `Degraded
 
 ```sh
 # After editing any reconciler:
-make generate manifests fmt vet lint test
+make generate manifests fmt vet lint test validate-invariants build
 ```
 
-All four targets must pass before pushing. The pre-push hook `make validate-invariants` enforces the absolute rules from [invariants](invariants.md).
+All validation targets must pass before pushing. `make test` uses envtest and
+does not require a live Kubernetes cluster; `make e2e` is the optional slow path
+when a change touches webhooks, RBAC, or in-cluster reconciliation.
+
+To validate the published-image path locally without pushing:
+
+```sh
+make docker-build IMG=ghcr.io/openchami/openchami-operator:local
+```
+
+Tagged releases publish `ghcr.io/openchami/openchami-operator:<tag>`.
+Same-repository pull requests publish temporary images as
+`ghcr.io/openchami/openchami-operator:pr-<number>` and
+`ghcr.io/openchami/openchami-operator:pr-<number>-<head-sha>` without SBOM or
+provenance attestations. Fork pull requests build and smoke-test locally in CI
+without pushing packages.
 
 ## Tear down
 

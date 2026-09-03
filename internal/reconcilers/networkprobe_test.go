@@ -115,8 +115,11 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 	if container.Image != wantImage {
 		t.Errorf("expected image=%q, got %q", wantImage, container.Image)
 	}
-	if len(container.Args) != 1 || container.Args[0] != testProbeContainer {
-		t.Errorf("expected args=[probe], got %+v", container.Args)
+	if len(container.Command) != 1 || container.Command[0] != "/probe" {
+		t.Errorf("expected command=[/probe], got %+v", container.Command)
+	}
+	if len(container.Args) != 0 {
+		t.Errorf("expected no args, got %+v", container.Args)
 	}
 
 	envs := map[string]corev1.EnvVar{}

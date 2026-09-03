@@ -2,8 +2,8 @@
 
 Read this file completely before writing any code.
 Read the phase file for each phase before starting that phase.
-After every phase: `make generate manifests fmt vet lint test`
-All four must pass before proceeding.
+After every phase: `make generate manifests fmt vet lint test validate-invariants build`
+All validation targets must pass before proceeding.
 
 ---
 
@@ -17,7 +17,7 @@ All four must pass before proceeding.
 | CRD group/version | `openchami.openchami.org/v1alpha1` |
 | Primary resource | `OpenCHAMIControlPlane` |
 | Kubebuilder | v4 |
-| Go | 1.23+ |
+| Go | 1.26.3+ |
 | Kubernetes target | 1.29+ |
 | Log lake | legendary-funicular (VersityGW + NDJSON + Parquet + DuckDB) |
 

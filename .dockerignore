@@ -3,7 +3,12 @@
 **
 
 # Re-include Go source files (but not *_test.go)
-!**/*.go
+!api/
+!api/**/*.go
+!cmd/
+!cmd/**/*.go
+!internal/
+!internal/**/*.go
 **/*_test.go
 
 # Re-include Go module files

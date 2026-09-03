@@ -18,7 +18,7 @@ LDFLAGS := \
 
 # Tool versions
 CONTROLLER_GEN_VERSION := v0.21.0
-ENVTEST_VERSION        := latest
+ENVTEST_VERSION        := v0.23.3
 
 # Image
 IMAGE_REGISTRY ?= ghcr.io/openchami
@@ -46,7 +46,7 @@ $(ADMIN_BIN): $(shell find cmd/ochami-admin internal/admin -name '*.go' 2>/dev/n
 
 $(PROBE_BIN): $(shell find cmd/probe internal -name '*.go' 2>/dev/null)
 	@mkdir -p $(BINARY_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/probe 2>/dev/null || true
+	go build -ldflags "$(LDFLAGS)" -o $@ ./cmd/probe
 
 docker-build: ## Build operator container image
 	docker build \
@@ -94,7 +94,7 @@ lint: ## Run golangci-lint
 ##@ Testing
 
 ENVTEST_ASSETS_DIR := $(shell pwd)/testbin
-ENVTEST_K8S_VERSION := 1.31.x
+ENVTEST_K8S_VERSION := 1.35.x
 
 test: envtest ## Run unit tests with envtest
 	@mkdir -p $(ENVTEST_ASSETS_DIR)
@@ -364,11 +364,11 @@ controller-gen:
 
 envtest:
 	@test -x $(ENVTEST) || \
-	  go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	  go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(ENVTEST_VERSION)
 
 install-tools: controller-gen envtest ## Install all required tools
 	@which golangci-lint > /dev/null || \
-	  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.12.1
+	  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $$(go env GOPATH)/bin v2.12.1
 	@which goimports > /dev/null || go install golang.org/x/tools/cmd/goimports@latest
 	@which kind > /dev/null || go install sigs.k8s.io/kind@latest
 	@echo "All tools installed."

@@ -28,10 +28,6 @@ const (
 
 	logqQueryPortName   = "http"
 	logqQueryHealthPath = "/health"
-
-	// reasonQueryImageNotConfigured is set on LogQueryReady when
-	// query is enabled but no image override is supplied.
-	reasonQueryImageNotConfigured = "QueryImageNotConfigured"
 )
 
 // LogqQueryReconciler ensures the logq-query Deployment and Service exist to

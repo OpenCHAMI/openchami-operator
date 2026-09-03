@@ -68,11 +68,14 @@ If your change would violate any invariant, stop and either rework or open a dis
 5. **Wire it into `reconcileAll`.** Add the new reconciler to the `subs` slice at the right position.
 6. **Write tests in `internal/reconcilers/foo_test.go`.** Cover: enabled, disabled, apply error, status patch on success, status patch on failure.
 7. **Update [reconcilers.md](reconcilers.md)** with the new section.
-8. **Run the gauntlet:**
-   ```sh
-   make generate manifests fmt vet lint test validate-invariants
-   ```
-   All four must pass.
+8. **Run the no-cluster gauntlet:**
+    ```sh
+    make install-tools
+    make generate manifests fmt vet lint test validate-invariants build
+    make docker-build IMG=ghcr.io/openchami/openchami-operator:local
+    ```
+    All targets must pass. `make test` uses envtest and does not require kind;
+    run `make e2e` separately for webhook, RBAC, or in-cluster behavior changes.
 
 ## Adding a CRD field
 

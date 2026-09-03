@@ -165,8 +165,8 @@ type NetworkProbeSpec struct {
 	BMCNetwork *NetworkProbeTarget `json:"bmcNetwork,omitempty"`
 
 	// Image overrides the network-probe container image. The probe runs
-	// the operator's own binary (with subcommand `probe`); the default
-	// is therefore the operator image itself.
+	// the /probe binary packaged in the operator image; the default is
+	// therefore the operator image itself.
 	// +optional
 	Image *ImageSpec `json:"image,omitempty"`
 }

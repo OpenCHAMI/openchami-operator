@@ -10,6 +10,9 @@ Dockerfile.cross
 # Test binary, built with `go test -c`
 *.test
 
+# controller-runtime envtest assets
+testbin/
+
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
@@ -35,3 +38,7 @@ install.sh
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# LLM Artifacts
+.omo/*
+graphify-out/

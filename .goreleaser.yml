@@ -86,6 +86,7 @@ dockers_v2:
   - id: operator
     ids:
       - operator
+      - probe
     dockerfile: Dockerfile.goreleaser
     images:
       - "ghcr.io/openchami/openchami-operator"
