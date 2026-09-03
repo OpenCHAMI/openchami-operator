@@ -7,7 +7,7 @@ Every make target, what it does, and when to run it.
 | Target | What it does |
 |---|---|
 | `make build` | Builds three binaries into `bin/`: `manager` (the operator), `ochami-admin` (CLI), `probe` (network-probe DaemonSet entrypoint). |
-| `make docker-build` | Builds the operator container image. **Note:** [bugs.md](../bugs.md) flags this as broken on `main` — Dockerfile points at `cmd/main.go` instead of `cmd/operator/main.go`. |
+| `make docker-build` | Builds the operator container image. The image defaults to `/manager` and also packages `/probe` for the network-probe DaemonSet. Override with `IMG=ghcr.io/openchami/openchami-operator:local`. |
 | `make generate` | Runs `controller-gen` to (re)generate `zz_generated.deepcopy.go`. |
 | `make manifests` | Runs `controller-gen` to (re)generate the CRD, RBAC, and webhook manifests under `config/`. |
 
@@ -21,6 +21,7 @@ After editing any CRD type or any `+kubebuilder` marker, run `make generate mani
 | `make vet` | `go vet ./...` |
 | `make lint` | `golangci-lint run` |
 | `make validate-invariants` | Greps the source for the most common invariant violations: direct `recorder.Event`, direct `log.FromContext`, `client.Create` followed by `client.Update`, runbook reasons missing slugs, etc. |
+| `make build` | Builds `bin/operator`, `bin/ochami-admin`, and `bin/probe`; probe build failures are fatal. |
 
 `make validate-invariants` is intentionally simple — it's a fast pre-merge check, not a static analyzer. Read it as the "obvious bugs" filter; use code review for the subtler ones.
 
@@ -42,6 +43,16 @@ See [testing.md](testing.md) for the full layout. The dev-loop summary:
 | `make install-tools` | Installs `controller-gen` and `setup-envtest` into `$GOPATH/bin`. Idempotent. |
 | `make controller-gen` | Sub-target that ensures controller-gen exists; called by `generate` and `manifests`. |
 | `make envtest` | Sub-target that ensures setup-envtest exists; called by `test`. |
+
+`make test` downloads controller-runtime envtest binaries into `testbin/` on
+first use. It does not require a running Kubernetes cluster.
+
+## Before pushing
+
+```sh
+make generate manifests fmt vet lint test validate-invariants build
+make docker-build IMG=ghcr.io/openchami/openchami-operator:local
+```
 
 ## Local development cluster
 

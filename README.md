@@ -55,7 +55,21 @@ See [docs/quickstart.md](docs/quickstart.md) for the full walkthrough and [docs/
 make generate manifests fmt vet lint test
 ```
 
-All four must pass before pushing. `make validate-invariants` runs in CI to catch the most common invariant violations.
+`make validate-invariants` and `make build` are also part of the PR gate.
+Run the full no-cluster validation path before pushing:
+
+```sh
+make install-tools
+make generate manifests fmt vet lint test validate-invariants build
+make docker-build IMG=ghcr.io/openchami/openchami-operator:local
+```
+
+`make test` uses controller-runtime envtest and does not require a live
+Kubernetes cluster. Tagged releases publish
+`ghcr.io/openchami/openchami-operator:<tag>`. Same-repository PRs publish
+temporary images as `ghcr.io/openchami/openchami-operator:pr-<number>` and
+`ghcr.io/openchami/openchami-operator:pr-<number>-<head-sha>` without SBOM or
+provenance attestations; fork PRs build and smoke-test locally without pushing.
 
 For end-to-end testing against a real kind cluster:
 ```sh
@@ -76,7 +90,7 @@ For service-level testing without involving Kubernetes (PR builds, cross-service
 | Operator image | `ghcr.io/openchami/openchami-operator` |
 | Admin CLI | `ochami-admin` |
 | Kubebuilder | v4 |
-| Go | 1.24.6+ |
+| Go | 1.26.3+ |
 | Kubernetes target | 1.29+ |
 
 ## Project layout

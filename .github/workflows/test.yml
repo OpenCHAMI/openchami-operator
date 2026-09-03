@@ -27,7 +27,71 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Running Tests
+      - name: Verify module files are tidy
         run: |
           go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Verify generated files and formatting
+        run: |
+          make generate manifests fmt
+          git diff --exit-code
+
+      - name: Run static checks
+        run: make vet validate-invariants build
+
+      - name: Run tests
+        run: |
           make test
+
+  container:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    name: Build operator image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Log in to GHCR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and smoke-test image
+        run: |
+          set -euo pipefail
+          image=ghcr.io/openchami/openchami-operator:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false --tag "$image" .
+          docker image inspect "$image"
+          cid=$(docker create "$image")
+          tmpdir=$(mktemp -d)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; rm -rf "$tmpdir"' EXIT
+          docker cp "$cid:/manager" "$tmpdir/manager"
+          docker cp "$cid:/probe" "$tmpdir/probe"
+          test -x "$tmpdir/manager"
+          test -x "$tmpdir/probe"
+
+      - name: Push PR image
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          set -euo pipefail
+          image=ghcr.io/openchami/openchami-operator:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          docker tag "$image" ghcr.io/openchami/openchami-operator:pr-${{ github.event.pull_request.number }}
+          docker push "$image"
+          docker push ghcr.io/openchami/openchami-operator:pr-${{ github.event.pull_request.number }}

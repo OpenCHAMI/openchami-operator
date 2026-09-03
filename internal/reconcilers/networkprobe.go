@@ -264,7 +264,7 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIC
 		Name:            containerNameProbe,
 		Image:           image,
 		ImagePullPolicy: pullPolicy,
-		Args:            []string{containerNameProbe},
+		Command:         []string{"/probe"},
 		SecurityContext: CommonSecurityContext(),
 		Env:             env,
 		VolumeMounts:    []corev1.VolumeMount{tmpMount},
