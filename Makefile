@@ -18,7 +18,7 @@ LDFLAGS := \
 
 # Tool versions
 CONTROLLER_GEN_VERSION := v0.21.0
-ENVTEST_VERSION        := v0.23.3
+ENVTEST_VERSION        := v0.25.0
 
 # Image
 IMAGE_REGISTRY ?= ghcr.io/openchami

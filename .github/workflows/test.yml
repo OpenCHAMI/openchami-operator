@@ -80,9 +80,12 @@ jobs:
           docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false --tag "$image" .
           docker image inspect "$image"
           cid=$(docker create "$image")
-          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-          docker export "$cid" | tar -tf - | grep -Eq '(^|/)manager$'
-          docker export "$cid" | tar -tf - | grep -Eq '(^|/)probe$'
+          tmpdir=$(mktemp -d)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true; rm -rf "$tmpdir"' EXIT
+          docker cp "$cid:/manager" "$tmpdir/manager"
+          docker cp "$cid:/probe" "$tmpdir/probe"
+          test -x "$tmpdir/manager"
+          test -x "$tmpdir/probe"
 
       - name: Push PR image
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
