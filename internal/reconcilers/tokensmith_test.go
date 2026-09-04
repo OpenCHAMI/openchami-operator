@@ -236,3 +236,189 @@ func TestTokensmithReconciler_ReplicasAlwaysOne(t *testing.T) {
 		t.Errorf("expected replicas=1 even when spec.replicas=5, got %v", dep.Spec.Replicas)
 	}
 }
+
+func TestTokensmithReconciler_TLSDisabledByDefault(t *testing.T) {
+	cp := newTokensmithCluster()
+	// Don't set .tls.enabled — should default to false
+	r := &TokensmithReconciler{}
+	dep := r.buildDeployment(cp)
+
+	cont := dep.Spec.Template.Spec.Containers[0]
+
+	// Probes should use HTTP when TLS is disabled
+	if cont.StartupProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+		t.Errorf("expected startupProbe scheme=HTTP when TLS disabled, got %q", cont.StartupProbe.HTTPGet.Scheme)
+	}
+	if cont.LivenessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+		t.Errorf("expected livenessProbe scheme=HTTP when TLS disabled, got %q", cont.LivenessProbe.HTTPGet.Scheme)
+	}
+	if cont.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+		t.Errorf("expected readinessProbe scheme=HTTP when TLS disabled, got %q", cont.ReadinessProbe.HTTPGet.Scheme)
+	}
+
+	// TLS env vars should not be set when TLS is disabled
+	for _, e := range cont.Env {
+		if e.Name == tokensmithEnvTLSCertFile || e.Name == tokensmithEnvTLSKeyFile || e.Name == tokensmithEnvSvcIDCA {
+			t.Errorf("expected TLS env vars to be absent when TLS disabled, found %q", e.Name)
+		}
+	}
+
+	// TLS volume should not be mounted when TLS is disabled
+	for _, m := range cont.VolumeMounts {
+		if m.Name == tokensmithTLSVolumeNm {
+			t.Errorf("expected TLS volume mount to be absent when TLS disabled, found %q", m.Name)
+		}
+	}
+}
+
+func TestTokensmithReconciler_TLSEnabledHTTPSProbes(t *testing.T) {
+	cp := newTokensmithCluster()
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
+
+	r := &TokensmithReconciler{}
+	dep := r.buildDeployment(cp)
+
+	cont := dep.Spec.Template.Spec.Containers[0]
+
+	// Probes should use HTTPS when TLS is enabled
+	if cont.StartupProbe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Errorf("expected startupProbe scheme=HTTPS when TLS enabled, got %q", cont.StartupProbe.HTTPGet.Scheme)
+	}
+	if cont.LivenessProbe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Errorf("expected livenessProbe scheme=HTTPS when TLS enabled, got %q", cont.LivenessProbe.HTTPGet.Scheme)
+	}
+	if cont.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Errorf("expected readinessProbe scheme=HTTPS when TLS enabled, got %q", cont.ReadinessProbe.HTTPGet.Scheme)
+	}
+
+	// TLS env vars should be set when TLS is enabled
+	var foundCertFile, foundKeyFile, foundCA bool
+	for _, e := range cont.Env {
+		switch e.Name {
+		case tokensmithEnvTLSCertFile:
+			foundCertFile = true
+			expectedPath := tokensmithTLSMountPath + "/" + corev1.TLSCertKey
+			if e.Value != expectedPath {
+				t.Errorf("expected TOKENSMITH_TLS_CERT_FILE=%q, got %q", expectedPath, e.Value)
+			}
+		case tokensmithEnvTLSKeyFile:
+			foundKeyFile = true
+			expectedPath := tokensmithTLSMountPath + "/" + corev1.TLSPrivateKeyKey
+			if e.Value != expectedPath {
+				t.Errorf("expected TOKENSMITH_TLS_KEY_FILE=%q, got %q", expectedPath, e.Value)
+			}
+		case tokensmithEnvSvcIDCA:
+			foundCA = true
+			expectedPath := tokensmithTLSMountPath + "/" + ServiceIdentityCAKey
+			if e.Value != expectedPath {
+				t.Errorf("expected TOKENSMITH_SERVICE_IDENTITY_CA=%q, got %q", expectedPath, e.Value)
+			}
+		}
+	}
+	if !foundCertFile {
+		t.Errorf("expected TOKENSMITH_TLS_CERT_FILE env var when TLS enabled")
+	}
+	if !foundKeyFile {
+		t.Errorf("expected TOKENSMITH_TLS_KEY_FILE env var when TLS enabled")
+	}
+	if !foundCA {
+		t.Errorf("expected TOKENSMITH_SERVICE_IDENTITY_CA env var when TLS enabled")
+	}
+
+	// TLS volume should be mounted when TLS is enabled
+	var foundMount bool
+	for _, m := range cont.VolumeMounts {
+		if m.Name == tokensmithTLSVolumeNm {
+			foundMount = true
+			if m.MountPath != tokensmithTLSMountPath {
+				t.Errorf("expected TLS mount path=%q, got %q", tokensmithTLSMountPath, m.MountPath)
+			}
+			if !m.ReadOnly {
+				t.Errorf("expected TLS volume mount to be read-only")
+			}
+		}
+	}
+	if !foundMount {
+		t.Errorf("expected TLS volume mount when TLS enabled")
+	}
+
+	// TLS volume should be present
+	var foundVolume bool
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == tokensmithTLSVolumeNm {
+			foundVolume = true
+			if v.Projected == nil {
+				t.Errorf("expected TLS volume to use projected source")
+			}
+		}
+	}
+	if !foundVolume {
+		t.Errorf("expected TLS volume when TLS enabled")
+	}
+}
+
+func TestTokensmithReconciler_EndpointSchemeReflectsTLS(t *testing.T) {
+	scheme := newScheme(t)
+
+	// Test without TLS
+	cpHTTP := newTokensmithCluster()
+	cpHTTP.Spec.Services.Tokensmith.TLS.Enabled = false
+
+	existingHTTP := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ServiceTokensmith,
+			Namespace: ControlPlaneNamespace(cpHTTP),
+		},
+		Status: appsv1.DeploymentStatus{AvailableReplicas: 1},
+	}
+
+	cHTTP := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(cpHTTP).
+		WithStatusSubresource(&appsv1.Deployment{}).
+		WithObjects(existingHTTP).
+		Build()
+
+	rHTTP := &TokensmithReconciler{Client: cHTTP, Recorder: record.NewFakeRecorder(10)}
+	if _, err := rHTTP.Reconcile(context.Background(), cpHTTP); err != nil {
+		t.Fatalf("reconcile HTTP: %v", err)
+	}
+
+	if st, ok := cpHTTP.Status.Services[ServiceTokensmith]; ok {
+		if !strings.HasPrefix(st.Endpoint, "http://") {
+			t.Errorf("expected http:// endpoint when TLS disabled, got %q", st.Endpoint)
+		}
+	} else {
+		t.Errorf("expected status.services[tokensmith] to be set")
+	}
+
+	// Test with TLS
+	cpHTTPS := newTokensmithCluster()
+	cpHTTPS.Spec.Services.Tokensmith.TLS.Enabled = true
+
+	existingHTTPS := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ServiceTokensmith,
+			Namespace: ControlPlaneNamespace(cpHTTPS),
+		},
+		Status: appsv1.DeploymentStatus{AvailableReplicas: 1},
+	}
+
+	cHTTPS := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(cpHTTPS).
+		WithStatusSubresource(&appsv1.Deployment{}).
+		WithObjects(existingHTTPS).
+		Build()
+
+	rHTTPS := &TokensmithReconciler{Client: cHTTPS, Recorder: record.NewFakeRecorder(10)}
+	if _, err := rHTTPS.Reconcile(context.Background(), cpHTTPS); err != nil {
+		t.Fatalf("reconcile HTTPS: %v", err)
+	}
+
+	if st, ok := cpHTTPS.Status.Services[ServiceTokensmith]; ok {
+		if !strings.HasPrefix(st.Endpoint, "https://") {
+			t.Errorf("expected https:// endpoint when TLS enabled, got %q", st.Endpoint)
+		}
+	} else {
+		t.Errorf("expected status.services[tokensmith] to be set")
+	}
+}

@@ -83,6 +83,22 @@ type ImagesSpec struct {
 	Pinned map[string]string `json:"pinned,omitempty"`
 }
 
+// ServiceTLSConfig controls TLS termination for a service's HTTP listener.
+type ServiceTLSConfig struct {
+	// Enabled, when true, configures the service to:
+	//   - listen on HTTPS instead of HTTP
+	//   - use HTTPS in startup/liveness/readiness probes (Scheme: HTTPS)
+	//   - construct service URLs with https:// scheme
+	//
+	// The operator provisions a server certificate from the service-identity
+	// CA and mounts it into the pod. Services must support TLS termination;
+	// not all services do. Check service-specific documentation.
+	//
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+}
+
 // ServiceDefaults is embedded in every per-service spec.
 type ServiceDefaults struct {
 	// +kubebuilder:default=true
@@ -99,6 +115,12 @@ type ServiceDefaults struct {
 
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// TLS controls whether the service listens on HTTPS and uses HTTPS probes.
+	// Default is HTTP (TLS.Enabled=false). When enabled, the operator provisions
+	// a server certificate from the service-identity CA.
+	// +optional
+	TLS ServiceTLSConfig `json:"tls,omitempty"`
 
 	// ExternalEndpoint, when set, declares that the service is provided
 	// externally (e.g. by a shared platform deployment) rather than by the
