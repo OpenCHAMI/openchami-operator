@@ -13,7 +13,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,7 +23,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
-	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
@@ -136,7 +134,7 @@ func (r *TokensmithReconciler) Reconcile(ctx context.Context, cp *openchamiv1alp
 
 	ready := current.Status.AvailableReplicas >= 1
 	scheme := "http"
-	if tokensmithMTLSEnabled(cp) {
+	if cp.Spec.Services.Tokensmith.TLS.Enabled {
 		scheme = "https"
 	}
 	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceTokensmith, ns, tokensmithPort)
@@ -218,15 +216,20 @@ func (r *TokensmithReconciler) buildPVC(cp *openchamiv1alpha1.OpenCHAMIControlPl
 }
 
 // tokensmithMTLSEnabled reports whether the service-identity flow is
-// active for this cluster. When true, the operator switches tokensmith's
-// single listener to HTTPS (terminating the per-cluster CA-issued
-// server cert), enables the mTLS service-identity handler by passing
-// the CA bundle, and consumers MUST present a client cert to use the
-// service-identity endpoint. The legacy bootstrap-token / OAuth2
-// endpoints remain available on the same listener so existing
-// deployments keep working — but everything goes through TLS now.
+// active for this cluster. When true, tokensmith is configured to:
+//   - listen on HTTPS instead of HTTP
+//   - use HTTPS in startup/liveness/readiness probes
+//   - enable the mTLS service-identity handler by passing the CA bundle
+//
+// Consumers MUST present a client cert to use the service-identity endpoint.
+// The legacy bootstrap-token / OAuth2 endpoints remain available on the same
+// listener so existing deployments keep working — but everything goes through
+// TLS now.
+//
+// This function reads the spec.services.tokensmith.tls.enabled field directly,
+// giving users explicit control over when TLS is activated.
 func tokensmithMTLSEnabled(cp *openchamiv1alpha1.OpenCHAMIControlPlane) bool {
-	return apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionServiceIdentityReady)
+	return cp.Spec.Services.Tokensmith.TLS.Enabled
 }
 
 func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.Deployment {
@@ -238,7 +241,10 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 
 	tmpVol, tmpMount := TmpVolume()
 
-	mTLS := tokensmithMTLSEnabled(cp)
+	// Use the spec field to determine TLS enablement rather than the
+	// service-identity condition. This gives users direct control over
+	// when TLS is activated.
+	tlsEnabled := cp.Spec.Services.Tokensmith.TLS.Enabled
 
 	env := []corev1.EnvVar{
 		{
@@ -288,7 +294,7 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		})
 	}
 
-	if mTLS {
+	if tlsEnabled {
 		// PR-24's single-listener model: setting both --tls-cert-file
 		// and --tls-key-file switches the same port to HTTPS, and
 		// --service-identity-ca enables the
@@ -304,18 +310,21 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		)
 	}
 
-	// Health probes always use HTTP (no Scheme field = default HTTP),
-	// even when the service itself is running HTTPS for mTLS. The /health
-	// endpoint must remain accessible via HTTP for kubelet to reach it
-	// without needing to trust the service-identity CA. This matches the
-	// pattern used by SMD and other services in the operator.
+	// Health probes switch to HTTPS when the service.tls.enabled field is true.
+	// When TLS is enabled, kubelet validates the certificate against its trusted
+	// CA bundle — the operator must ensure the service-identity CA is trusted
+	// by the cluster, or the probes will fail.
 	probe := func(period, failures int32) *corev1.Probe {
+		scheme := corev1.URISchemeHTTP
+		if cp.Spec.Services.Tokensmith.TLS.Enabled {
+			scheme = corev1.URISchemeHTTPS
+		}
 		return &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
-					Path: tokensmithHealthPath,
-					Port: intstr.FromString(tokensmithPortName),
-					// Scheme omitted intentionally — defaults to HTTP
+					Path:   tokensmithHealthPath,
+					Port:   intstr.FromString(tokensmithPortName),
+					Scheme: scheme,
 				},
 			},
 			PeriodSeconds:    period,
@@ -344,7 +353,7 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 			MountPath: tokensmithDataPath,
 		},
 	}
-	if mTLS {
+	if tlsEnabled {
 		// Projected volume so tls.crt / tls.key come from the server-cert
 		// Secret and ca.crt comes from the CA Secret — without forcing
 		// cert-manager to write ca.crt into every leaf Secret
