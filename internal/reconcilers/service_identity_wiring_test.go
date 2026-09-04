@@ -43,17 +43,6 @@ func restMapperWithBackendTLSPolicy() apimeta.RESTMapper {
 	return m
 }
 
-// markServiceIdentityReady is a tiny helper used by every wiring test
-// below to satisfy the precondition the production code reads.
-// Centralised so a future condition-name change only edits one place.
-func markServiceIdentityReady(cp *openchamiv1alpha1.OpenCHAMIControlPlane) {
-	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
-		Type:   conditions.ConditionServiceIdentityReady,
-		Status: metav1.ConditionTrue,
-		Reason: conditions.ReasonReady,
-	})
-}
-
 // TestTokensmithReconciler_HTTPSWhenMTLSEnabled covers the TLS-enabled
 // path: when spec.services.tokensmith.tls.enabled=true, the operator
 // must mount the tokensmith server cert + CA, set the three TLS env vars

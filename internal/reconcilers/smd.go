@@ -109,9 +109,9 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.Ope
 		available = current.Status.AvailableReplicas
 	}
 
-	scheme := "http"
+	scheme := listenerHTTP
 	if cp.Spec.Services.SMD.TLS.Enabled {
-		scheme = "https"
+		scheme = listenerHTTPS
 	}
 	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceSMD, ns, smdPort)
 	ready := available >= 1

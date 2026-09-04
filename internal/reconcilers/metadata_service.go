@@ -86,9 +86,9 @@ func (r *MetadataServiceReconciler) Reconcile(ctx context.Context, cp *openchami
 	}
 
 	ready := current.Status.AvailableReplicas >= 1
-	scheme := "http"
+	scheme := listenerHTTP
 	if cp.Spec.Services.MetadataService.TLS.Enabled {
-		scheme = "https"
+		scheme = listenerHTTPS
 	}
 	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceMetadataService, ns, metadataServicePort)
 	message := "metadata-service Deployment available"

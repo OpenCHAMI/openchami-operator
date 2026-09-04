@@ -100,9 +100,9 @@ func (r *BootServiceReconciler) Reconcile(ctx context.Context, cp *openchamiv1al
 	}
 
 	ready := current.Status.AvailableReplicas >= 1
-	scheme := "http"
+	scheme := listenerHTTP
 	if cp.Spec.Services.BootService.TLS.Enabled {
-		scheme = "https"
+		scheme = listenerHTTPS
 	}
 	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceBootService, ns, bootServicePort)
 	message := "boot-service Deployment available"

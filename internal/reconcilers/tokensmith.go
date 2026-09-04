@@ -133,9 +133,9 @@ func (r *TokensmithReconciler) Reconcile(ctx context.Context, cp *openchamiv1alp
 	}
 
 	ready := current.Status.AvailableReplicas >= 1
-	scheme := "http"
+	scheme := listenerHTTP
 	if cp.Spec.Services.Tokensmith.TLS.Enabled {
-		scheme = "https"
+		scheme = listenerHTTPS
 	}
 	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceTokensmith, ns, tokensmithPort)
 	message := "tokensmith Deployment available"

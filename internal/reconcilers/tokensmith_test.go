@@ -347,7 +347,7 @@ func TestTokensmithReconciler_TLSEnabledHTTPSProbes(t *testing.T) {
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.Name == tokensmithTLSVolumeNm {
 			foundVolume = true
-			if v.VolumeSource.Projected == nil {
+			if v.Projected == nil {
 				t.Errorf("expected TLS volume to use projected source")
 			}
 		}
@@ -422,4 +422,3 @@ func TestTokensmithReconciler_EndpointSchemeReflectsTLS(t *testing.T) {
 		t.Errorf("expected status.services[tokensmith] to be set")
 	}
 }
-
