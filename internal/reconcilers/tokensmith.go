@@ -304,17 +304,18 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		)
 	}
 
-	probeScheme := corev1.URISchemeHTTP
-	if mTLS {
-		probeScheme = corev1.URISchemeHTTPS
-	}
+	// Health probes always use HTTP (no Scheme field = default HTTP),
+	// even when the service itself is running HTTPS for mTLS. The /health
+	// endpoint must remain accessible via HTTP for kubelet to reach it
+	// without needing to trust the service-identity CA. This matches the
+	// pattern used by SMD and other services in the operator.
 	probe := func(period, failures int32) *corev1.Probe {
 		return &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
-					Path:   tokensmithHealthPath,
-					Port:   intstr.FromString(tokensmithPortName),
-					Scheme: probeScheme,
+					Path: tokensmithHealthPath,
+					Port: intstr.FromString(tokensmithPortName),
+					// Scheme omitted intentionally — defaults to HTTP
 				},
 			},
 			PeriodSeconds:    period,
