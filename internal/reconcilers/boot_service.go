@@ -100,7 +100,11 @@ func (r *BootServiceReconciler) Reconcile(ctx context.Context, cp *openchamiv1al
 	}
 
 	ready := current.Status.AvailableReplicas >= 1
-	endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", ServiceBootService, ns, bootServicePort)
+	scheme := "http"
+	if cp.Spec.Services.BootService.TLS.Enabled {
+		scheme = "https"
+	}
+	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceBootService, ns, bootServicePort)
 	message := "boot-service Deployment available"
 	if !ready {
 		message = fmt.Sprintf("waiting for boot-service Deployment (availableReplicas=%d)", current.Status.AvailableReplicas)
@@ -257,11 +261,16 @@ func (r *BootServiceReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIC
 	}
 
 	probe := func(period, failures int32) *corev1.Probe {
+		scheme := corev1.URISchemeHTTP
+		if cp.Spec.Services.BootService.TLS.Enabled {
+			scheme = corev1.URISchemeHTTPS
+		}
 		return &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
-					Path: bootServiceHealthPath,
-					Port: intstr.FromString(bootServicePortName),
+					Path:   bootServiceHealthPath,
+					Port:   intstr.FromString(bootServicePortName),
+					Scheme: scheme,
 				},
 			},
 			PeriodSeconds:    period,
