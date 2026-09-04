@@ -56,10 +56,13 @@ func markServiceIdentityReady(cp *openchamiv1alpha1.OpenCHAMIControlPlane) {
 
 // TestTokensmithReconciler_HTTPSWhenMTLSEnabled covers the
 // service-identity-ready path: the operator must mount the tokensmith
-// server cert + CA, set the three TLS env vars the binary reads, and
-// switch every probe to HTTPS. The Service / Deployment endpoint URL
-// in status must report https:// so consumers and the gateway dial
-// over TLS.
+// server cert + CA, set the three TLS env vars the binary reads. The
+// Service / Deployment endpoint URL in status must report https:// so
+// consumers and the gateway dial over TLS.
+//
+// Health probes always use HTTP (default scheme when omitted) even when
+// mTLS is enabled, because kubelet cannot trust custom CAs and the
+// /health endpoint must remain accessible for operational reliability.
 func TestTokensmithReconciler_HTTPSWhenMTLSEnabled(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane(testClusterAlpha)
@@ -99,13 +102,15 @@ func TestTokensmithReconciler_HTTPSWhenMTLSEnabled(t *testing.T) {
 			envByName[tokensmithEnvSvcIDCA], wantCA)
 	}
 
-	// HTTPS probe scheme — without this the kubelet would still dial
-	// plaintext on a TLS-only port and the pod would never go Ready.
-	if got := cont.ReadinessProbe.HTTPGet.Scheme; got != corev1.URISchemeHTTPS {
-		t.Errorf("readiness probe scheme=%q want HTTPS", got)
+	// Health probes use HTTP (empty/default scheme) even when mTLS is
+	// enabled. Kubelet cannot trust the service-identity CA, so the
+	// /health endpoint must remain accessible via HTTP. This matches
+	// the pattern used by SMD and other operator-managed services.
+	if got := cont.ReadinessProbe.HTTPGet.Scheme; got != "" && got != corev1.URISchemeHTTP {
+		t.Errorf("readiness probe scheme=%q want empty (defaults to HTTP)", got)
 	}
-	if got := cont.LivenessProbe.HTTPGet.Scheme; got != corev1.URISchemeHTTPS {
-		t.Errorf("liveness probe scheme=%q want HTTPS", got)
+	if got := cont.LivenessProbe.HTTPGet.Scheme; got != "" && got != corev1.URISchemeHTTP {
+		t.Errorf("liveness probe scheme=%q want empty (defaults to HTTP)", got)
 	}
 
 	// Projected volume sources include both Secrets.
