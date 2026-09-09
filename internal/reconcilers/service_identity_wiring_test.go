@@ -43,30 +43,17 @@ func restMapperWithBackendTLSPolicy() apimeta.RESTMapper {
 	return m
 }
 
-// markServiceIdentityReady is a tiny helper used by every wiring test
-// below to satisfy the precondition the production code reads.
-// Centralised so a future condition-name change only edits one place.
-func markServiceIdentityReady(cp *openchamiv1alpha1.OpenCHAMIControlPlane) {
-	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
-		Type:   conditions.ConditionServiceIdentityReady,
-		Status: metav1.ConditionTrue,
-		Reason: conditions.ReasonReady,
-	})
-}
-
-// TestTokensmithReconciler_HTTPSWhenMTLSEnabled covers the
-// service-identity-ready path: the operator must mount the tokensmith
-// server cert + CA, set the three TLS env vars the binary reads. The
-// Service / Deployment endpoint URL in status must report https:// so
-// consumers and the gateway dial over TLS.
-//
-// Health probes always use HTTP (default scheme when omitted) even when
-// mTLS is enabled, because kubelet cannot trust custom CAs and the
-// /health endpoint must remain accessible for operational reliability.
+// TestTokensmithReconciler_HTTPSWhenMTLSEnabled covers the TLS-enabled
+// path: when spec.services.tokensmith.tls.enabled=true, the operator
+// must mount the tokensmith server cert + CA, set the three TLS env vars
+// the binary reads, and use HTTPS probes. The Service / Deployment
+// endpoint URL in status must report https:// so consumers and the
+// gateway dial over TLS.
 func TestTokensmithReconciler_HTTPSWhenMTLSEnabled(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane(testClusterAlpha)
-	markServiceIdentityReady(cp)
+	// Enable TLS via spec field instead of condition
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
@@ -102,15 +89,15 @@ func TestTokensmithReconciler_HTTPSWhenMTLSEnabled(t *testing.T) {
 			envByName[tokensmithEnvSvcIDCA], wantCA)
 	}
 
-	// Health probes use HTTP (empty/default scheme) even when mTLS is
-	// enabled. Kubelet cannot trust the service-identity CA, so the
-	// /health endpoint must remain accessible via HTTP. This matches
-	// the pattern used by SMD and other operator-managed services.
-	if got := cont.ReadinessProbe.HTTPGet.Scheme; got != "" && got != corev1.URISchemeHTTP {
-		t.Errorf("readiness probe scheme=%q want empty (defaults to HTTP)", got)
+	// Probes use HTTPS when TLS is enabled.
+	if got := cont.ReadinessProbe.HTTPGet.Scheme; got != corev1.URISchemeHTTPS {
+		t.Errorf("readiness probe scheme=%q want HTTPS", got)
 	}
-	if got := cont.LivenessProbe.HTTPGet.Scheme; got != "" && got != corev1.URISchemeHTTP {
-		t.Errorf("liveness probe scheme=%q want empty (defaults to HTTP)", got)
+	if got := cont.LivenessProbe.HTTPGet.Scheme; got != corev1.URISchemeHTTPS {
+		t.Errorf("liveness probe scheme=%q want HTTPS", got)
+	}
+	if got := cont.StartupProbe.HTTPGet.Scheme; got != corev1.URISchemeHTTPS {
+		t.Errorf("startup probe scheme=%q want HTTPS", got)
 	}
 
 	// Projected volume sources include both Secrets.
@@ -152,7 +139,8 @@ func TestTokensmithReconciler_HTTPSWhenMTLSEnabled(t *testing.T) {
 func TestBootServiceReconciler_MTLSWiring(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane(testClusterAlpha)
-	markServiceIdentityReady(cp)
+	// Enable TLS via spec field
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &BootServiceReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
@@ -221,7 +209,8 @@ func TestBootServiceReconciler_MTLSWiring(t *testing.T) {
 func TestMetadataServiceReconciler_MTLSWiring(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane(testClusterAlpha)
-	markServiceIdentityReady(cp)
+	// Enable TLS via spec field
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &MetadataServiceReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
@@ -267,6 +256,8 @@ func TestMetadataServiceReconciler_MTLSWiring(t *testing.T) {
 func TestGatewayReconciler_BackendTLSPolicyWhenMTLSReady(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane(testClusterAlpha)
+	// Enable TLS via spec field
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
 	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:   conditions.ConditionCertificatesValid,
 		Status: metav1.ConditionTrue,
@@ -276,7 +267,6 @@ func TestGatewayReconciler_BackendTLSPolicyWhenMTLSReady(t *testing.T) {
 		cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
 	cp.Status.Services[ServiceTokensmith] = openchamiv1alpha1.ServiceStatus{Ready: true}
-	markServiceIdentityReady(cp)
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -321,6 +311,8 @@ func TestGatewayReconciler_BackendTLSPolicyWhenMTLSReady(t *testing.T) {
 func TestGatewayReconciler_DefersWhenBackendTLSPolicyCRDMissing(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane(testClusterAlpha)
+	// Enable TLS via spec field
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
 	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:   conditions.ConditionCertificatesValid,
 		Status: metav1.ConditionTrue,
@@ -330,7 +322,6 @@ func TestGatewayReconciler_DefersWhenBackendTLSPolicyCRDMissing(t *testing.T) {
 		cp.Status.Services = map[string]openchamiv1alpha1.ServiceStatus{}
 	}
 	cp.Status.Services[ServiceTokensmith] = openchamiv1alpha1.ServiceStatus{Ready: true}
-	markServiceIdentityReady(cp)
 
 	// No WithRESTMapper — fake builder's default has zero entries, so
 	// the production helper's RESTMapping lookup returns NoMatchError.

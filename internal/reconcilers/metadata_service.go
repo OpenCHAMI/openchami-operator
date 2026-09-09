@@ -86,7 +86,11 @@ func (r *MetadataServiceReconciler) Reconcile(ctx context.Context, cp *openchami
 	}
 
 	ready := current.Status.AvailableReplicas >= 1
-	endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", ServiceMetadataService, ns, metadataServicePort)
+	scheme := listenerHTTP
+	if cp.Spec.Services.MetadataService.TLS.Enabled {
+		scheme = listenerHTTPS
+	}
+	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceMetadataService, ns, metadataServicePort)
 	message := "metadata-service Deployment available"
 	if !ready {
 		message = fmt.Sprintf("waiting for metadata-service Deployment (availableReplicas=%d)", current.Status.AvailableReplicas)
@@ -198,11 +202,16 @@ func (r *MetadataServiceReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCH
 	ns := ControlPlaneNamespace(cp)
 
 	probe := func(period, failures int32) *corev1.Probe {
+		scheme := corev1.URISchemeHTTP
+		if cp.Spec.Services.MetadataService.TLS.Enabled {
+			scheme = corev1.URISchemeHTTPS
+		}
 		return &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
-					Path: metadataServiceHealthPath,
-					Port: intstr.FromString(metadataServicePortName),
+					Path:   metadataServiceHealthPath,
+					Port:   intstr.FromString(metadataServicePortName),
+					Scheme: scheme,
 				},
 			},
 			PeriodSeconds:    period,

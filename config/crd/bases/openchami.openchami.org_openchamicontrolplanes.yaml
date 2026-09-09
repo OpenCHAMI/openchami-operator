@@ -585,6 +585,25 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
+                      tls:
+                        description: |-
+                          TLS controls whether the service listens on HTTPS and uses HTTPS probes.
+                          Default is HTTP (TLS.Enabled=false). When enabled, the operator provisions
+                          a server certificate from the service-identity CA.
+                        properties:
+                          enabled:
+                            default: false
+                            description: |-
+                              Enabled, when true, configures the service to:
+                                - listen on HTTPS instead of HTTP
+                                - use HTTPS in startup/liveness/readiness probes (Scheme: HTTPS)
+                                - construct service URLs with https:// scheme
+
+                              The operator provisions a server certificate from the service-identity
+                              CA and mounts it into the pod. Services must support TLS termination;
+                              not all services do. Check service-specific documentation.
+                            type: boolean
+                        type: object
                     type: object
                   coreDHCP:
                     description: CoreDHCPSpec configures the CoreDHCP DaemonSet.
@@ -975,6 +994,25 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
+                      tls:
+                        description: |-
+                          TLS controls whether the service listens on HTTPS and uses HTTPS probes.
+                          Default is HTTP (TLS.Enabled=false). When enabled, the operator provisions
+                          a server certificate from the service-identity CA.
+                        properties:
+                          enabled:
+                            default: false
+                            description: |-
+                              Enabled, when true, configures the service to:
+                                - listen on HTTPS instead of HTTP
+                                - use HTTPS in startup/liveness/readiness probes (Scheme: HTTPS)
+                                - construct service URLs with https:// scheme
+
+                              The operator provisions a server certificate from the service-identity
+                              CA and mounts it into the pod. Services must support TLS termination;
+                              not all services do. Check service-specific documentation.
+                            type: boolean
+                        type: object
                     type: object
                   smd:
                     description: SMDSpec configures the SMD (State Management Database)
@@ -1080,6 +1118,25 @@ spec:
                               otherwise to an implementation-defined value. Requests cannot exceed Limits.
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
+                        type: object
+                      tls:
+                        description: |-
+                          TLS controls whether the service listens on HTTPS and uses HTTPS probes.
+                          Default is HTTP (TLS.Enabled=false). When enabled, the operator provisions
+                          a server certificate from the service-identity CA.
+                        properties:
+                          enabled:
+                            default: false
+                            description: |-
+                              Enabled, when true, configures the service to:
+                                - listen on HTTPS instead of HTTP
+                                - use HTTPS in startup/liveness/readiness probes (Scheme: HTTPS)
+                                - construct service URLs with https:// scheme
+
+                              The operator provisions a server certificate from the service-identity
+                              CA and mounts it into the pod. Services must support TLS termination;
+                              not all services do. Check service-specific documentation.
+                            type: boolean
                         type: object
                     type: object
                   tokensmith:
@@ -1200,6 +1257,25 @@ spec:
                               otherwise to an implementation-defined value. Requests cannot exceed Limits.
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
+                        type: object
+                      tls:
+                        description: |-
+                          TLS controls whether the service listens on HTTPS and uses HTTPS probes.
+                          Default is HTTP (TLS.Enabled=false). When enabled, the operator provisions
+                          a server certificate from the service-identity CA.
+                        properties:
+                          enabled:
+                            default: false
+                            description: |-
+                              Enabled, when true, configures the service to:
+                                - listen on HTTPS instead of HTTP
+                                - use HTTPS in startup/liveness/readiness probes (Scheme: HTTPS)
+                                - construct service URLs with https:// scheme
+
+                              The operator provisions a server certificate from the service-identity
+                              CA and mounts it into the pod. Services must support TLS termination;
+                              not all services do. Check service-specific documentation.
+                            type: boolean
                         type: object
                     type: object
                 type: object

@@ -235,21 +235,20 @@ func TestServiceIdentityReconciler_FlipsReadyOnceSecretsPresent(t *testing.T) {
 	}
 }
 
-// TestTokensmithMTLSEnabled_GatesOnCondition guards the helper used by
-// every downstream reconciler so a future refactor can't silently
-// switch consumers to mTLS before the certs exist.
+// TestTokensmithMTLSEnabled_GatesOnSpecField guards the helper used by
+// every downstream reconciler. The helper now reads the spec field directly
+// rather than gating on the ServiceIdentityReady condition, giving users
+// explicit control over when TLS is activated.
 func TestTokensmithMTLSEnabled_GatesOnCondition(t *testing.T) {
 	cp := newControlPlane(testClusterAlpha)
+	// Default: TLS disabled
 	if tokensmithMTLSEnabled(cp) {
-		t.Errorf("expected mTLS disabled on a fresh control plane (no condition set)")
+		t.Errorf("expected mTLS disabled by default (spec.services.tokensmith.tls.enabled=false)")
 	}
-	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
-		Type:   conditions.ConditionServiceIdentityReady,
-		Status: metav1.ConditionTrue,
-		Reason: conditions.ReasonReady,
-	})
+	// Enable TLS via spec field
+	cp.Spec.Services.Tokensmith.TLS.Enabled = true
 	if !tokensmithMTLSEnabled(cp) {
-		t.Errorf("expected mTLS enabled once ConditionServiceIdentityReady=True")
+		t.Errorf("expected mTLS enabled once spec.services.tokensmith.tls.enabled=true")
 	}
 }
 

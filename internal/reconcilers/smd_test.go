@@ -222,3 +222,114 @@ func TestSMDReconciler_TwoClustersIsolated(t *testing.T) {
 		}
 	}
 }
+
+func TestSMDReconciler_TLSDisabledByDefault(t *testing.T) {
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.SMD.Enabled = true
+	// Don't set .tls.enabled — should default to false
+	r := &SMDReconciler{}
+	dep := r.buildDeployment(cp)
+
+	cont := dep.Spec.Template.Spec.Containers[0]
+
+	// Probes should use HTTP when TLS is disabled
+	if cont.StartupProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+		t.Errorf("expected startupProbe scheme=HTTP when TLS disabled, got %q", cont.StartupProbe.HTTPGet.Scheme)
+	}
+	if cont.LivenessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+		t.Errorf("expected livenessProbe scheme=HTTP when TLS disabled, got %q", cont.LivenessProbe.HTTPGet.Scheme)
+	}
+	if cont.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTP {
+		t.Errorf("expected readinessProbe scheme=HTTP when TLS disabled, got %q", cont.ReadinessProbe.HTTPGet.Scheme)
+	}
+}
+
+func TestSMDReconciler_TLSEnabledHTTPSProbes(t *testing.T) {
+	cp := newControlPlane("alpha")
+	cp.Spec.Services.SMD.Enabled = true
+	cp.Spec.Services.SMD.TLS.Enabled = true
+
+	r := &SMDReconciler{}
+	dep := r.buildDeployment(cp)
+
+	cont := dep.Spec.Template.Spec.Containers[0]
+
+	// Probes should use HTTPS when TLS is enabled
+	if cont.StartupProbe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Errorf("expected startupProbe scheme=HTTPS when TLS enabled, got %q", cont.StartupProbe.HTTPGet.Scheme)
+	}
+	if cont.LivenessProbe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Errorf("expected livenessProbe scheme=HTTPS when TLS enabled, got %q", cont.LivenessProbe.HTTPGet.Scheme)
+	}
+	if cont.ReadinessProbe.HTTPGet.Scheme != corev1.URISchemeHTTPS {
+		t.Errorf("expected readinessProbe scheme=HTTPS when TLS enabled, got %q", cont.ReadinessProbe.HTTPGet.Scheme)
+	}
+}
+
+func TestSMDReconciler_EndpointSchemeReflectsTLS(t *testing.T) {
+	scheme := newScheme(t)
+
+	// Test without TLS
+	cpHTTP := newControlPlane("alpha")
+	cpHTTP.Spec.Services.SMD.Enabled = true
+	cpHTTP.Spec.Services.SMD.TLS.Enabled = false
+
+	existingHTTP := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ServiceSMD,
+			Namespace: ControlPlaneNamespace(cpHTTP),
+		},
+		Status: appsv1.DeploymentStatus{AvailableReplicas: 1},
+	}
+
+	cHTTP := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(cpHTTP).
+		WithStatusSubresource(&appsv1.Deployment{}).
+		WithObjects(existingHTTP).
+		Build()
+
+	rHTTP := &SMDReconciler{Client: cHTTP, Recorder: record.NewFakeRecorder(10)}
+	if _, err := rHTTP.Reconcile(context.Background(), cpHTTP); err != nil {
+		t.Fatalf("reconcile HTTP: %v", err)
+	}
+
+	if st, ok := cpHTTP.Status.Services[ServiceSMD]; ok {
+		if st.Endpoint[:7] != "http://" {
+			t.Errorf("expected http:// endpoint when TLS disabled, got %q", st.Endpoint)
+		}
+	} else {
+		t.Errorf("expected status.services[smd] to be set")
+	}
+
+	// Test with TLS
+	cpHTTPS := newControlPlane("alpha")
+	cpHTTPS.Spec.Services.SMD.Enabled = true
+	cpHTTPS.Spec.Services.SMD.TLS.Enabled = true
+
+	existingHTTPS := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ServiceSMD,
+			Namespace: ControlPlaneNamespace(cpHTTPS),
+		},
+		Status: appsv1.DeploymentStatus{AvailableReplicas: 1},
+	}
+
+	cHTTPS := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(cpHTTPS).
+		WithStatusSubresource(&appsv1.Deployment{}).
+		WithObjects(existingHTTPS).
+		Build()
+
+	rHTTPS := &SMDReconciler{Client: cHTTPS, Recorder: record.NewFakeRecorder(10)}
+	if _, err := rHTTPS.Reconcile(context.Background(), cpHTTPS); err != nil {
+		t.Fatalf("reconcile HTTPS: %v", err)
+	}
+
+	if st, ok := cpHTTPS.Status.Services[ServiceSMD]; ok {
+		if st.Endpoint[:8] != "https://" {
+			t.Errorf("expected https:// endpoint when TLS enabled, got %q", st.Endpoint)
+		}
+	} else {
+		t.Errorf("expected status.services[smd] to be set")
+	}
+}

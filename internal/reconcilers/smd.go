@@ -109,7 +109,11 @@ func (r *SMDReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.Ope
 		available = current.Status.AvailableReplicas
 	}
 
-	endpoint := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", ServiceSMD, ns, smdPort)
+	scheme := listenerHTTP
+	if cp.Spec.Services.SMD.TLS.Enabled {
+		scheme = listenerHTTPS
+	}
+	endpoint := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, ServiceSMD, ns, smdPort)
 	ready := available >= 1
 	msg := fmt.Sprintf("availableReplicas=%d", available)
 	if ready {
@@ -219,36 +223,45 @@ func (r *SMDReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMIControlPl
 			{Name: "SMD_JWKS_URL", Value: jwksURL},
 		},
 		VolumeMounts: smdMounts,
-		StartupProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: smdHealthPath,
-					Port: intstr.FromString(smdPortName),
-				},
+	}
+
+	// Probes: use HTTPS when TLS is enabled
+	probeScheme := corev1.URISchemeHTTP
+	if cp.Spec.Services.SMD.TLS.Enabled {
+		probeScheme = corev1.URISchemeHTTPS
+	}
+	container.StartupProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   smdHealthPath,
+				Port:   intstr.FromString(smdPortName),
+				Scheme: probeScheme,
 			},
-			FailureThreshold: 30,
-			PeriodSeconds:    5,
 		},
-		LivenessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: smdHealthPath,
-					Port: intstr.FromString(smdPortName),
-				},
+		FailureThreshold: 30,
+		PeriodSeconds:    5,
+	}
+	container.LivenessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   smdHealthPath,
+				Port:   intstr.FromString(smdPortName),
+				Scheme: probeScheme,
 			},
-			PeriodSeconds:    20,
-			FailureThreshold: 3,
 		},
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: smdHealthPath,
-					Port: intstr.FromString(smdPortName),
-				},
+		PeriodSeconds:    20,
+		FailureThreshold: 3,
+	}
+	container.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   smdHealthPath,
+				Port:   intstr.FromString(smdPortName),
+				Scheme: probeScheme,
 			},
-			PeriodSeconds:    10,
-			FailureThreshold: 3,
 		},
+		PeriodSeconds:    10,
+		FailureThreshold: 3,
 	}
 	if cp.Spec.Services.SMD.Resources != nil {
 		container.Resources = *cp.Spec.Services.SMD.Resources
