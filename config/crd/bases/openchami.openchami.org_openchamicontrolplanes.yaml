@@ -1176,6 +1176,11 @@ spec:
                           tag:
                             type: string
                         type: object
+                      oidcIntrospectionEndpoint:
+                        description: |-
+                          OIDCIntrospectionEndpoint overrides the upstream OAuth token introspection
+                          endpoint when provider discovery does not advertise one.
+                        type: string
                       oidcIssuerURL:
                         description: OIDCIssuerURL is required when OIDCProvider is
                           "external".

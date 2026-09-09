@@ -181,6 +181,11 @@ type TokensmithSpec struct {
     // OIDCIssuerURL is required when OIDCProvider is "external".
     // +optional
     OIDCIssuerURL string `json:"oidcIssuerURL,omitempty"`
+
+    // OIDCIntrospectionEndpoint overrides upstream token introspection when
+    // provider discovery does not advertise an endpoint.
+    // +optional
+    OIDCIntrospectionEndpoint string `json:"oidcIntrospectionEndpoint,omitempty"`
 }
 
 type BootServiceSpec struct {

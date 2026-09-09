@@ -123,7 +123,7 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 func TestTokensmithReconciler_ExternalOIDCRequiresURL(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newTokensmithCluster()
-	cp.Spec.Services.Tokensmith.OIDCProvider = "external"
+	cp.Spec.Services.Tokensmith.OIDCProvider = tokensmithOIDCProviderExternal
 	cp.Spec.Services.Tokensmith.OIDCIssuerURL = ""
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
@@ -154,10 +154,12 @@ func TestTokensmithReconciler_ExternalOIDCRequiresURL(t *testing.T) {
 }
 
 func TestTokensmithReconciler_ExternalOIDCHappy(t *testing.T) {
+	const issuerURL = "https://issuer.example/realm"
+
 	scheme := newScheme(t)
 	cp := newTokensmithCluster()
-	cp.Spec.Services.Tokensmith.OIDCProvider = "external"
-	cp.Spec.Services.Tokensmith.OIDCIssuerURL = "https://issuer.example/realm"
+	cp.Spec.Services.Tokensmith.OIDCProvider = tokensmithOIDCProviderExternal
+	cp.Spec.Services.Tokensmith.OIDCIssuerURL = issuerURL
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 
 	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
@@ -179,9 +181,73 @@ func TestTokensmithReconciler_ExternalOIDCHappy(t *testing.T) {
 			oidcIssuer = e.Value
 		}
 	}
-	if oidcIssuer != "https://issuer.example/realm" {
+	if oidcIssuer != issuerURL {
 		t.Errorf("expected OIDC_ISSUER_URL to match external issuer, got %q", oidcIssuer)
 	}
+}
+
+func TestTokensmithReconciler_OIDCIntrospectionEndpointEnv(t *testing.T) {
+	const issuerURL = "https://issuer.example/realm"
+
+	tests := []struct {
+		name     string
+		provider string
+		issuer   string
+		endpoint string
+		want     string
+	}{
+		{
+			name:     "omitted",
+			provider: tokensmithOIDCProviderVault,
+		},
+		{
+			name:     "vault provider passes explicit endpoint",
+			provider: tokensmithOIDCProviderVault,
+			endpoint: "https://vault.example/v1/identity/oidc/introspect",
+			want:     "https://vault.example/v1/identity/oidc/introspect",
+		},
+		{
+			name:     "external provider passes explicit endpoint",
+			provider: tokensmithOIDCProviderExternal,
+			issuer:   issuerURL,
+			endpoint: "https://issuer.example/realm/protocol/openid-connect/token/introspect",
+			want:     "https://issuer.example/realm/protocol/openid-connect/token/introspect",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cp := newTokensmithCluster()
+			cp.Spec.Services.Tokensmith.OIDCProvider = test.provider
+			cp.Spec.Services.Tokensmith.OIDCIssuerURL = test.issuer
+			cp.Spec.Services.Tokensmith.OIDCIntrospectionEndpoint = test.endpoint
+
+			dep := (&TokensmithReconciler{}).buildDeployment(cp)
+			value, found := tokensmithEnvValue(dep, tokensmithOIDCIntrospectionEnvName)
+
+			if test.want == "" {
+				if found {
+					t.Fatalf("expected %s to be omitted, got %q", tokensmithOIDCIntrospectionEnvName, value)
+				}
+				return
+			}
+			if !found {
+				t.Fatalf("expected %s to be present", tokensmithOIDCIntrospectionEnvName)
+			}
+			if value != test.want {
+				t.Fatalf("expected %s=%q, got %q", tokensmithOIDCIntrospectionEnvName, test.want, value)
+			}
+		})
+	}
+}
+
+func tokensmithEnvValue(dep *appsv1.Deployment, name string) (string, bool) {
+	for _, env := range dep.Spec.Template.Spec.Containers[0].Env {
+		if env.Name == name {
+			return env.Value, true
+		}
+	}
+	return "", false
 }
 
 func TestTokensmithReconciler_ReadyWhenAvailable(t *testing.T) {
