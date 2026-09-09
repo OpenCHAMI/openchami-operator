@@ -108,7 +108,7 @@ type NetworkPoliciesReconciler struct {
 func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cp, "networkpolicies")
 
-	policies, err := r.buildPolicies(cp, true)
+	policies, err := r.buildPolicies(ctx, cp, true)
 	if err != nil {
 		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkPoliciesReady,
@@ -162,7 +162,7 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cp *openchami
 // reference a sentinel ipBlock 0.0.0.0/0 in place of the resolved /32 peer.
 // Reconcile() resolves the peer for real before applying.
 func (r *NetworkPoliciesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
-	policies, err := r.buildPolicies(cp, false)
+	policies, err := r.buildPolicies(context.Background(), cp, false)
 	if err != nil {
 		return []client.Object{}, fmt.Errorf("building network policies: %w", err)
 	}
@@ -178,11 +178,13 @@ func (r *NetworkPoliciesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMICont
 // all policies that do not depend on external resolution are still constructed.
 //
 // resolveDNS controls how external (non-.svc.cluster.local) Vault/VersityGW
-// hostnames become peers. When true, hostnames are resolved with net.LookupHost
-// to produce a /32 ipBlock — this is the Reconcile path. When false, the
-// syntax-only helpers substitute a placeholder ipBlock without touching DNS —
+// hostnames become peers, and whether the Kubernetes API-server endpoint IPs
+// are discovered from the live cluster. When true, hostnames are resolved with
+// net.LookupHost and the default/kubernetes Endpoints are read to produce /32
+// ipBlock peers — this is the Reconcile path. When false, the syntax-only
+// helpers substitute placeholder ipBlocks without touching DNS or the API —
 // this is the Describe path.
-func (r *NetworkPoliciesReconciler) buildPolicies(cp *openchamiv1alpha1.OpenCHAMIControlPlane, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
+func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
 	ns := ControlPlaneNamespace(cp)
 
 	vaultPeerFn := VaultEgressPeerSyntax
@@ -201,13 +203,26 @@ func (r *NetworkPoliciesReconciler) buildPolicies(cp *openchamiv1alpha1.OpenCHAM
 		return nil, fmt.Errorf("resolving versitygw egress peer: %w", err)
 	}
 
+	// Resolve the concrete Kubernetes API-server endpoint IPs at reconcile
+	// time. Describe never reads the API (its Client may be nil) and uses the
+	// syntax-only sentinel peer instead.
+	var apiPeers []networkingv1.NetworkPolicyPeer
+	if resolveDNS {
+		apiPeers, err = KubernetesAPIEgressPeers(ctx, r.Client)
+		if err != nil {
+			return nil, fmt.Errorf("resolving kubernetes API egress peers: %w", err)
+		}
+	} else {
+		apiPeers = KubernetesAPIEgressPeersSyntax()
+	}
+
 	return []networkingv1.NetworkPolicy{
 		r.defaultDenyAll(ns),
 		r.allowDNSEgress(ns),
 		r.allowVaultEgress(ns, vaultPeer),
 		r.allowVersityGWEgress(ns, versityPeer),
 		r.allowLogsEgress(ns, versityPeer),
-		r.allowCNPGKubernetesAPIEgress(ns),
+		r.allowCNPGKubernetesAPIEgress(ns, apiPeers),
 		r.smdPolicy(ns),
 		r.tokensmithPolicy(ns, vaultPeer),
 		r.bootServicePolicy(ns, versityPeer),
@@ -361,12 +376,16 @@ func (r *NetworkPoliciesReconciler) allowLogsEgress(ns string, peer networkingv1
 // and update status during initialization and ongoing operations.
 //
 // This policy scopes access to pods labelled with cnpg.io/cluster (the label
-// CNPG stamps on every pod it manages), and permits egress to the default
-// namespace where the kubernetes.default.svc ClusterIP service lives. The
-// namespace-level peer selector works across all Kubernetes distributions
-// (standard, k3s, RKE2) without requiring discovery of the specific API
-// server endpoint IP, which can vary by distribution and cluster topology.
-func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string) networkingv1.NetworkPolicy {
+// CNPG stamps on every pod it manages), and permits egress to the concrete
+// API-server endpoint IP(s) discovered from the default/kubernetes Endpoints
+// at reconcile time (see KubernetesAPIEgressPeers).
+//
+// A namespaceSelector on "default" is deliberately NOT used: NetworkPolicy is
+// enforced on the post-DNAT destination IP, which the kubernetes ClusterIP
+// does not match, so the selector would silently fail to admit API traffic on
+// many clusters. The discovered ipBlock peers are portable across
+// distributions (standard k8s, k3s, RKE2) and HA control planes.
+func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string, apiPeers []networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
 	cnpgClusterName := ns + "-postgres"
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
@@ -377,21 +396,7 @@ func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string) netw
 			},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				// Allow egress to the default namespace where the kubernetes
-				// service (ClusterIP for the API server) is published. This
-				// covers the API server endpoint regardless of whether it's
-				// reached via service DNS (kubernetes.default.svc.cluster.local)
-				// or directly via the ClusterIP (e.g., 10.43.0.1:443 in k3s,
-				// 10.96.0.1:443 in standard k8s, or node IP + 6443 in RKE2).
-				To: []networkingv1.NetworkPolicyPeer{
-					{
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{
-								kubernetesMetadataNameLabel: "default",
-							},
-						},
-					},
-				},
+				To:    apiPeers,
 				Ports: []networkingv1.NetworkPolicyPort{portTCP(kubernetesAPIPort)},
 			}},
 		},

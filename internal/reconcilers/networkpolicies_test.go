@@ -34,7 +34,25 @@ const (
 	testExternalVersityGWAddr  = "http://172.16.5.10:10000"
 	testExternalVaultCIDR      = "10.20.30.40/32"
 	testExternalVersityGWCIDR  = "172.16.5.10/32"
+
+	// testAPIServerIP is the address seeded into the default/kubernetes
+	// Endpoints fixture so KubernetesAPIEgressPeers has something to discover.
+	testAPIServerIP   = "10.96.0.1"
+	testAPIServerCIDR = "10.96.0.1/32"
 )
+
+// kubernetesEndpoints returns a default/kubernetes Endpoints object backing the
+// API-server discovery path exercised by KubernetesAPIEgressPeers.
+func kubernetesEndpoints(ips ...string) *corev1.Endpoints {
+	addrs := make([]corev1.EndpointAddress, 0, len(ips))
+	for _, ip := range ips {
+		addrs = append(addrs, corev1.EndpointAddress{IP: ip})
+	}
+	return &corev1.Endpoints{
+		ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
+		Subsets:    []corev1.EndpointSubset{{Addresses: addrs}},
+	}
+}
 
 // newNetworkPolicyClient builds a fake client wired with only the
 // DeducedTypeConverter. This works around a controller-runtime fake-client
@@ -54,7 +72,7 @@ const (
 func newNetworkPolicyClient(scheme *runtime.Scheme, cp *openchamiv1alpha1.OpenCHAMIControlPlane) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(cp).
+		WithObjects(cp, kubernetesEndpoints(testAPIServerIP)).
 		WithTypeConverters(managedfields.NewDeducedTypeConverter()).
 		Build()
 }
@@ -283,16 +301,20 @@ func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolic
 
 	egress := policy.Spec.Egress[0]
 
-	// Verify targets default namespace (where kubernetes service lives)
+	// Verify the discovered API-server endpoint IP is targeted as an ipBlock,
+	// not a namespaceSelector (which does not match the post-DNAT API IP).
 	if len(egress.To) != 1 {
 		t.Fatalf("expected 1 peer in egress rule, got %d", len(egress.To))
 	}
 	peer := egress.To[0]
-	if peer.NamespaceSelector == nil {
-		t.Fatalf("expected namespaceSelector, got nil")
+	if peer.IPBlock == nil {
+		t.Fatalf("expected ipBlock peer, got %+v", peer)
 	}
-	if got := peer.NamespaceSelector.MatchLabels[kubernetesMetadataNameLabel]; got != "default" {
-		t.Errorf("expected namespace selector for 'default', got %q", got)
+	if peer.IPBlock.CIDR != testAPIServerCIDR {
+		t.Errorf("expected ipBlock CIDR %q, got %q", testAPIServerCIDR, peer.IPBlock.CIDR)
+	}
+	if peer.NamespaceSelector != nil {
+		t.Errorf("expected no namespaceSelector, got %+v", peer.NamespaceSelector)
 	}
 
 	// Verify port 443 is allowed
@@ -434,7 +456,8 @@ func TestNetworkPoliciesReconciler_CNPGKubernetesAPIEgress(t *testing.T) {
 			cnpgClusterLabel, cnpgClusterName, cnpgClusterLabel, got)
 	}
 
-	// Verify egress is scoped to default namespace where kubernetes service lives
+	// Verify egress targets the discovered API-server endpoint IP as an
+	// ipBlock (not a namespaceSelector, which would not match the API IP).
 	if len(policy.Spec.Egress) != 1 {
 		t.Fatalf("expected 1 egress rule, got %d", len(policy.Spec.Egress))
 	}
@@ -443,11 +466,14 @@ func TestNetworkPoliciesReconciler_CNPGKubernetesAPIEgress(t *testing.T) {
 		t.Fatalf("expected 1 peer, got %d", len(egress.To))
 	}
 	peer := egress.To[0]
-	if peer.NamespaceSelector == nil {
-		t.Fatalf("expected namespaceSelector, got nil")
+	if peer.IPBlock == nil {
+		t.Fatalf("expected ipBlock peer, got %+v", peer)
 	}
-	if got := peer.NamespaceSelector.MatchLabels[kubernetesMetadataNameLabel]; got != "default" {
-		t.Errorf("expected namespace 'default', got %q", got)
+	if peer.IPBlock.CIDR != testAPIServerCIDR {
+		t.Errorf("expected ipBlock CIDR %q, got %q", testAPIServerCIDR, peer.IPBlock.CIDR)
+	}
+	if peer.NamespaceSelector != nil {
+		t.Errorf("expected no namespaceSelector, got %+v", peer.NamespaceSelector)
 	}
 
 	// Verify port 443 TCP
@@ -613,5 +639,77 @@ func TestNetworkPoliciesReconciler_ConditionSet(t *testing.T) {
 	}
 	if cond.Reason != conditions.ReasonReady {
 		t.Errorf("expected reason %q, got %q", conditions.ReasonReady, cond.Reason)
+	}
+}
+
+// TestKubernetesAPIEgressPeers_Discovers verifies that every address backing
+// the default/kubernetes Endpoints becomes a /32 ipBlock peer, including HA
+// control planes with multiple endpoint addresses.
+func TestKubernetesAPIEgressPeers_Discovers(t *testing.T) {
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(kubernetesEndpoints("10.96.0.1", "10.96.0.2")).
+		Build()
+
+	peers, err := KubernetesAPIEgressPeers(context.Background(), c)
+	if err != nil {
+		t.Fatalf("KubernetesAPIEgressPeers: %v", err)
+	}
+	want := map[string]bool{"10.96.0.1/32": false, "10.96.0.2/32": false}
+	if len(peers) != len(want) {
+		t.Fatalf("expected %d peers, got %d", len(want), len(peers))
+	}
+	for _, p := range peers {
+		if p.IPBlock == nil {
+			t.Fatalf("expected ipBlock peer, got %+v", p)
+		}
+		if _, ok := want[p.IPBlock.CIDR]; !ok {
+			t.Errorf("unexpected CIDR %q", p.IPBlock.CIDR)
+			continue
+		}
+		want[p.IPBlock.CIDR] = true
+	}
+	for cidr, seen := range want {
+		if !seen {
+			t.Errorf("missing expected CIDR %q", cidr)
+		}
+	}
+}
+
+// TestKubernetesAPIEgressPeers_MissingEndpointsErrors verifies the strict
+// (prod) path aborts when the API endpoints cannot be read.
+func TestKubernetesAPIEgressPeers_MissingEndpointsErrors(t *testing.T) {
+	t.Setenv("OPENCHAMI_BEST_EFFORT_DNS", "")
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	if _, err := KubernetesAPIEgressPeers(context.Background(), c); err == nil {
+		t.Fatalf("expected error when default/kubernetes endpoints are absent")
+	}
+}
+
+// TestKubernetesAPIEgressPeers_BestEffortFallback verifies the off-cluster
+// dev-run mode degrades to the syntax-only sentinel peer instead of failing.
+func TestKubernetesAPIEgressPeers_BestEffortFallback(t *testing.T) {
+	t.Setenv("OPENCHAMI_BEST_EFFORT_DNS", "true")
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	peers, err := KubernetesAPIEgressPeers(context.Background(), c)
+	if err != nil {
+		t.Fatalf("best-effort KubernetesAPIEgressPeers: %v", err)
+	}
+	if len(peers) != 1 || peers[0].IPBlock == nil || peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers)
+	}
+}
+
+// TestKubernetesAPIEgressPeersSyntax verifies the Describe-path helper never
+// reads the API and always returns the sentinel peer.
+func TestKubernetesAPIEgressPeersSyntax(t *testing.T) {
+	peers := KubernetesAPIEgressPeersSyntax()
+	if len(peers) != 1 || peers[0].IPBlock == nil || peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers)
 	}
 }

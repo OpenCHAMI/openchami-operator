@@ -62,6 +62,10 @@ const (
 // +kubebuilder:rbac:groups=secrets.hashicorp.com,resources=vaultconnections;vaultauths;vaultstaticsecrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// endpoints (default/kubernetes) are read to discover the concrete
+// API-server IP(s) for the CNPG egress NetworkPolicy (see
+// internal/reconcilers/helpers.go KubernetesAPIEgressPeers).
+// +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 // pods/exec is required so the operator can run `tokensmith bootstrap-token
 // create` inside the tokensmith pod when provisioning the boot-service
 // bootstrap token (see internal/reconcilers/tokensmith.go).

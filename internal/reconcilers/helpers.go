@@ -5,6 +5,7 @@
 package reconcilers
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -540,6 +542,61 @@ func resolveExternalPeer(host, kind string) (networkingv1.NetworkPolicyPeer, err
 	return networkingv1.NetworkPolicyPeer{
 		IPBlock: &networkingv1.IPBlock{CIDR: addrs[0] + "/32"},
 	}, nil
+}
+
+// KubernetesAPIEgressPeers returns ipBlock peers for every address backing the
+// default/kubernetes Service — the real API-server endpoint(s).
+//
+// This resolves the "unknown local value" problem for the CNPG→API egress
+// policy: NetworkPolicy is enforced on the post-DNAT destination IP, which the
+// kubernetes ClusterIP does NOT match, so a namespaceSelector on "default"
+// does not reliably admit API traffic. Discovering the concrete endpoint IPs
+// at reconcile time produces a portable, tight rule.
+//
+// HA control planes expose multiple endpoint addresses; one /32 peer is
+// emitted per address.
+//
+// Reconcile-only: performs a live API read. Describe paths must use
+// KubernetesAPIEgressPeersSyntax. When OPENCHAMI_BEST_EFFORT_DNS=true is set
+// (the off-cluster `make dev-run` mode), an unreadable/empty Endpoints object
+// degrades to the syntax-only sentinel peer rather than aborting the build,
+// mirroring resolveExternalPeer.
+func KubernetesAPIEgressPeers(ctx context.Context, c client.Client) ([]networkingv1.NetworkPolicyPeer, error) {
+	var ep corev1.Endpoints
+	err := c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "kubernetes"}, &ep)
+	bestEffort := os.Getenv("OPENCHAMI_BEST_EFFORT_DNS") == "true" //nolint:goconst // env value, not a label
+	if err != nil {
+		if bestEffort {
+			return KubernetesAPIEgressPeersSyntax(), nil
+		}
+		return nil, fmt.Errorf("reading default/kubernetes endpoints: %w", err)
+	}
+
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(ep.Subsets))
+	for _, subset := range ep.Subsets {
+		for _, addr := range subset.Addresses {
+			peers = append(peers, networkingv1.NetworkPolicyPeer{
+				IPBlock: &networkingv1.IPBlock{CIDR: addr.IP + "/32"},
+			})
+		}
+	}
+	if len(peers) == 0 {
+		if bestEffort {
+			return KubernetesAPIEgressPeersSyntax(), nil
+		}
+		return nil, fmt.Errorf("default/kubernetes endpoints resolved to no addresses")
+	}
+	return peers, nil
+}
+
+// KubernetesAPIEgressPeersSyntax is the syntax-only counterpart to
+// KubernetesAPIEgressPeers for use from Describe paths. It returns the sentinel
+// ipBlock 0.0.0.0/0 without reading the API, preserving the SubReconciler
+// "Describe must not contact any external service" contract.
+func KubernetesAPIEgressPeersSyntax() []networkingv1.NetworkPolicyPeer {
+	return []networkingv1.NetworkPolicyPeer{{
+		IPBlock: &networkingv1.IPBlock{CIDR: SyntaxOnlyExternalCIDR},
+	}}
 }
 
 // VaultEgressPeer returns the appropriate NetworkPolicyPeer for Vault egress.
