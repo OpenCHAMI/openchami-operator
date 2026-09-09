@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,7 +35,32 @@ const (
 	testExternalVersityGWAddr  = "http://172.16.5.10:10000"
 	testExternalVaultCIDR      = "10.20.30.40/32"
 	testExternalVersityGWCIDR  = "172.16.5.10/32"
+
+	// testAPIServerIP is the address seeded into the default/kubernetes
+	// Endpoints fixture so KubernetesAPIEgressPeers has something to discover.
+	testAPIServerIP   = "10.96.0.1"
+	testAPIServerCIDR = "10.96.0.1/32"
 )
+
+// kubernetesEndpoints returns an EndpointSlice for the default/kubernetes
+// Service backing the API-server discovery path exercised by
+// KubernetesAPIEgressPeers. It carries the well-known
+// kubernetes.io/service-name=kubernetes label the helper selects on.
+func kubernetesEndpoints(ips ...string) *discoveryv1.EndpointSlice {
+	eps := make([]discoveryv1.Endpoint, 0, len(ips))
+	for _, ip := range ips {
+		eps = append(eps, discoveryv1.Endpoint{Addresses: []string{ip}})
+	}
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubernetes",
+			Namespace: "default",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "kubernetes"},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   eps,
+	}
+}
 
 // newNetworkPolicyClient builds a fake client wired with only the
 // DeducedTypeConverter. This works around a controller-runtime fake-client
@@ -54,7 +80,7 @@ const (
 func newNetworkPolicyClient(scheme *runtime.Scheme, cp *openchamiv1alpha1.OpenCHAMIControlPlane) client.Client {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(cp).
+		WithObjects(cp, kubernetesEndpoints(testAPIServerIP)).
 		WithTypeConverters(managedfields.NewDeducedTypeConverter()).
 		Build()
 }
@@ -78,6 +104,7 @@ func expectedPolicyNames() []string {
 		policyAllowVaultEgress,
 		policyAllowVersityGWEgress,
 		policyAllowLogsEgress,
+		policyAllowCNPGKubernetesAPIEgress,
 		policySMD,
 		policyTokensmith,
 		policyBootService,
@@ -126,6 +153,7 @@ func TestNetworkPoliciesReconciler_AppliesAllPolicies(t *testing.T) {
 	assertDefaultDenyAll(t, list)
 	assertAllowDNSEgress(t, list)
 	assertSMDPolicy(t, list)
+	assertCNPGKubernetesAPIPolicy(t, list, cp.Spec.ClusterName)
 }
 
 func assertAllExpectedPolicies(t *testing.T, list *networkingv1.NetworkPolicyList) {
@@ -260,6 +288,56 @@ func assertSMDPolicy(t *testing.T, list *networkingv1.NetworkPolicyList) {
 	}
 }
 
+func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolicyList, clusterName string) {
+	t.Helper()
+	policy := policyByName(list, policyAllowCNPGKubernetesAPIEgress)
+	if policy == nil {
+		t.Fatalf("missing %s", policyAllowCNPGKubernetesAPIEgress)
+	}
+
+	// Verify pod selector targets CNPG postgres pods
+	cnpgClusterName := "openchami-" + clusterName + "-postgres"
+	if got := policy.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgClusterName {
+		t.Errorf("expected pod selector %s=%s, got %s=%s",
+			cnpgClusterLabel, cnpgClusterName, cnpgClusterLabel, got)
+	}
+
+	// Verify egress rule exists
+	if len(policy.Spec.Egress) != 1 {
+		t.Fatalf("expected 1 egress rule, got %d", len(policy.Spec.Egress))
+	}
+
+	egress := policy.Spec.Egress[0]
+
+	// Verify the discovered API-server endpoint IP is targeted as an ipBlock,
+	// not a namespaceSelector (which does not match the post-DNAT API IP).
+	if len(egress.To) != 1 {
+		t.Fatalf("expected 1 peer in egress rule, got %d", len(egress.To))
+	}
+	peer := egress.To[0]
+	if peer.IPBlock == nil {
+		t.Fatalf("expected ipBlock peer, got %+v", peer)
+	}
+	if peer.IPBlock.CIDR != testAPIServerCIDR {
+		t.Errorf("expected ipBlock CIDR %q, got %q", testAPIServerCIDR, peer.IPBlock.CIDR)
+	}
+	if peer.NamespaceSelector != nil {
+		t.Errorf("expected no namespaceSelector, got %+v", peer.NamespaceSelector)
+	}
+
+	// Verify port 443 is allowed
+	if len(egress.Ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(egress.Ports))
+	}
+	port := egress.Ports[0]
+	if port.Port == nil || port.Port.IntVal != kubernetesAPIPort {
+		t.Errorf("expected port %d, got %+v", kubernetesAPIPort, port.Port)
+	}
+	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
+		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
+	}
+}
+
 func TestNetworkPoliciesReconciler_VaultEgressInCluster(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newInClusterNetworkPolicyCluster("alpha")
@@ -360,6 +438,62 @@ func TestNetworkPoliciesReconciler_VersityGWEgressExternal(t *testing.T) {
 	}
 	if peer.IPBlock.CIDR != testExternalVersityGWCIDR {
 		t.Errorf("expected ipBlock CIDR %s, got %q", testExternalVersityGWCIDR, peer.IPBlock.CIDR)
+	}
+}
+
+func TestNetworkPoliciesReconciler_CNPGKubernetesAPIEgress(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
+
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
+	policy := policyByName(list, policyAllowCNPGKubernetesAPIEgress)
+	if policy == nil {
+		t.Fatalf("missing %s", policyAllowCNPGKubernetesAPIEgress)
+	}
+
+	// Verify the policy only applies to CNPG postgres pods
+	cnpgClusterName := "openchami-alpha-postgres"
+	if got := policy.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgClusterName {
+		t.Errorf("expected pod selector %s=%s, got %s=%s",
+			cnpgClusterLabel, cnpgClusterName, cnpgClusterLabel, got)
+	}
+
+	// Verify egress targets the discovered API-server endpoint IP as an
+	// ipBlock (not a namespaceSelector, which would not match the API IP).
+	if len(policy.Spec.Egress) != 1 {
+		t.Fatalf("expected 1 egress rule, got %d", len(policy.Spec.Egress))
+	}
+	egress := policy.Spec.Egress[0]
+	if len(egress.To) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(egress.To))
+	}
+	peer := egress.To[0]
+	if peer.IPBlock == nil {
+		t.Fatalf("expected ipBlock peer, got %+v", peer)
+	}
+	if peer.IPBlock.CIDR != testAPIServerCIDR {
+		t.Errorf("expected ipBlock CIDR %q, got %q", testAPIServerCIDR, peer.IPBlock.CIDR)
+	}
+	if peer.NamespaceSelector != nil {
+		t.Errorf("expected no namespaceSelector, got %+v", peer.NamespaceSelector)
+	}
+
+	// Verify port 443 TCP
+	if len(egress.Ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(egress.Ports))
+	}
+	port := egress.Ports[0]
+	if port.Port == nil || port.Port.IntVal != 443 {
+		t.Errorf("expected port 443, got %+v", port.Port)
+	}
+	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
+		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
 	}
 }
 
@@ -513,5 +647,77 @@ func TestNetworkPoliciesReconciler_ConditionSet(t *testing.T) {
 	}
 	if cond.Reason != conditions.ReasonReady {
 		t.Errorf("expected reason %q, got %q", conditions.ReasonReady, cond.Reason)
+	}
+}
+
+// TestKubernetesAPIEgressPeers_Discovers verifies that every address backing
+// the default/kubernetes Endpoints becomes a /32 ipBlock peer, including HA
+// control planes with multiple endpoint addresses.
+func TestKubernetesAPIEgressPeers_Discovers(t *testing.T) {
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(kubernetesEndpoints("10.96.0.1", "10.96.0.2")).
+		Build()
+
+	peers, err := KubernetesAPIEgressPeers(context.Background(), c)
+	if err != nil {
+		t.Fatalf("KubernetesAPIEgressPeers: %v", err)
+	}
+	want := map[string]bool{"10.96.0.1/32": false, "10.96.0.2/32": false}
+	if len(peers) != len(want) {
+		t.Fatalf("expected %d peers, got %d", len(want), len(peers))
+	}
+	for _, p := range peers {
+		if p.IPBlock == nil {
+			t.Fatalf("expected ipBlock peer, got %+v", p)
+		}
+		if _, ok := want[p.IPBlock.CIDR]; !ok {
+			t.Errorf("unexpected CIDR %q", p.IPBlock.CIDR)
+			continue
+		}
+		want[p.IPBlock.CIDR] = true
+	}
+	for cidr, seen := range want {
+		if !seen {
+			t.Errorf("missing expected CIDR %q", cidr)
+		}
+	}
+}
+
+// TestKubernetesAPIEgressPeers_MissingEndpointsErrors verifies the strict
+// (prod) path aborts when the API endpoints cannot be read.
+func TestKubernetesAPIEgressPeers_MissingEndpointsErrors(t *testing.T) {
+	t.Setenv("OPENCHAMI_BEST_EFFORT_DNS", "")
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	if _, err := KubernetesAPIEgressPeers(context.Background(), c); err == nil {
+		t.Fatalf("expected error when default/kubernetes endpoints are absent")
+	}
+}
+
+// TestKubernetesAPIEgressPeers_BestEffortFallback verifies the off-cluster
+// dev-run mode degrades to the syntax-only sentinel peer instead of failing.
+func TestKubernetesAPIEgressPeers_BestEffortFallback(t *testing.T) {
+	t.Setenv("OPENCHAMI_BEST_EFFORT_DNS", "true")
+	scheme := newScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	peers, err := KubernetesAPIEgressPeers(context.Background(), c)
+	if err != nil {
+		t.Fatalf("best-effort KubernetesAPIEgressPeers: %v", err)
+	}
+	if len(peers) != 1 || peers[0].IPBlock == nil || peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers)
+	}
+}
+
+// TestKubernetesAPIEgressPeersSyntax verifies the Describe-path helper never
+// reads the API and always returns the sentinel peer.
+func TestKubernetesAPIEgressPeersSyntax(t *testing.T) {
+	peers := KubernetesAPIEgressPeersSyntax()
+	if len(peers) != 1 || peers[0].IPBlock == nil || peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers)
 	}
 }
