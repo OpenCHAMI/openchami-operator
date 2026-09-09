@@ -178,14 +178,25 @@ func coreDHCPPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]s
 	}
 }
 
-// dhcpSecurityContext is CommonSecurityContext() with NET_BIND_SERVICE added
-// so that the coredhcp container can bind to UDP/67. We build a fresh struct
+// dhcpSecurityContext is CommonSecurityContext() with the network
+// capabilities coredhcp requires for L2 DHCP added. We build a fresh struct
 // rather than mutate the shared object.
+//
+//   - NET_BIND_SERVICE: bind the privileged UDP/67 server port.
+//   - NET_RAW, NET_ADMIN: coredhcp's server4 opens a raw/broadcast socket to
+//     answer clients that have no IP yet (DORA happens before the client has
+//     an address). These match the caps documented by the upstream coresmd
+//     coredhcp plugin (--cap-add=NET_ADMIN,NET_RAW).
+//
+// NOTE: with the current coresmd image these caps do not survive the non-root
+// UID transition (the binary is not setcap'd and Kubernetes cannot set ambient
+// caps), so coredhcp still requires running as root. Once the upstream image
+// setcap's its binary this pod can move back to a non-root UID.
 func dhcpSecurityContext() *corev1.SecurityContext {
 	sc := CommonSecurityContext()
 	sc.Capabilities = &corev1.Capabilities{
 		Drop: []corev1.Capability{"ALL"},
-		Add:  []corev1.Capability{"NET_BIND_SERVICE"},
+		Add:  []corev1.Capability{"NET_BIND_SERVICE", "NET_RAW", "NET_ADMIN"},
 	}
 	return sc
 }

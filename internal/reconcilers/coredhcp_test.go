@@ -139,9 +139,11 @@ func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 	if container.SecurityContext == nil || container.SecurityContext.Capabilities == nil {
 		t.Fatalf("expected container securityContext with capabilities")
 	}
-	if !slices.Contains(container.SecurityContext.Capabilities.Add, "NET_BIND_SERVICE") {
-		t.Errorf("expected NET_BIND_SERVICE in caps.add, got %+v",
-			container.SecurityContext.Capabilities.Add)
+	for _, want := range []string{"NET_BIND_SERVICE", "NET_RAW", "NET_ADMIN"} {
+		if !slices.Contains(container.SecurityContext.Capabilities.Add, corev1.Capability(want)) {
+			t.Errorf("expected %s in caps.add, got %+v",
+				want, container.SecurityContext.Capabilities.Add)
+		}
 	}
 	if !slices.Contains(container.SecurityContext.Capabilities.Drop, "ALL") {
 		t.Errorf("expected ALL in caps.drop, got %+v",
