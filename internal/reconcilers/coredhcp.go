@@ -179,8 +179,8 @@ func coreDHCPPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]s
 }
 
 // dhcpSecurityContext is CommonSecurityContext() with the network
-// capabilities coredhcp requires for L2 DHCP added. We build a fresh struct
-// rather than mutate the shared object.
+// capabilities coredhcp requires for L2 DHCP, forced to run as root
+// (UID 0). We build a fresh struct rather than mutate the shared object.
 //
 //   - NET_BIND_SERVICE: bind the privileged UDP/67 server port.
 //   - NET_RAW, NET_ADMIN: coredhcp's server4 opens a raw/broadcast socket to
@@ -188,17 +188,41 @@ func coreDHCPPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]s
 //     an address). These match the caps documented by the upstream coresmd
 //     coredhcp plugin (--cap-add=NET_ADMIN,NET_RAW).
 //
-// NOTE: with the current coresmd image these caps do not survive the non-root
-// UID transition (the binary is not setcap'd and Kubernetes cannot set ambient
-// caps), so coredhcp still requires running as root. Once the upstream image
-// setcap's its binary this pod can move back to a non-root UID.
+// Why root: the coresmd image ships its coredhcp binary without file
+// capabilities (no setcap), and Kubernetes has no way to grant ambient
+// capabilities to a non-root process. Under a non-root UID the added caps
+// are dropped on exec, so coredhcp cannot open the raw socket / bind UDP/67
+// and dies with "cannot bind to port 67: permission denied" (see issue #21).
+// Running as UID 0 keeps the file caps effective. This matches how upstream
+// coresmd is run (its documented podman/quadlet examples run as root and
+// mount into /root_ca). If a future coresmd image setcap's its binary, this
+// pod can move back to the shared non-root UID by dropping the RunAsNonRoot /
+// RunAsUser overrides here and in dhcpPodSecurityContext().
 func dhcpSecurityContext() *corev1.SecurityContext {
 	sc := CommonSecurityContext()
+	nonRoot := false
+	uid := int64(0)
+	sc.RunAsNonRoot = &nonRoot
+	sc.RunAsUser = &uid
 	sc.Capabilities = &corev1.Capabilities{
 		Drop: []corev1.Capability{"ALL"},
 		Add:  []corev1.Capability{"NET_BIND_SERVICE", "NET_RAW", "NET_ADMIN"},
 	}
 	return sc
+}
+
+// dhcpPodSecurityContext is CommonPodSecurityContext() forced to run as root
+// (UID/GID 0) so the pod-level policy matches the container-level override in
+// dhcpSecurityContext(). See that function for why coredhcp must run as root.
+func dhcpPodSecurityContext() *corev1.PodSecurityContext {
+	psc := CommonPodSecurityContext()
+	nonRoot := false
+	zero := int64(0)
+	psc.RunAsNonRoot = &nonRoot
+	psc.RunAsUser = &zero
+	psc.RunAsGroup = &zero
+	psc.FSGroup = &zero
+	return psc
 }
 
 func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.DaemonSet {
@@ -285,7 +309,7 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIContr
 					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 					NodeSelector:       EffectiveNodeSelector(cp, probeTypeProvision),
 					Tolerations:        dhcp.Tolerations,
-					SecurityContext:    CommonPodSecurityContext(),
+					SecurityContext:    dhcpPodSecurityContext(),
 					Containers:         []corev1.Container{container},
 					Volumes: []corev1.Volume{
 						tmpVol,

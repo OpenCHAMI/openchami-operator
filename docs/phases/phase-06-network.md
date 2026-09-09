@@ -72,10 +72,21 @@ dnsPolicy:     ClusterFirstWithHostNet
 priorityClass: system-node-critical
 nodeSelector:  helpers.EffectiveNodeSelector(cluster, "provision")
 
-Security: capabilities.add=[NET_BIND_SERVICE] (required for port 67)
+Security: capabilities.add=[NET_BIND_SERVICE, NET_RAW, NET_ADMIN]
+                   (NET_BIND_SERVICE for port 67; NET_RAW/NET_ADMIN for the
+                    server4 raw/broadcast socket used during DORA)
           capabilities.drop=[ALL others]
           allowPrivilegeEscalation=false
           readOnlyRootFilesystem=true
+          runAsNonRoot=false, runAsUser=0 (root)
+
+          coredhcp runs as root because the coresmd image ships its
+          coredhcp binary without file capabilities (no setcap) and
+          Kubernetes cannot grant ambient caps to a non-root process.
+          Under a non-root UID the added caps are dropped on exec and
+          coredhcp fails with "cannot bind to port 67: permission denied"
+          (issue #21). If a future coresmd image setcap's its binary,
+          revert to the shared non-root UID (65534).
 ```
 
 Pre-stop hook (required):

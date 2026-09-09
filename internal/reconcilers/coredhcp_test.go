@@ -149,6 +149,26 @@ func TestCoreDHCPReconciler_AppliesDaemonSet(t *testing.T) {
 		t.Errorf("expected ALL in caps.drop, got %+v",
 			container.SecurityContext.Capabilities.Drop)
 	}
+	// coredhcp must run as root (UID 0) so the added network caps survive the
+	// exec; the coresmd image is not setcap'd (see issue #21).
+	if container.SecurityContext.RunAsNonRoot == nil || *container.SecurityContext.RunAsNonRoot {
+		t.Errorf("expected container runAsNonRoot=false, got %+v",
+			container.SecurityContext.RunAsNonRoot)
+	}
+	if container.SecurityContext.RunAsUser == nil || *container.SecurityContext.RunAsUser != 0 {
+		t.Errorf("expected container runAsUser=0, got %+v",
+			container.SecurityContext.RunAsUser)
+	}
+	podSC := ds.Spec.Template.Spec.SecurityContext
+	if podSC == nil {
+		t.Fatalf("expected pod securityContext")
+	}
+	if podSC.RunAsNonRoot == nil || *podSC.RunAsNonRoot {
+		t.Errorf("expected pod runAsNonRoot=false, got %+v", podSC.RunAsNonRoot)
+	}
+	if podSC.RunAsUser == nil || *podSC.RunAsUser != 0 {
+		t.Errorf("expected pod runAsUser=0, got %+v", podSC.RunAsUser)
+	}
 	if len(container.Ports) != 1 || container.Ports[0].ContainerPort != 67 {
 		t.Errorf("expected single port 67, got %+v", container.Ports)
 	}
