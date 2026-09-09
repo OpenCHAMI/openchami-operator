@@ -114,6 +114,7 @@ func expectedPolicyNames() []string {
 		policyNetworkProbe,
 		policyFunicular,
 		policyPostgresIngress,
+		policyPostgresEgress,
 	}
 	sort.Strings(names)
 	return names
@@ -154,6 +155,7 @@ func TestNetworkPoliciesReconciler_AppliesAllPolicies(t *testing.T) {
 	assertAllowDNSEgress(t, list)
 	assertSMDPolicy(t, list)
 	assertCNPGKubernetesAPIPolicy(t, list, cp.Spec.ClusterName)
+	assertPostgresPolicies(t, list, cp.Spec.ClusterName)
 }
 
 func assertAllExpectedPolicies(t *testing.T, list *networkingv1.NetworkPolicyList) {
@@ -336,6 +338,86 @@ func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolic
 	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
 		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
 	}
+}
+
+// assertPostgresPolicies verifies both the ingress and egress halves of the
+// CNPG pod-to-pod data plane. The egress half is the fix for issue #14: the
+// default-deny-all policy blocks a replica join pod from dialing the primary,
+// producing the "dial error: timeout" in the bug report.
+func assertPostgresPolicies(t *testing.T, list *networkingv1.NetworkPolicyList, clusterName string) {
+	t.Helper()
+	cnpgCluster := "openchami-" + clusterName + "-postgres"
+
+	// Ingress: CNPG pods must accept 5432 from SMD, boot-service and their
+	// own cluster peers (replication), plus :8000 from cnpg-system.
+	ingress := policyByName(list, policyPostgresIngress)
+	if ingress == nil {
+		t.Fatalf("missing %s", policyPostgresIngress)
+	}
+	if got := ingress.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgCluster {
+		t.Errorf("ingress pod selector: want %s=%s, got %q", cnpgClusterLabel, cnpgCluster, got)
+	}
+	sawCNPGIngressPeer := false
+	for _, rule := range ingress.Spec.Ingress {
+		for _, peer := range rule.From {
+			if peer.PodSelector != nil &&
+				peer.PodSelector.MatchLabels[cnpgClusterLabel] == cnpgCluster {
+				sawCNPGIngressPeer = true
+			}
+		}
+	}
+	if !sawCNPGIngressPeer {
+		t.Errorf("%s missing cnpg cluster-peer ingress (replication)", policyPostgresIngress)
+	}
+
+	// Egress: CNPG pods must be allowed to dial their own cluster peers on
+	// 5432 (join → -rw Service, and streaming replication).
+	egress := policyByName(list, policyPostgresEgress)
+	if egress == nil {
+		t.Fatalf("missing %s", policyPostgresEgress)
+	}
+	if got := egress.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgCluster {
+		t.Errorf("egress pod selector: want %s=%s, got %q", cnpgClusterLabel, cnpgCluster, got)
+	}
+	if len(egress.Spec.PolicyTypes) != 1 || egress.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
+		t.Errorf("%s: want PolicyTypes [Egress], got %v", policyPostgresEgress, egress.Spec.PolicyTypes)
+	}
+	if len(egress.Spec.Egress) != 1 {
+		t.Fatalf("%s: want 1 egress rule, got %d", policyPostgresEgress, len(egress.Spec.Egress))
+	}
+	rule := egress.Spec.Egress[0]
+	if len(rule.To) != 1 || rule.To[0].PodSelector == nil ||
+		rule.To[0].PodSelector.MatchLabels[cnpgClusterLabel] != cnpgCluster {
+		t.Errorf("%s: want egress to peer %s=%s, got %+v",
+			policyPostgresEgress, cnpgClusterLabel, cnpgCluster, rule.To)
+	}
+	sawPort := false
+	for _, p := range rule.Ports {
+		if p.Port != nil && p.Port.IntVal == postgresPort &&
+			p.Protocol != nil && *p.Protocol == corev1.ProtocolTCP {
+			sawPort = true
+		}
+	}
+	if !sawPort {
+		t.Errorf("%s: missing TCP %d egress port", policyPostgresEgress, postgresPort)
+	}
+}
+
+// TestNetworkPoliciesReconciler_PostgresEgress is a focused regression test
+// for issue #14 — the CNPG replica join timeout caused by the missing egress
+// allowance.
+func TestNetworkPoliciesReconciler_PostgresEgress(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
+
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
+	assertPostgresPolicies(t, list, cp.Spec.ClusterName)
 }
 
 func TestNetworkPoliciesReconciler_VaultEgressInCluster(t *testing.T) {

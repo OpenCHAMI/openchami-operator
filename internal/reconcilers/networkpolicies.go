@@ -89,13 +89,14 @@ const (
 	policyNetworkProbe                 = "networkprobe-policy"
 	policyFunicular                    = "funicular-policy"
 	policyPostgresIngress              = "postgres-ingress-policy"
+	policyPostgresEgress               = "postgres-egress-policy"
 )
 
 // NetworkPoliciesReconciler ensures the per-cluster zero-trust NetworkPolicies
 // exist in the cluster namespace.
 //
 // Every policy lives in the cluster's own namespace (invariant #2). The
-// reconciler is a single pass — all 14 policies are independent of each other
+// reconciler is a single pass — all policies are independent of each other
 // and idempotent under server-side apply (invariant #5).
 type NetworkPoliciesReconciler struct {
 	Client   client.Client
@@ -232,6 +233,7 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		r.networkProbePolicy(ns),
 		r.funicularPolicy(ns, versityPeer),
 		r.postgresIngressPolicy(ns),
+		r.postgresEgressPolicy(ns),
 	}, nil
 }
 
@@ -386,14 +388,11 @@ func (r *NetworkPoliciesReconciler) allowLogsEgress(ns string, peer networkingv1
 // many clusters. The discovered ipBlock peers are portable across
 // distributions (standard k8s, k3s, RKE2) and HA control planes.
 func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string, apiPeers []networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
-	cnpgClusterName := ns + "-postgres"
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policyAllowCNPGKubernetesAPIEgress),
 		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
-			},
+			PodSelector: cnpgPodSelector(ns),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
 				To:    apiPeers,
@@ -660,14 +659,11 @@ func ptrPodMatch(service string) *metav1.LabelSelector {
 // expects the platform owner to control that), so the operator owns the
 // CNPG-side rule too.
 func (r *NetworkPoliciesReconciler) postgresIngressPolicy(ns string) networkingv1.NetworkPolicy {
-	cnpgClusterName := ns + "-postgres"
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policyPostgresIngress),
 		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
-			},
+			PodSelector: cnpgPodSelector(ns),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{
 				{
@@ -680,9 +676,7 @@ func (r *NetworkPoliciesReconciler) postgresIngressPolicy(ns string) networkingv
 					From: []networkingv1.NetworkPolicyPeer{
 						{PodSelector: ptrPodMatch(ServiceSMD)},
 						{PodSelector: ptrPodMatch(ServiceBootService)},
-						{PodSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
-						}},
+						cnpgPeer(ns),
 					},
 					Ports: []networkingv1.NetworkPolicyPort{portTCP(postgresPort)},
 				},
@@ -703,19 +697,73 @@ func (r *NetworkPoliciesReconciler) postgresIngressPolicy(ns string) networkingv
 	}
 }
 
-// postgresPeer returns the peer that matches the CNPG primary pods for a
-// cluster. CNPG labels every pod it manages with `cnpg.io/cluster=<cluster>`.
-// The cluster name mirrors the one chosen in DatabaseReconciler.
-func postgresPeer(ns string) networkingv1.NetworkPolicyPeer {
-	// Mirror the DatabaseReconciler naming: openchami-{clusterName}-postgres.
-	// `ns` already encodes the clusterName as `openchami-{clusterName}`, so
-	// the cluster name is `ns + "-postgres"` (drop the operator prefix and add
-	// the suffix). We avoid stripping/parsing because the suffix is the only
-	// CNPG-side coupling.
-	cnpgClusterName := ns + "-postgres"
-	return networkingv1.NetworkPolicyPeer{
-		PodSelector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
+// postgresEgressPolicy permits CNPG postgres pods to open outbound
+// connections to the other members of their own CNPG cluster on port 5432.
+//
+// This is the counterpart to postgresIngressPolicy and is what fixes the
+// "replica join times out" failure (issue #14). The default-deny-all policy
+// denies egress for every pod in the namespace — CNPG pods included. When a
+// new instance boots it runs a `join` init container that dials the cluster's
+// read-write Service (`<cluster>-rw`, a ClusterIP) which DNATs to the current
+// primary pod. Without an egress allowance the connection to :5432 never
+// leaves the join pod (observed as `dial error: timeout`), even though
+// postgresIngressPolicy would admit it on the destination side.
+//
+// The peer is the CNPG cluster's own pods (cnpg.io/cluster=<cluster>). This
+// covers both the join/`-rw` hop (post-DNAT the destination is a cluster pod)
+// and steady-state streaming replication between instances.
+//
+// Egress to the Kubernetes API server (:443) that CNPG's instance manager
+// also requires is handled by a separate policy — see the CNPG Kubernetes API
+// egress work — because that destination is an external ipBlock, not an
+// in-namespace pod peer, and is discovered differently.
+func (r *NetworkPoliciesReconciler) postgresEgressPolicy(ns string) networkingv1.NetworkPolicy {
+	return networkingv1.NetworkPolicy{
+		TypeMeta:   policyTypeMeta(),
+		ObjectMeta: policyMeta(ns, policyPostgresEgress),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: cnpgPodSelector(ns),
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{
+					To:    []networkingv1.NetworkPolicyPeer{cnpgPeer(ns)},
+					Ports: []networkingv1.NetworkPolicyPort{portTCP(postgresPort)},
+				},
+			},
 		},
 	}
+}
+
+// cnpgClusterNameForNS returns the CNPG Cluster name for a control-plane
+// namespace. It mirrors the DatabaseReconciler naming:
+// openchami-{clusterName}-postgres. `ns` already encodes the clusterName as
+// openchami-{clusterName}, so the cluster name is `ns + "-postgres"`. We avoid
+// stripping/parsing because the suffix is the only CNPG-side coupling.
+func cnpgClusterNameForNS(ns string) string {
+	return ns + "-postgres"
+}
+
+// cnpgPodSelector returns the LabelSelector matching every pod CNPG manages
+// for a cluster. CNPG stamps `cnpg.io/cluster=<cluster>` on each pod, so this
+// selector is the single source of truth for "which pods are this cluster's
+// database pods". Used as the PodSelector of the postgres ingress/egress
+// policies.
+func cnpgPodSelector(ns string) metav1.LabelSelector {
+	return metav1.LabelSelector{
+		MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterNameForNS(ns)},
+	}
+}
+
+// cnpgPeer returns the NetworkPolicyPeer that matches the CNPG pods for a
+// cluster, for use in ingress `from` / egress `to` rules.
+func cnpgPeer(ns string) networkingv1.NetworkPolicyPeer {
+	sel := cnpgPodSelector(ns)
+	return networkingv1.NetworkPolicyPeer{PodSelector: &sel}
+}
+
+// postgresPeer returns the peer that matches the CNPG primary pods for a
+// cluster. Retained as a named alias of cnpgPeer so consumer-service policies
+// (smd, boot-service) read as "egress to postgres" at the call site.
+func postgresPeer(ns string) networkingv1.NetworkPolicyPeer {
+	return cnpgPeer(ns)
 }
