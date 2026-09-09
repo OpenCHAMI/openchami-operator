@@ -78,6 +78,7 @@ func expectedPolicyNames() []string {
 		policyAllowVaultEgress,
 		policyAllowVersityGWEgress,
 		policyAllowLogsEgress,
+		policyAllowCNPGKubernetesAPIEgress,
 		policySMD,
 		policyTokensmith,
 		policyBootService,
@@ -126,6 +127,7 @@ func TestNetworkPoliciesReconciler_AppliesAllPolicies(t *testing.T) {
 	assertDefaultDenyAll(t, list)
 	assertAllowDNSEgress(t, list)
 	assertSMDPolicy(t, list)
+	assertCNPGKubernetesAPIPolicy(t, list, cp.Spec.ClusterName)
 }
 
 func assertAllExpectedPolicies(t *testing.T, list *networkingv1.NetworkPolicyList) {
@@ -260,6 +262,52 @@ func assertSMDPolicy(t *testing.T, list *networkingv1.NetworkPolicyList) {
 	}
 }
 
+func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolicyList, clusterName string) {
+	t.Helper()
+	policy := policyByName(list, policyAllowCNPGKubernetesAPIEgress)
+	if policy == nil {
+		t.Fatalf("missing %s", policyAllowCNPGKubernetesAPIEgress)
+	}
+	
+	// Verify pod selector targets CNPG postgres pods
+	cnpgClusterName := "openchami-" + clusterName + "-postgres"
+	if got := policy.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgClusterName {
+		t.Errorf("expected pod selector %s=%s, got %s=%s",
+			cnpgClusterLabel, cnpgClusterName, cnpgClusterLabel, got)
+	}
+	
+	// Verify egress rule exists
+	if len(policy.Spec.Egress) != 1 {
+		t.Fatalf("expected 1 egress rule, got %d", len(policy.Spec.Egress))
+	}
+	
+	egress := policy.Spec.Egress[0]
+	
+	// Verify targets default namespace (where kubernetes service lives)
+	if len(egress.To) != 1 {
+		t.Fatalf("expected 1 peer in egress rule, got %d", len(egress.To))
+	}
+	peer := egress.To[0]
+	if peer.NamespaceSelector == nil {
+		t.Fatalf("expected namespaceSelector, got nil")
+	}
+	if got := peer.NamespaceSelector.MatchLabels[kubernetesMetadataNameLabel]; got != "default" {
+		t.Errorf("expected namespace selector for 'default', got %q", got)
+	}
+	
+	// Verify port 443 is allowed
+	if len(egress.Ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(egress.Ports))
+	}
+	port := egress.Ports[0]
+	if port.Port == nil || port.Port.IntVal != kubernetesAPIPort {
+		t.Errorf("expected port %d, got %+v", kubernetesAPIPort, port.Port)
+	}
+	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
+		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
+	}
+}
+
 func TestNetworkPoliciesReconciler_VaultEgressInCluster(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newInClusterNetworkPolicyCluster("alpha")
@@ -360,6 +408,58 @@ func TestNetworkPoliciesReconciler_VersityGWEgressExternal(t *testing.T) {
 	}
 	if peer.IPBlock.CIDR != testExternalVersityGWCIDR {
 		t.Errorf("expected ipBlock CIDR %s, got %q", testExternalVersityGWCIDR, peer.IPBlock.CIDR)
+	}
+}
+
+func TestNetworkPoliciesReconciler_CNPGKubernetesAPIEgress(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	c := newNetworkPolicyClient(scheme, cp)
+
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	list := listPolicies(t, c, ControlPlaneNamespace(cp))
+	policy := policyByName(list, policyAllowCNPGKubernetesAPIEgress)
+	if policy == nil {
+		t.Fatalf("missing %s", policyAllowCNPGKubernetesAPIEgress)
+	}
+
+	// Verify the policy only applies to CNPG postgres pods
+	cnpgClusterName := "openchami-alpha-postgres"
+	if got := policy.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgClusterName {
+		t.Errorf("expected pod selector %s=%s, got %s=%s",
+			cnpgClusterLabel, cnpgClusterName, cnpgClusterLabel, got)
+	}
+
+	// Verify egress is scoped to default namespace where kubernetes service lives
+	if len(policy.Spec.Egress) != 1 {
+		t.Fatalf("expected 1 egress rule, got %d", len(policy.Spec.Egress))
+	}
+	egress := policy.Spec.Egress[0]
+	if len(egress.To) != 1 {
+		t.Fatalf("expected 1 peer, got %d", len(egress.To))
+	}
+	peer := egress.To[0]
+	if peer.NamespaceSelector == nil {
+		t.Fatalf("expected namespaceSelector, got nil")
+	}
+	if got := peer.NamespaceSelector.MatchLabels[kubernetesMetadataNameLabel]; got != "default" {
+		t.Errorf("expected namespace 'default', got %q", got)
+	}
+
+	// Verify port 443 TCP
+	if len(egress.Ports) != 1 {
+		t.Fatalf("expected 1 port, got %d", len(egress.Ports))
+	}
+	port := egress.Ports[0]
+	if port.Port == nil || port.Port.IntVal != 443 {
+		t.Errorf("expected port 443, got %+v", port.Port)
+	}
+	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
+		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
 	}
 }
 

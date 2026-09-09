@@ -18,6 +18,7 @@ It is pre-written in `internal/reconcilers/helpers.go` — use it directly.
 | `allow-vault-egress` | all | — | Vault :8200 (vaultEgressPeer) |
 | `allow-versitygw-egress` | boot-service | — | VersityGW :10000 |
 | `allow-logs-egress` | funicular-collector | — | VersityGW :10000 |
+| `allow-cnpg-kubernetes-api-egress` | cnpg.io/cluster=* | — | default namespace :443 |
 | `smd-policy` | smd | boot-service, metadata-service, coredhcp, magellan, envoy-gateway-system NS | postgres-rw:5432, tokensmith:8080 |
 | `tokensmith-policy` | tokensmith | all in NS, envoy-gateway-system NS | vault:8200, :443 |
 | `boot-service-policy` | boot-service | coredhcp, envoy-gateway-system NS | smd:27779, postgres-rw:5432, versitygw:10000, tokensmith:8080 |
@@ -26,6 +27,7 @@ It is pre-written in `internal/reconcilers/helpers.go` — use it directly.
 | `magellan-policy` | magellan | — | smd:27779, :443 |
 | `networkprobe-policy` | network-probe | — | :443 (ValidateHost reachability) |
 | `funicular-policy` | funicular-collector | — | versitygw:10000 |
+| `postgres-ingress-policy` | cnpg.io/cluster=* | smd, boot-service, cnpg-system NS | — |
 
 ## Implementation pattern
 ```go
@@ -35,7 +37,7 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx, cluster) (ctrl.Result, error)
     policies := []networkingv1.NetworkPolicy{
         r.defaultDenyAll(ns),
         r.allowDNSEgress(ns),
-        // ... all 13 policies
+        // ... all 14 policies
     }
     for _, policy := range policies {
         if err := r.Client.Apply(ctx, &policy, ...); err != nil {

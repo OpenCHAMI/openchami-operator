@@ -67,29 +67,35 @@ const (
 	// dnsPort permits resolution against the cluster DNS service.
 	dnsPort int32 = 53
 
+	// kubernetesAPIPort is the standard HTTPS port for the Kubernetes API server.
+	// CNPG postgres pods need egress access to this port during bootstrap and
+	// for ongoing cluster status updates.
+	kubernetesAPIPort int32 = 443
+
 	// Canonical NetworkPolicy names. Exported for the test package and admin
 	// CLI describe output.
-	policyDefaultDenyAll       = "default-deny-all"
-	policyAllowDNSEgress       = "allow-dns-egress"
-	policyAllowVaultEgress     = "allow-vault-egress"
-	policyAllowVersityGWEgress = "allow-versitygw-egress"
-	policyAllowLogsEgress      = "allow-logs-egress"
-	policySMD                  = "smd-policy"
-	policyTokensmith           = "tokensmith-policy"
-	policyBootService          = "boot-service-policy"
-	policyMetadataService      = "metadata-service-policy"
-	policyCoreDHCP             = "coredhcp-policy"
-	policyMagellan             = "magellan-policy"
-	policyNetworkProbe         = "networkprobe-policy"
-	policyFunicular            = "funicular-policy"
-	policyPostgresIngress      = "postgres-ingress-policy"
+	policyDefaultDenyAll              = "default-deny-all"
+	policyAllowDNSEgress              = "allow-dns-egress"
+	policyAllowVaultEgress            = "allow-vault-egress"
+	policyAllowVersityGWEgress        = "allow-versitygw-egress"
+	policyAllowLogsEgress             = "allow-logs-egress"
+	policyAllowCNPGKubernetesAPIEgress = "allow-cnpg-kubernetes-api-egress"
+	policySMD                         = "smd-policy"
+	policyTokensmith                  = "tokensmith-policy"
+	policyBootService                 = "boot-service-policy"
+	policyMetadataService             = "metadata-service-policy"
+	policyCoreDHCP                    = "coredhcp-policy"
+	policyMagellan                    = "magellan-policy"
+	policyNetworkProbe                = "networkprobe-policy"
+	policyFunicular                   = "funicular-policy"
+	policyPostgresIngress             = "postgres-ingress-policy"
 )
 
 // NetworkPoliciesReconciler ensures the per-cluster zero-trust NetworkPolicies
 // exist in the cluster namespace.
 //
 // Every policy lives in the cluster's own namespace (invariant #2). The
-// reconciler is a single pass — all 13 policies are independent of each other
+// reconciler is a single pass — all 14 policies are independent of each other
 // and idempotent under server-side apply (invariant #5).
 type NetworkPoliciesReconciler struct {
 	Client   client.Client
@@ -201,6 +207,7 @@ func (r *NetworkPoliciesReconciler) buildPolicies(cp *openchamiv1alpha1.OpenCHAM
 		r.allowVaultEgress(ns, vaultPeer),
 		r.allowVersityGWEgress(ns, versityPeer),
 		r.allowLogsEgress(ns, versityPeer),
+		r.allowCNPGKubernetesAPIEgress(ns),
 		r.smdPolicy(ns),
 		r.tokensmithPolicy(ns, vaultPeer),
 		r.bootServicePolicy(ns, versityPeer),
@@ -343,6 +350,49 @@ func (r *NetworkPoliciesReconciler) allowLogsEgress(ns string, peer networkingv1
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
 				To:    []networkingv1.NetworkPolicyPeer{peer},
 				Ports: []networkingv1.NetworkPolicyPort{portTCP(versityGWPort)},
+			}},
+		},
+	}
+}
+
+// allowCNPGKubernetesAPIEgress permits CNPG postgres pods to reach the
+// Kubernetes API server. CNPG's bootstrap-controller init container and the
+// primary instance manager both need to query the API to fetch the Cluster CR
+// and update status during initialization and ongoing operations.
+//
+// This policy scopes access to pods labelled with cnpg.io/cluster (the label
+// CNPG stamps on every pod it manages), and permits egress to the default
+// namespace where the kubernetes.default.svc ClusterIP service lives. The
+// namespace-level peer selector works across all Kubernetes distributions
+// (standard, k3s, RKE2) without requiring discovery of the specific API
+// server endpoint IP, which can vary by distribution and cluster topology.
+func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string) networkingv1.NetworkPolicy {
+	cnpgClusterName := ns + "-postgres"
+	return networkingv1.NetworkPolicy{
+		TypeMeta:   policyTypeMeta(),
+		ObjectMeta: policyMeta(ns, policyAllowCNPGKubernetesAPIEgress),
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{cnpgClusterLabel: cnpgClusterName},
+			},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress: []networkingv1.NetworkPolicyEgressRule{{
+				// Allow egress to the default namespace where the kubernetes
+				// service (ClusterIP for the API server) is published. This
+				// covers the API server endpoint regardless of whether it's
+				// reached via service DNS (kubernetes.default.svc.cluster.local)
+				// or directly via the ClusterIP (e.g., 10.43.0.1:443 in k3s,
+				// 10.96.0.1:443 in standard k8s, or node IP + 6443 in RKE2).
+				To: []networkingv1.NetworkPolicyPeer{
+					{
+						NamespaceSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								kubernetesMetadataNameLabel: "default",
+							},
+						},
+					},
+				},
+				Ports: []networkingv1.NetworkPolicyPort{portTCP(kubernetesAPIPort)},
 			}},
 		},
 	}
