@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,16 +42,23 @@ const (
 	testAPIServerCIDR = "10.96.0.1/32"
 )
 
-// kubernetesEndpoints returns a default/kubernetes Endpoints object backing the
-// API-server discovery path exercised by KubernetesAPIEgressPeers.
-func kubernetesEndpoints(ips ...string) *corev1.Endpoints {
-	addrs := make([]corev1.EndpointAddress, 0, len(ips))
+// kubernetesEndpoints returns an EndpointSlice for the default/kubernetes
+// Service backing the API-server discovery path exercised by
+// KubernetesAPIEgressPeers. It carries the well-known
+// kubernetes.io/service-name=kubernetes label the helper selects on.
+func kubernetesEndpoints(ips ...string) *discoveryv1.EndpointSlice {
+	eps := make([]discoveryv1.Endpoint, 0, len(ips))
 	for _, ip := range ips {
-		addrs = append(addrs, corev1.EndpointAddress{IP: ip})
+		eps = append(eps, discoveryv1.Endpoint{Addresses: []string{ip}})
 	}
-	return &corev1.Endpoints{
-		ObjectMeta: metav1.ObjectMeta{Name: "kubernetes", Namespace: "default"},
-		Subsets:    []corev1.EndpointSubset{{Addresses: addrs}},
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "kubernetes",
+			Namespace: "default",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "kubernetes"},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   eps,
 	}
 }
 

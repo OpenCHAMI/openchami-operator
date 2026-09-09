@@ -13,9 +13,9 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -553,38 +553,50 @@ func resolveExternalPeer(host, kind string) (networkingv1.NetworkPolicyPeer, err
 // does not reliably admit API traffic. Discovering the concrete endpoint IPs
 // at reconcile time produces a portable, tight rule.
 //
-// HA control planes expose multiple endpoint addresses; one /32 peer is
-// emitted per address.
+// Addresses are read from the EndpointSlices for the default/kubernetes
+// Service (selected by the well-known kubernetes.io/service-name label).
+// HA control planes expose multiple addresses; one /32 peer is emitted per
+// address, deduplicated across slices.
 //
 // Reconcile-only: performs a live API read. Describe paths must use
 // KubernetesAPIEgressPeersSyntax. When OPENCHAMI_BEST_EFFORT_DNS=true is set
-// (the off-cluster `make dev-run` mode), an unreadable/empty Endpoints object
-// degrades to the syntax-only sentinel peer rather than aborting the build,
-// mirroring resolveExternalPeer.
+// (the off-cluster `make dev-run` mode), an unreadable/empty result degrades
+// to the syntax-only sentinel peer rather than aborting the build, mirroring
+// resolveExternalPeer.
 func KubernetesAPIEgressPeers(ctx context.Context, c client.Client) ([]networkingv1.NetworkPolicyPeer, error) {
-	var ep corev1.Endpoints
-	err := c.Get(ctx, types.NamespacedName{Namespace: "default", Name: "kubernetes"}, &ep)
+	var slices discoveryv1.EndpointSliceList
+	err := c.List(ctx, &slices,
+		client.InNamespace("default"),
+		client.MatchingLabels{discoveryv1.LabelServiceName: "kubernetes"},
+	)
 	bestEffort := os.Getenv("OPENCHAMI_BEST_EFFORT_DNS") == "true" //nolint:goconst // env value, not a label
 	if err != nil {
 		if bestEffort {
 			return KubernetesAPIEgressPeersSyntax(), nil
 		}
-		return nil, fmt.Errorf("reading default/kubernetes endpoints: %w", err)
+		return nil, fmt.Errorf("listing default/kubernetes endpointslices: %w", err)
 	}
 
-	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(ep.Subsets))
-	for _, subset := range ep.Subsets {
-		for _, addr := range subset.Addresses {
-			peers = append(peers, networkingv1.NetworkPolicyPeer{
-				IPBlock: &networkingv1.IPBlock{CIDR: addr.IP + "/32"},
-			})
+	seen := map[string]struct{}{}
+	peers := make([]networkingv1.NetworkPolicyPeer, 0)
+	for i := range slices.Items {
+		for _, ep := range slices.Items[i].Endpoints {
+			for _, addr := range ep.Addresses {
+				if _, dup := seen[addr]; dup {
+					continue
+				}
+				seen[addr] = struct{}{}
+				peers = append(peers, networkingv1.NetworkPolicyPeer{
+					IPBlock: &networkingv1.IPBlock{CIDR: addr + "/32"},
+				})
+			}
 		}
 	}
 	if len(peers) == 0 {
 		if bestEffort {
 			return KubernetesAPIEgressPeersSyntax(), nil
 		}
-		return nil, fmt.Errorf("default/kubernetes endpoints resolved to no addresses")
+		return nil, fmt.Errorf("default/kubernetes endpointslices resolved to no addresses")
 	}
 	return peers, nil
 }
