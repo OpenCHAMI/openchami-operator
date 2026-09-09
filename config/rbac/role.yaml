@@ -191,6 +191,7 @@ rules:
   - postgresql.cnpg.io
   resources:
   - clusters
+  - databases
   verbs:
   - create
   - delete
