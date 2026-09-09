@@ -268,21 +268,21 @@ func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolic
 	if policy == nil {
 		t.Fatalf("missing %s", policyAllowCNPGKubernetesAPIEgress)
 	}
-	
+
 	// Verify pod selector targets CNPG postgres pods
 	cnpgClusterName := "openchami-" + clusterName + "-postgres"
 	if got := policy.Spec.PodSelector.MatchLabels[cnpgClusterLabel]; got != cnpgClusterName {
 		t.Errorf("expected pod selector %s=%s, got %s=%s",
 			cnpgClusterLabel, cnpgClusterName, cnpgClusterLabel, got)
 	}
-	
+
 	// Verify egress rule exists
 	if len(policy.Spec.Egress) != 1 {
 		t.Fatalf("expected 1 egress rule, got %d", len(policy.Spec.Egress))
 	}
-	
+
 	egress := policy.Spec.Egress[0]
-	
+
 	// Verify targets default namespace (where kubernetes service lives)
 	if len(egress.To) != 1 {
 		t.Fatalf("expected 1 peer in egress rule, got %d", len(egress.To))
@@ -294,7 +294,7 @@ func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolic
 	if got := peer.NamespaceSelector.MatchLabels[kubernetesMetadataNameLabel]; got != "default" {
 		t.Errorf("expected namespace selector for 'default', got %q", got)
 	}
-	
+
 	// Verify port 443 is allowed
 	if len(egress.Ports) != 1 {
 		t.Fatalf("expected 1 port, got %d", len(egress.Ports))

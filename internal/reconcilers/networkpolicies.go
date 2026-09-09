@@ -74,21 +74,21 @@ const (
 
 	// Canonical NetworkPolicy names. Exported for the test package and admin
 	// CLI describe output.
-	policyDefaultDenyAll              = "default-deny-all"
-	policyAllowDNSEgress              = "allow-dns-egress"
-	policyAllowVaultEgress            = "allow-vault-egress"
-	policyAllowVersityGWEgress        = "allow-versitygw-egress"
-	policyAllowLogsEgress             = "allow-logs-egress"
+	policyDefaultDenyAll               = "default-deny-all"
+	policyAllowDNSEgress               = "allow-dns-egress"
+	policyAllowVaultEgress             = "allow-vault-egress"
+	policyAllowVersityGWEgress         = "allow-versitygw-egress"
+	policyAllowLogsEgress              = "allow-logs-egress"
 	policyAllowCNPGKubernetesAPIEgress = "allow-cnpg-kubernetes-api-egress"
-	policySMD                         = "smd-policy"
-	policyTokensmith                  = "tokensmith-policy"
-	policyBootService                 = "boot-service-policy"
-	policyMetadataService             = "metadata-service-policy"
-	policyCoreDHCP                    = "coredhcp-policy"
-	policyMagellan                    = "magellan-policy"
-	policyNetworkProbe                = "networkprobe-policy"
-	policyFunicular                   = "funicular-policy"
-	policyPostgresIngress             = "postgres-ingress-policy"
+	policySMD                          = "smd-policy"
+	policyTokensmith                   = "tokensmith-policy"
+	policyBootService                  = "boot-service-policy"
+	policyMetadataService              = "metadata-service-policy"
+	policyCoreDHCP                     = "coredhcp-policy"
+	policyMagellan                     = "magellan-policy"
+	policyNetworkProbe                 = "networkprobe-policy"
+	policyFunicular                    = "funicular-policy"
+	policyPostgresIngress              = "postgres-ingress-policy"
 )
 
 // NetworkPoliciesReconciler ensures the per-cluster zero-trust NetworkPolicies
