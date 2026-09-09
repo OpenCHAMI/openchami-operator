@@ -41,8 +41,9 @@ const (
 
 	tokensmithOIDCIssuerSuffix = "/v1/identity/oidc/provider/default"
 
-	tokensmithOIDCClientSecretKey = "client_secret"
-	tokensmithOIDCIssuerEnvName   = "OIDC_ISSUER_URL"
+	tokensmithOIDCClientSecretKey      = "client_secret"
+	tokensmithOIDCIssuerEnvName        = "OIDC_ISSUER_URL"
+	tokensmithOIDCIntrospectionEnvName = "TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT"
 
 	reasonOIDCConfigInvalid = "OIDCConfigInvalid"
 
@@ -291,6 +292,12 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		env = append(env, corev1.EnvVar{
 			Name:  tokensmithOIDCIssuerEnvName,
 			Value: cp.Spec.Services.Tokensmith.OIDCIssuerURL,
+		})
+	}
+	if endpoint := strings.TrimSpace(cp.Spec.Services.Tokensmith.OIDCIntrospectionEndpoint); endpoint != "" {
+		env = append(env, corev1.EnvVar{
+			Name:  tokensmithOIDCIntrospectionEnvName,
+			Value: endpoint,
 		})
 	}
 

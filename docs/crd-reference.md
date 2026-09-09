@@ -208,7 +208,7 @@ When disabled, you must set `spec.services.coreDHCP.nodeSelector` and `spec.serv
 spec:
   services:
     smd:               { enabled: true,  replicas: 1, image: {repository: ..., tag: ..., pullPolicy: IfNotPresent}, resources: {} }
-    tokensmith:        { enabled: true,  replicas: 1, image: {...}, resources: {}, oidcProvider: ..., oidcIssuerURL: ... }
+    tokensmith:        { enabled: true,  replicas: 1, image: {...}, resources: {}, oidcProvider: ..., oidcIssuerURL: ..., oidcIntrospectionEndpoint: ... }
     bootService:       { enabled: true,  replicas: 2, image: {...}, resources: {} }
     metadataService:   { enabled: true,  replicas: 2, image: {...}, resources: {} }
     coreDHCP:
@@ -234,6 +234,12 @@ spec:
 ```
 
 The default image for each service is determined by the image stream (see [ImagesSpec](#imagesspec)). The `release` stream (default) uses curated tags from [SERVICES.md](../SERVICES.md).
+
+For tokensmith, `oidcIntrospectionEndpoint` is optional and provider-neutral.
+Set it when the upstream issuer discovery document omits both
+`token_introspection_endpoint` and `introspection_endpoint`; the operator
+passes the value through as `TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT` and does
+not derive provider-specific paths.
 
 #### Per-service overrides
 

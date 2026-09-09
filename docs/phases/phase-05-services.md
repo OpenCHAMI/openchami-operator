@@ -63,6 +63,9 @@ OIDC_CLIENT_SECRET  = secretKeyRef: openchami-{name}-tokensmith-oidc, key: clien
 When oidcProvider=vault, also inject the Vault OIDC issuer URL derived from
 spec.platform.vault.address + `/v1/identity/oidc/provider/default`.
 When oidcProvider=external, inject spec.services.tokensmith.oidcIssuerURL.
+When spec.services.tokensmith.oidcIntrospectionEndpoint is set, inject it as
+TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT. Do not derive this value from Vault;
+TokenSmith falls back to provider discovery when it is omitted.
 
 ## Boot Service (Sub-agent C)
 Port: 27778
