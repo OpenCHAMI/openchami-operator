@@ -418,6 +418,12 @@ spec:
                         type: string
                       endpoint:
                         type: string
+                      region:
+                        description: |-
+                          Region is the S3 region used for request signing. VersityGW ignores
+                          it, but the AWS SDK requires a value. Defaults to "us-east-1" inside
+                          the client when unset.
+                        type: string
                       tlsInsecure:
                         description: TLSInsecure disables TLS certificate verification
                           (dev/test only).
