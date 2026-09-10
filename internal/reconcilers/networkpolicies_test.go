@@ -40,17 +40,26 @@ const (
 	// Endpoints fixture so KubernetesAPIEgressPeers has something to discover.
 	testAPIServerIP   = "10.96.0.1"
 	testAPIServerCIDR = "10.96.0.1/32"
+
+	// testAPIServerPort is the port seeded into the default/kubernetes
+	// EndpointSlice fixture. It is deliberately 6443 (the k3s/RKE2 API-server
+	// port) rather than 443 so the tests exercise the dynamic port-discovery
+	// path from issue #31 — the CNPG egress rule must target the discovered
+	// port, not a hardcoded 443.
+	testAPIServerPort int32 = 6443
 )
 
 // kubernetesEndpoints returns an EndpointSlice for the default/kubernetes
 // Service backing the API-server discovery path exercised by
 // KubernetesAPIEgressPeers. It carries the well-known
-// kubernetes.io/service-name=kubernetes label the helper selects on.
+// kubernetes.io/service-name=kubernetes label the helper selects on, and the
+// discovered API-server port (testAPIServerPort).
 func kubernetesEndpoints(ips ...string) *discoveryv1.EndpointSlice {
 	eps := make([]discoveryv1.Endpoint, 0, len(ips))
 	for _, ip := range ips {
 		eps = append(eps, discoveryv1.Endpoint{Addresses: []string{ip}})
 	}
+	port := testAPIServerPort
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "kubernetes",
@@ -59,6 +68,9 @@ func kubernetesEndpoints(ips ...string) *discoveryv1.EndpointSlice {
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints:   eps,
+		Ports: []discoveryv1.EndpointPort{
+			{Port: &port},
+		},
 	}
 }
 
@@ -327,13 +339,13 @@ func assertCNPGKubernetesAPIPolicy(t *testing.T, list *networkingv1.NetworkPolic
 		t.Errorf("expected no namespaceSelector, got %+v", peer.NamespaceSelector)
 	}
 
-	// Verify port 443 is allowed
+	// Verify the discovered API-server port is allowed (not a hardcoded 443).
 	if len(egress.Ports) != 1 {
 		t.Fatalf("expected 1 port, got %d", len(egress.Ports))
 	}
 	port := egress.Ports[0]
-	if port.Port == nil || port.Port.IntVal != kubernetesAPIPort {
-		t.Errorf("expected port %d, got %+v", kubernetesAPIPort, port.Port)
+	if port.Port == nil || port.Port.IntVal != testAPIServerPort {
+		t.Errorf("expected port %d, got %+v", testAPIServerPort, port.Port)
 	}
 	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
 		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
@@ -566,13 +578,14 @@ func TestNetworkPoliciesReconciler_CNPGKubernetesAPIEgress(t *testing.T) {
 		t.Errorf("expected no namespaceSelector, got %+v", peer.NamespaceSelector)
 	}
 
-	// Verify port 443 TCP
+	// Verify the discovered API-server port TCP (issue #31: must be the
+	// port from the EndpointSlice, not a hardcoded 443).
 	if len(egress.Ports) != 1 {
 		t.Fatalf("expected 1 port, got %d", len(egress.Ports))
 	}
 	port := egress.Ports[0]
-	if port.Port == nil || port.Port.IntVal != 443 {
-		t.Errorf("expected port 443, got %+v", port.Port)
+	if port.Port == nil || port.Port.IntVal != testAPIServerPort {
+		t.Errorf("expected port %d, got %+v", testAPIServerPort, port.Port)
 	}
 	if port.Protocol == nil || *port.Protocol != corev1.ProtocolTCP {
 		t.Errorf("expected TCP protocol, got %+v", port.Protocol)
@@ -747,10 +760,10 @@ func TestKubernetesAPIEgressPeers_Discovers(t *testing.T) {
 		t.Fatalf("KubernetesAPIEgressPeers: %v", err)
 	}
 	want := map[string]bool{"10.96.0.1/32": false, "10.96.0.2/32": false}
-	if len(peers) != len(want) {
-		t.Fatalf("expected %d peers, got %d", len(want), len(peers))
+	if len(peers.Peers) != len(want) {
+		t.Fatalf("expected %d peers, got %d", len(want), len(peers.Peers))
 	}
-	for _, p := range peers {
+	for _, p := range peers.Peers {
 		if p.IPBlock == nil {
 			t.Fatalf("expected ipBlock peer, got %+v", p)
 		}
@@ -764,6 +777,10 @@ func TestKubernetesAPIEgressPeers_Discovers(t *testing.T) {
 		if !seen {
 			t.Errorf("missing expected CIDR %q", cidr)
 		}
+	}
+	// The discovered port must come from the EndpointSlice, not a default.
+	if len(peers.Ports) != 1 || peers.Ports[0] != testAPIServerPort {
+		t.Errorf("expected discovered port %d, got %+v", testAPIServerPort, peers.Ports)
 	}
 }
 
@@ -790,8 +807,8 @@ func TestKubernetesAPIEgressPeers_BestEffortFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("best-effort KubernetesAPIEgressPeers: %v", err)
 	}
-	if len(peers) != 1 || peers[0].IPBlock == nil || peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
-		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers)
+	if len(peers.Peers) != 1 || peers.Peers[0].IPBlock == nil || peers.Peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers.Peers)
 	}
 }
 
@@ -799,7 +816,7 @@ func TestKubernetesAPIEgressPeers_BestEffortFallback(t *testing.T) {
 // reads the API and always returns the sentinel peer.
 func TestKubernetesAPIEgressPeersSyntax(t *testing.T) {
 	peers := KubernetesAPIEgressPeersSyntax()
-	if len(peers) != 1 || peers[0].IPBlock == nil || peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
-		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers)
+	if len(peers.Peers) != 1 || peers.Peers[0].IPBlock == nil || peers.Peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
+		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers.Peers)
 	}
 }

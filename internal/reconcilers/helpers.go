@@ -544,8 +544,26 @@ func resolveExternalPeer(host, kind string) (networkingv1.NetworkPolicyPeer, err
 	}, nil
 }
 
-// KubernetesAPIEgressPeers returns ipBlock peers for every address backing the
-// default/kubernetes Service — the real API-server endpoint(s).
+// KubernetesAPIEgress carries the discovered egress target(s) for the
+// Kubernetes API server: one /32 ipBlock peer per API-server address and the
+// concrete TCP port(s) those endpoints actually listen on. Both are read from
+// the default/kubernetes EndpointSlices at reconcile time so the CNPG egress
+// NetworkPolicy targets the real address:port instead of a hardcoded 443
+// (which is wrong on k3s/RKE2 and other distributions that expose 6443).
+type KubernetesAPIEgress struct {
+	Peers []networkingv1.NetworkPolicyPeer
+	Ports []int32
+}
+
+// defaultKubernetesAPIPort is the fallback API-server port used only when an
+// EndpointSlice omits the port (or, for the syntax/best-effort sentinel path,
+// when no slice is read at all). The discovered port from the EndpointSlice
+// always takes precedence — see KubernetesAPIEgressPeers.
+const defaultKubernetesAPIPort int32 = 443
+
+// KubernetesAPIEgressPeers returns the ipBlock peers and the listening port(s)
+// for every address backing the default/kubernetes Service — the real
+// API-server endpoint(s).
 //
 // This resolves the "unknown local value" problem for the CNPG→API egress
 // policy: NetworkPolicy is enforced on the post-DNAT destination IP, which the
@@ -553,17 +571,20 @@ func resolveExternalPeer(host, kind string) (networkingv1.NetworkPolicyPeer, err
 // does not reliably admit API traffic. Discovering the concrete endpoint IPs
 // at reconcile time produces a portable, tight rule.
 //
-// Addresses are read from the EndpointSlices for the default/kubernetes
-// Service (selected by the well-known kubernetes.io/service-name label).
-// HA control planes expose multiple addresses; one /32 peer is emitted per
-// address, deduplicated across slices.
+// Addresses and ports are read from the EndpointSlices for the
+// default/kubernetes Service (selected by the well-known
+// kubernetes.io/service-name label). HA control planes expose multiple
+// addresses; one /32 peer is emitted per address, deduplicated across slices.
+// The port is likewise discovered per slice (6443 on k3s/RKE2, 443 on many
+// managed distributions) and deduplicated, so the egress rule targets the
+// address:port the API server actually listens on rather than a hardcoded 443.
 //
 // Reconcile-only: performs a live API read. Describe paths must use
 // KubernetesAPIEgressPeersSyntax. When OPENCHAMI_BEST_EFFORT_DNS=true is set
 // (the off-cluster `make dev-run` mode), an unreadable/empty result degrades
 // to the syntax-only sentinel peer rather than aborting the build, mirroring
 // resolveExternalPeer.
-func KubernetesAPIEgressPeers(ctx context.Context, c client.Client) ([]networkingv1.NetworkPolicyPeer, error) {
+func KubernetesAPIEgressPeers(ctx context.Context, c client.Client) (KubernetesAPIEgress, error) {
 	var slices discoveryv1.EndpointSliceList
 	err := c.List(ctx, &slices,
 		client.InNamespace("default"),
@@ -574,41 +595,63 @@ func KubernetesAPIEgressPeers(ctx context.Context, c client.Client) ([]networkin
 		if bestEffort {
 			return KubernetesAPIEgressPeersSyntax(), nil
 		}
-		return nil, fmt.Errorf("listing default/kubernetes endpointslices: %w", err)
+		return KubernetesAPIEgress{}, fmt.Errorf("listing default/kubernetes endpointslices: %w", err)
 	}
 
-	seen := map[string]struct{}{}
+	seenAddr := map[string]struct{}{}
+	seenPort := map[int32]struct{}{}
 	peers := make([]networkingv1.NetworkPolicyPeer, 0)
+	ports := make([]int32, 0)
 	for i := range slices.Items {
 		for _, ep := range slices.Items[i].Endpoints {
 			for _, addr := range ep.Addresses {
-				if _, dup := seen[addr]; dup {
+				if _, dup := seenAddr[addr]; dup {
 					continue
 				}
-				seen[addr] = struct{}{}
+				seenAddr[addr] = struct{}{}
 				peers = append(peers, networkingv1.NetworkPolicyPeer{
 					IPBlock: &networkingv1.IPBlock{CIDR: addr + "/32"},
 				})
 			}
+		}
+		for _, port := range slices.Items[i].Ports {
+			if port.Port == nil {
+				continue
+			}
+			p := *port.Port
+			if _, dup := seenPort[p]; dup {
+				continue
+			}
+			seenPort[p] = struct{}{}
+			ports = append(ports, p)
 		}
 	}
 	if len(peers) == 0 {
 		if bestEffort {
 			return KubernetesAPIEgressPeersSyntax(), nil
 		}
-		return nil, fmt.Errorf("default/kubernetes endpointslices resolved to no addresses")
+		return KubernetesAPIEgress{}, fmt.Errorf("default/kubernetes endpointslices resolved to no addresses")
 	}
-	return peers, nil
+	// Fall back to the standard HTTPS port only when the slice carried no
+	// port information at all — otherwise honour exactly what was discovered.
+	if len(ports) == 0 {
+		ports = append(ports, defaultKubernetesAPIPort)
+	}
+	return KubernetesAPIEgress{Peers: peers, Ports: ports}, nil
 }
 
 // KubernetesAPIEgressPeersSyntax is the syntax-only counterpart to
 // KubernetesAPIEgressPeers for use from Describe paths. It returns the sentinel
-// ipBlock 0.0.0.0/0 without reading the API, preserving the SubReconciler
-// "Describe must not contact any external service" contract.
-func KubernetesAPIEgressPeersSyntax() []networkingv1.NetworkPolicyPeer {
-	return []networkingv1.NetworkPolicyPeer{{
-		IPBlock: &networkingv1.IPBlock{CIDR: SyntaxOnlyExternalCIDR},
-	}}
+// ipBlock 0.0.0.0/0 and the default API port without reading the API,
+// preserving the SubReconciler "Describe must not contact any external
+// service" contract.
+func KubernetesAPIEgressPeersSyntax() KubernetesAPIEgress {
+	return KubernetesAPIEgress{
+		Peers: []networkingv1.NetworkPolicyPeer{{
+			IPBlock: &networkingv1.IPBlock{CIDR: SyntaxOnlyExternalCIDR},
+		}},
+		Ports: []int32{defaultKubernetesAPIPort},
+	}
 }
 
 // VaultEgressPeer returns the appropriate NetworkPolicyPeer for Vault egress.
