@@ -222,6 +222,12 @@ type ObjectStorageSpec struct {
 	// +optional
 	Bucket string `json:"bucket,omitempty"`
 
+	// Region is the S3 region used for request signing. VersityGW ignores
+	// it, but the AWS SDK requires a value. Defaults to "us-east-1" inside
+	// the client when unset.
+	// +optional
+	Region string `json:"region,omitempty"`
+
 	// TLSInsecure disables TLS certificate verification (dev/test only).
 	// +optional
 	TLSInsecure bool `json:"tlsInsecure,omitempty"`
