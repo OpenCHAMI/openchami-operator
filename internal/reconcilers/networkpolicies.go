@@ -67,11 +67,6 @@ const (
 	// dnsPort permits resolution against the cluster DNS service.
 	dnsPort int32 = 53
 
-	// kubernetesAPIPort is the standard HTTPS port for the Kubernetes API server.
-	// CNPG postgres pods need egress access to this port during bootstrap and
-	// for ongoing cluster status updates.
-	kubernetesAPIPort int32 = 443
-
 	// Canonical NetworkPolicy names. Exported for the test package and admin
 	// CLI describe output.
 	policyDefaultDenyAll               = "default-deny-all"
@@ -204,17 +199,17 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		return nil, fmt.Errorf("resolving versitygw egress peer: %w", err)
 	}
 
-	// Resolve the concrete Kubernetes API-server endpoint IPs at reconcile
-	// time. Describe never reads the API (its Client may be nil) and uses the
-	// syntax-only sentinel peer instead.
-	var apiPeers []networkingv1.NetworkPolicyPeer
+	// Resolve the concrete Kubernetes API-server endpoint IPs and port(s) at
+	// reconcile time. Describe never reads the API (its Client may be nil) and
+	// uses the syntax-only sentinel peer instead.
+	var apiEgress KubernetesAPIEgress
 	if resolveDNS {
-		apiPeers, err = KubernetesAPIEgressPeers(ctx, r.Client)
+		apiEgress, err = KubernetesAPIEgressPeers(ctx, r.Client)
 		if err != nil {
 			return nil, fmt.Errorf("resolving kubernetes API egress peers: %w", err)
 		}
 	} else {
-		apiPeers = KubernetesAPIEgressPeersSyntax()
+		apiEgress = KubernetesAPIEgressPeersSyntax()
 	}
 
 	return []networkingv1.NetworkPolicy{
@@ -223,7 +218,7 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		r.allowVaultEgress(ns, vaultPeer),
 		r.allowVersityGWEgress(ns, versityPeer),
 		r.allowLogsEgress(ns, versityPeer),
-		r.allowCNPGKubernetesAPIEgress(ns, apiPeers),
+		r.allowCNPGKubernetesAPIEgress(ns, apiEgress),
 		r.smdPolicy(ns),
 		r.tokensmithPolicy(ns, vaultPeer),
 		r.bootServicePolicy(ns, versityPeer),
@@ -379,15 +374,22 @@ func (r *NetworkPoliciesReconciler) allowLogsEgress(ns string, peer networkingv1
 //
 // This policy scopes access to pods labelled with cnpg.io/cluster (the label
 // CNPG stamps on every pod it manages), and permits egress to the concrete
-// API-server endpoint IP(s) discovered from the default/kubernetes Endpoints
-// at reconcile time (see KubernetesAPIEgressPeers).
+// API-server endpoint IP(s) AND port(s) discovered from the
+// default/kubernetes EndpointSlices at reconcile time (see
+// KubernetesAPIEgressPeers). The port is discovered rather than hardcoded to
+// 443 because distributions such as k3s and RKE2 expose the API server on
+// 6443; a hardcoded 443 rule silently blocks bootstrap on those clusters.
 //
 // A namespaceSelector on "default" is deliberately NOT used: NetworkPolicy is
 // enforced on the post-DNAT destination IP, which the kubernetes ClusterIP
 // does not match, so the selector would silently fail to admit API traffic on
 // many clusters. The discovered ipBlock peers are portable across
 // distributions (standard k8s, k3s, RKE2) and HA control planes.
-func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string, apiPeers []networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
+func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string, apiEgress KubernetesAPIEgress) networkingv1.NetworkPolicy {
+	ports := make([]networkingv1.NetworkPolicyPort, 0, len(apiEgress.Ports))
+	for _, p := range apiEgress.Ports {
+		ports = append(ports, portTCP(p))
+	}
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policyAllowCNPGKubernetesAPIEgress),
@@ -395,8 +397,8 @@ func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string, apiP
 			PodSelector: cnpgPodSelector(ns),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				To:    apiPeers,
-				Ports: []networkingv1.NetworkPolicyPort{portTCP(kubernetesAPIPort)},
+				To:    apiEgress.Peers,
+				Ports: ports,
 			}},
 		},
 	}
