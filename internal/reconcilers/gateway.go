@@ -109,9 +109,10 @@ const (
 	pathBootAdmin        = "/admin/boot"
 	pathMetadataPrefix   = "/cloud-init"
 	pathMetadataAdmin    = pathMetadataPrefix + "/admin"
-	pathTokensmithJWKS   = "/.well-known/jwks.json"
-	pathTokensmithToken  = "/oauth/token"
-	pathTokensmithHealth = "/health"
+	pathTokensmithJWKS     = "/.well-known/jwks.json"
+	pathTokensmithToken    = "/oauth/token"
+	pathTokensmithExchange = "/oauth/exchange"
+	pathTokensmithHealth   = "/health"
 )
 
 // gatewayStatusRoutes returns the canonical route-name → URL-path map
@@ -700,6 +701,7 @@ func (r *GatewayReconciler) buildTokensmithRoute(cp *openchamiv1alpha1.OpenCHAMI
 			Rules: []gwapiv1.HTTPRouteRule{
 				exactPathRule(pathTokensmithJWKS, ServiceTokensmith, tokensmithPort),
 				exactPathRule(pathTokensmithToken, ServiceTokensmith, tokensmithPort),
+				exactPathRule(pathTokensmithExchange, ServiceTokensmith, tokensmithPort),
 				exactPathRule(pathTokensmithHealth, ServiceTokensmith, tokensmithPort),
 			},
 		},
