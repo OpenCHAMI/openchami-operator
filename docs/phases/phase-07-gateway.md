@@ -45,6 +45,15 @@ All resources in `openchami-{clusterName}` namespace.
 All SecurityPolicy resources reference the in-cluster tokensmith JWKS URL,
 not the external gateway URL. This avoids a routing loop.
 
+Each `remoteJWKS` also carries an explicit `backendRefs` entry pointing at
+the in-cluster `tokensmith` Service (port 8080). Newer Envoy Gateway
+releases require this: without it the gateway auto-derives a backend from
+the URI that does not pick up the `tokensmith-backend-tls`
+`BackendTLSPolicy`, so the JWKS fetch fails its TLS handshake with
+`tls: unknown certificate authority`. The `backendRef` is omitted when
+tokensmith is served by an `externalEndpoint` (the site owns that TLS
+trust chain).
+
 Condition: `GatewayReady=True` when Gateway status `Programmed=True`.
 
 ```bash

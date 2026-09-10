@@ -159,8 +159,28 @@ func TestGatewayReconciler_AppliesAllSecurityPolicies(t *testing.T) {
 		if sp.Spec.JWT == nil || len(sp.Spec.JWT.Providers) != 1 {
 			t.Fatalf("SecurityPolicy %q missing JWT provider", name)
 		}
-		if got := sp.Spec.JWT.Providers[0].RemoteJWKS.URI; got != wantURI {
+		jwks := sp.Spec.JWT.Providers[0].RemoteJWKS
+		if got := jwks.URI; got != wantURI {
 			t.Errorf("SecurityPolicy %q JWKS URI=%q want %q", name, got, wantURI)
+		}
+		// Newer Envoy Gateway needs an explicit backendRef on remoteJWKS,
+		// otherwise it auto-injects an incorrect backend and the JWKS TLS
+		// handshake against tokensmith fails (issue #22).
+		if len(jwks.BackendRefs) != 1 {
+			t.Fatalf("SecurityPolicy %q remoteJWKS backendRefs=%d want 1", name, len(jwks.BackendRefs))
+		}
+		ref := jwks.BackendRefs[0]
+		if ref.Name != gwapiv1.ObjectName(ServiceTokensmith) {
+			t.Errorf("SecurityPolicy %q backendRef name=%q want %q", name, ref.Name, ServiceTokensmith)
+		}
+		if ref.Kind == nil || *ref.Kind != gwapiv1.Kind(kindService) {
+			t.Errorf("SecurityPolicy %q backendRef kind=%v want %q", name, ref.Kind, kindService)
+		}
+		if ref.Group == nil || *ref.Group != gwapiv1.Group("") {
+			t.Errorf("SecurityPolicy %q backendRef group=%v want core", name, ref.Group)
+		}
+		if ref.Port == nil || *ref.Port != tokensmithPort {
+			t.Errorf("SecurityPolicy %q backendRef port=%v want %d", name, ref.Port, tokensmithPort)
 		}
 	}
 }
