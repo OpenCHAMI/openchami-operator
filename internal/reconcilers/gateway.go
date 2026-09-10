@@ -806,6 +806,35 @@ func httpRouteTargetRef(routeName string) gwapiv1.LocalPolicyTargetReferenceWith
 	}
 }
 
+// jwksBackendRefs returns the RemoteJWKS backendRefs pointing at this
+// cluster's tokensmith Service. Newer Envoy Gateway releases require an
+// explicit backendRef on remoteJWKS; without it the gateway auto-derives
+// a backend from the URI that does not carry the correct BackendTLSPolicy
+// association, so the JWKS fetch fails its TLS handshake against
+// tokensmith with "unknown certificate authority". Binding the backendRef
+// to the tokensmith Service (the same target as buildJWKSBackendTLSPolicy)
+// ties the two policies together so envoy trusts the per-cluster CA.
+//
+// Only emitted for an in-cluster tokensmith; when tokensmith is served by
+// an externalEndpoint the operator does not own the backend Service and
+// the JWKS URI is expected to be reachable over a publicly trusted CA.
+func jwksBackendRefs(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []egv1alpha1.BackendRef {
+	if !ServiceDeployedInCluster(cp, ServiceTokensmith) {
+		return nil
+	}
+	group := gwapiv1.Group("")
+	kind := gwapiv1.Kind(kindService)
+	port := gwapiv1.PortNumber(tokensmithPort)
+	return []egv1alpha1.BackendRef{{
+		BackendObjectReference: gwapiv1.BackendObjectReference{
+			Group: &group,
+			Kind:  &kind,
+			Name:  gwapiv1.ObjectName(ServiceTokensmith),
+			Port:  &port,
+		},
+	}}
+}
+
 func (r *GatewayReconciler) buildSecurityPolicy(cp *openchamiv1alpha1.OpenCHAMIControlPlane, name, route string) *egv1alpha1.SecurityPolicy {
 	target := httpRouteTargetRef(route)
 	return &egv1alpha1.SecurityPolicy{
@@ -823,6 +852,9 @@ func (r *GatewayReconciler) buildSecurityPolicy(cp *openchamiv1alpha1.OpenCHAMIC
 				Providers: []egv1alpha1.JWTProvider{{
 					Name: jwtProviderName,
 					RemoteJWKS: &egv1alpha1.RemoteJWKS{
+						BackendCluster: egv1alpha1.BackendCluster{
+							BackendRefs: jwksBackendRefs(cp),
+						},
 						URI: jwksURL(cp),
 					},
 				}},
