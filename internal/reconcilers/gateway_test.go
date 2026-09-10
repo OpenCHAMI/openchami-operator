@@ -179,7 +179,7 @@ func TestGatewayReconciler_AppliesAllSecurityPolicies(t *testing.T) {
 		if ref.Group == nil || *ref.Group != gwapiv1.Group("") {
 			t.Errorf("SecurityPolicy %q backendRef group=%v want core", name, ref.Group)
 		}
-		if ref.Port == nil || *ref.Port != gwapiv1.PortNumber(tokensmithPort) {
+		if ref.Port == nil || *ref.Port != tokensmithPort {
 			t.Errorf("SecurityPolicy %q backendRef port=%v want %d", name, ref.Port, tokensmithPort)
 		}
 	}

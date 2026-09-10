@@ -824,7 +824,7 @@ func jwksBackendRefs(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []egv1alpha1.B
 	}
 	group := gwapiv1.Group("")
 	kind := gwapiv1.Kind(kindService)
-	port := gwapiv1.PortNumber(tokensmithPort)
+	port := tokensmithPort
 	return []egv1alpha1.BackendRef{{
 		BackendObjectReference: gwapiv1.BackendObjectReference{
 			Group: &group,
