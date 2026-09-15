@@ -104,14 +104,15 @@ const (
 	// keeping them aligned avoids subtle drift where a config map
 	// advertises one path and the gateway serves another. If a path
 	// moves, update it here and every consumer follows.
-	pathSMDPrefix        = "/hsm"
-	pathBootPrefix       = "/boot"
-	pathBootAdmin        = "/admin/boot"
-	pathMetadataPrefix   = "/cloud-init"
-	pathMetadataAdmin    = pathMetadataPrefix + "/admin"
-	pathTokensmithJWKS   = "/.well-known/jwks.json"
-	pathTokensmithToken  = "/oauth/token"
-	pathTokensmithHealth = "/health"
+	pathSMDPrefix          = "/hsm"
+	pathBootPrefix         = "/boot"
+	pathBootAdmin          = "/admin/boot"
+	pathMetadataPrefix     = "/cloud-init"
+	pathMetadataAdmin      = pathMetadataPrefix + "/admin"
+	pathTokensmithJWKS     = "/.well-known/jwks.json"
+	pathTokensmithToken    = "/oauth/token"
+	pathTokensmithExchange = "/oauth/exchange"
+	pathTokensmithHealth   = "/health"
 )
 
 // gatewayStatusRoutes returns the canonical route-name → URL-path map
@@ -641,11 +642,14 @@ func pathPrefixRewriteRule(prefix, backend string, port int32) gwapiv1.HTTPRoute
 }
 
 // exactPathRule builds a single rule that matches a given exact path and
-// forwards to the named in-namespace Service on the given port.
-func exactPathRule(path, backend string, port int32) gwapiv1.HTTPRouteRule {
+// forwards to the tokensmith in-namespace Service. Every current caller
+// targets tokensmith, so the backend/port are fixed rather than passed
+// in (satisfies unparam); reintroduce parameters if another service ever
+// needs exact-path routing.
+func exactPathRule(path string) gwapiv1.HTTPRouteRule {
 	matchType := gwapiv1.PathMatchExact
 	val := path
-	portNum := port
+	portNum := tokensmithPort
 	return gwapiv1.HTTPRouteRule{
 		Matches: []gwapiv1.HTTPRouteMatch{{
 			Path: &gwapiv1.HTTPPathMatch{
@@ -656,7 +660,7 @@ func exactPathRule(path, backend string, port int32) gwapiv1.HTTPRouteRule {
 		BackendRefs: []gwapiv1.HTTPBackendRef{{
 			BackendRef: gwapiv1.BackendRef{
 				BackendObjectReference: gwapiv1.BackendObjectReference{
-					Name: gwapiv1.ObjectName(backend),
+					Name: gwapiv1.ObjectName(ServiceTokensmith),
 					Port: &portNum,
 				},
 			},
@@ -698,9 +702,10 @@ func (r *GatewayReconciler) buildTokensmithRoute(cp *openchamiv1alpha1.OpenCHAMI
 			},
 			Hostnames: []gwapiv1.Hostname{hostname},
 			Rules: []gwapiv1.HTTPRouteRule{
-				exactPathRule(pathTokensmithJWKS, ServiceTokensmith, tokensmithPort),
-				exactPathRule(pathTokensmithToken, ServiceTokensmith, tokensmithPort),
-				exactPathRule(pathTokensmithHealth, ServiceTokensmith, tokensmithPort),
+				exactPathRule(pathTokensmithJWKS),
+				exactPathRule(pathTokensmithToken),
+				exactPathRule(pathTokensmithExchange),
+				exactPathRule(pathTokensmithHealth),
 			},
 		},
 	}
