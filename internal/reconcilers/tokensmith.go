@@ -42,7 +42,7 @@ const (
 	tokensmithOIDCIssuerSuffix = "/v1/identity/oidc/provider/default"
 
 	tokensmithOIDCClientSecretKey      = "client_secret"
-	tokensmithOIDCIssuerEnvName        = "OIDC_ISSUER_URL"
+	tokensmithOIDCIssuerEnvName        = "TOKENSMITH_OIDC_PROVIDER"
 	tokensmithOIDCIntrospectionEnvName = "TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT"
 
 	reasonOIDCConfigInvalid = "OIDCConfigInvalid"
