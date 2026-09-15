@@ -101,7 +101,7 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 		}
 	}
 	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/default") {
-		t.Errorf("expected OIDC_ISSUER_URL to contain vault issuer suffix, got %q", oidcIssuer)
+		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER to contain vault issuer suffix, got %q", oidcIssuer)
 	}
 	wantSecret := SecretName(cp, SuffixTokensmithOIDC)
 	if oidcSecretRefName != wantSecret || oidcSecretRefKey != tokensmithOIDCClientSecretKey {
@@ -182,7 +182,7 @@ func TestTokensmithReconciler_ExternalOIDCHappy(t *testing.T) {
 		}
 	}
 	if oidcIssuer != issuerURL {
-		t.Errorf("expected OIDC_ISSUER_URL to match external issuer, got %q", oidcIssuer)
+		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER to match external issuer, got %q", oidcIssuer)
 	}
 }
 
