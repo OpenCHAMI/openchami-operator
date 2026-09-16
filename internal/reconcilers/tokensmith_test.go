@@ -89,7 +89,7 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	cont := dep.Spec.Template.Spec.Containers[0]
 
 	var oidcIssuer, oidcSecretRefName, oidcSecretRefKey string
-	var tsIssuer string
+	var oidcClientIDRefName, oidcClientIDRefKey string
 	for _, e := range cont.Env {
 		switch e.Name {
 		case tokensmithOIDCIssuerEnvName:
@@ -100,6 +100,11 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 				oidcSecretRefName = e.ValueFrom.SecretKeyRef.Name
 				oidcSecretRefKey = e.ValueFrom.SecretKeyRef.Key
+			}
+		case "OIDC_CLIENT_ID":
+			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
+				oidcClientIDRefName = e.ValueFrom.SecretKeyRef.Name
+				oidcClientIDRefKey = e.ValueFrom.SecretKeyRef.Key
 			}
 		}
 	}
@@ -114,6 +119,10 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	if oidcSecretRefName != wantSecret || oidcSecretRefKey != tokensmithOIDCClientSecretKey {
 		t.Errorf("expected OIDC_CLIENT_SECRET to reference Secret %q key %q, got %q/%q",
 			wantSecret, tokensmithOIDCClientSecretKey, oidcSecretRefName, oidcSecretRefKey)
+	}
+	if oidcClientIDRefName != wantSecret || oidcClientIDRefKey != tokensmithOIDCClientIDKey {
+		t.Errorf("expected OIDC_CLIENT_ID to reference Secret %q key %q, got %q/%q",
+			wantSecret, tokensmithOIDCClientIDKey, oidcClientIDRefName, oidcClientIDRefKey)
 	}
 
 	svc := &corev1.Service{}

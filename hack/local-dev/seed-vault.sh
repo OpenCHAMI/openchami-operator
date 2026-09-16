@@ -55,6 +55,7 @@ vault kv put "$PREFIX/s3/logs" \
   secret_key="test-log-secret-$(openssl rand -hex 16)"
 
 vault kv put "$PREFIX/oidc/tokensmith-client" \
+  client_id="test-oidc-client-$(openssl rand -hex 8)" \
   client_secret="test-oidc-secret-$(openssl rand -hex 16)"
 
 # Write policy

@@ -229,12 +229,12 @@ func (c *vaultClient) EnsureKubernetesRole(ctx context.Context, name string, cfg
 	return nil
 }
 
-func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string) error {
+func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string) (OIDCClientCredentials, error) {
 	data := map[string]any{"issuer": issuerURL}
 	_, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/config", data)
 	if err != nil {
-		return fmt.Errorf("configuring oidc issuer: %w", err)
+		return OIDCClientCredentials{}, fmt.Errorf("configuring oidc issuer: %w", err)
 	}
 	keyName := "openchami-" + clusterName
 	keyData := map[string]any{
@@ -244,9 +244,42 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerU
 	}
 	if _, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/key/"+keyName, keyData); err != nil {
-		return fmt.Errorf("creating oidc key: %w", err)
+		return OIDCClientCredentials{}, fmt.Errorf("creating oidc key: %w", err)
 	}
-	return nil
+
+	// Provision the OIDC client tokensmith authenticates as. Vault generates
+	// the client_id and client_secret on creation; we read them back below so
+	// the caller can surface both to tokensmith. An assignment scopes which
+	// entities/groups may obtain tokens; the built-in "allow_all" assignment
+	// (shipped with every Vault) is sufficient for the operator's single-tenant
+	// per-cluster model.
+	clientName := "openchami-" + clusterName + "-tokensmith"
+	clientData := map[string]any{
+		"key":              keyName,
+		"assignments":      []string{"allow_all"},
+		"id_token_ttl":     "30m",
+		"access_token_ttl": "30m",
+	}
+	if _, err := c.api.Logical().WriteWithContext(ctx,
+		"identity/oidc/client/"+clientName, clientData); err != nil {
+		return OIDCClientCredentials{}, fmt.Errorf("creating oidc client: %w", err)
+	}
+
+	resp, err := c.api.Logical().ReadWithContext(ctx,
+		"identity/oidc/client/"+clientName)
+	if err != nil {
+		return OIDCClientCredentials{}, fmt.Errorf("reading oidc client: %w", err)
+	}
+	if resp == nil || resp.Data == nil {
+		return OIDCClientCredentials{}, fmt.Errorf("oidc client %q returned no data", clientName)
+	}
+	creds := OIDCClientCredentials{}
+	creds.ClientID, _ = resp.Data["client_id"].(string)
+	creds.ClientSecret, _ = resp.Data["client_secret"].(string)
+	if creds.ClientID == "" {
+		return OIDCClientCredentials{}, fmt.Errorf("oidc client %q returned empty client_id", clientName)
+	}
+	return creds, nil
 }
 
 func (c *vaultClient) DeleteClusterPaths(ctx context.Context, prefix string) error {

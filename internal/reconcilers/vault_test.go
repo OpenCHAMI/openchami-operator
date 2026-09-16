@@ -181,6 +181,46 @@ func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
 	}
 }
 
+// TestVaultReconciler_OIDCClientCredentials is a regression test for issue #38:
+// when oidcProvider=vault the operator must provision a Vault OIDC client and
+// store BOTH the generated client_id and client_secret in the tokensmith OIDC
+// KV path so VSO materializes them into the tokensmith Secret. Previously only
+// client_secret was written, leaving OIDC_CLIENT_ID unresolvable.
+func TestVaultReconciler_OIDCClientCredentials(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	paths := vault.Paths("alpha")
+	data, err := v.ReadSecret(context.Background(), paths.TokensmithOIDC)
+	if err != nil {
+		t.Fatalf("reading tokensmith oidc secret: %v", err)
+	}
+	if data == nil {
+		t.Fatalf("expected tokensmith oidc secret at %q", paths.TokensmithOIDC)
+	}
+	clientID, _ := data["client_id"].(string)
+	if clientID == "" {
+		t.Errorf("expected non-empty client_id in %q, got %+v", paths.TokensmithOIDC, data)
+	}
+	clientSecret, _ := data["client_secret"].(string)
+	if clientSecret == "" {
+		t.Errorf("expected non-empty client_secret in %q, got %+v", paths.TokensmithOIDC, data)
+	}
+	// The credentials must match what EnsureOIDCConfig returned for the cluster.
+	want := v.OIDCClients[cp.Spec.ClusterName]
+	if clientID != want.ClientID || clientSecret != want.ClientSecret {
+		t.Errorf("stored credentials %q/%q do not match Vault OIDC client %q/%q",
+			clientID, clientSecret, want.ClientID, want.ClientSecret)
+	}
+}
+
 func TestVaultReconciler_Unreachable(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("beta")

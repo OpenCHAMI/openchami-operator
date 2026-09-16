@@ -42,6 +42,7 @@ const (
 	tokensmithOIDCIssuerSuffix = "/v1/identity/oidc/provider/default"
 
 	tokensmithOIDCClientSecretKey      = "client_secret"
+	tokensmithOIDCClientIDKey          = "client_id"
 	tokensmithOIDCIssuerEnvName        = "TOKENSMITH_OIDC_PROVIDER"
 	tokensmithOIDCIntrospectionEnvName = "TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT"
 
@@ -268,6 +269,17 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 	tlsEnabled := cp.Spec.Services.Tokensmith.TLS.Enabled
 
 	env := []corev1.EnvVar{
+		{
+			Name: "OIDC_CLIENT_ID",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: SecretName(cp, SuffixTokensmithOIDC),
+					},
+					Key: tokensmithOIDCClientIDKey,
+				},
+			},
+		},
 		{
 			Name: "OIDC_CLIENT_SECRET",
 			ValueFrom: &corev1.EnvVarSource{
