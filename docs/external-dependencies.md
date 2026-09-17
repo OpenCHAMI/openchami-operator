@@ -70,10 +70,27 @@ These must be installed before the operator's first reconcile. `make dev-install
 - **Used by:** `internal/reconcilers/gateway.go`.
 - **Install (OCI helm chart):**
   ```sh
+  # Envoy Gateway's own CRDs only; leave the standard Gateway API CRDs (§1) alone.
+  helm template eg-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+    --version v1.5.1 \
+    --set crds.gatewayAPI.enabled=false \
+    --set crds.envoyGateway.enabled=true \
+    | kubectl apply --server-side -f -
+
+  # Controller, skipping the bundled CRDs.
   helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
     --version v1.5.1 \
-    --namespace envoy-gateway-system --create-namespace
+    --namespace envoy-gateway-system --create-namespace \
+    --skip-crds
   ```
+  The `gateway-helm` chart bundles Gateway API CRDs from the **experimental**
+  channel. If the standard-channel Gateway API CRDs are already present (§1, or
+  installed by another controller such as Rancher), a plain `gateway-helm` install
+  is rejected by the `safe-upgrades.gateway.networking.k8s.io`
+  `ValidatingAdmissionPolicy` ("Installing experimental CRDs on top of standard
+  channel CRDs is prohibited by default"). Installing only Envoy's own CRDs and
+  passing `--skip-crds` avoids the conflict.
+
   (Older docs reference a classic `helm repo add envoy-gateway https://charts.envoyproxy.io` form; that URL doesn't exist — the chart is published only as an OCI image.)
 - **Also required:** a matching `GatewayClass`. The dev cluster ships `hack/local-dev/envoy-gatewayclass.yaml`; production sites apply an equivalent (see [install-production.md §2.5](install-production.md#25-envoy-gateway--gatewayclass)).
 

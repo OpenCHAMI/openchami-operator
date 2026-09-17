@@ -98,10 +98,35 @@ into Kubernetes Secrets that pods mount.
 
 ### 2.5 Envoy Gateway + GatewayClass
 
+The Envoy Gateway helm chart bundles a set of Gateway API CRDs from the
+**experimental** channel. If the standard-channel Gateway API CRDs are already
+installed (§2.1, or brought in by another controller such as Rancher), a
+`gateway-helm` install fails because the `safe-upgrades.gateway.networking.k8s.io`
+`ValidatingAdmissionPolicy` prohibits layering experimental CRDs on top of
+standard ones:
+
+```
+customresourcedefinitions.apiextensions.k8s.io "gateways.gateway.networking.k8s.io"
+  is forbidden: ... Installing experimental CRDs on top of standard channel CRDs
+  is prohibited by default.
+```
+
+Install the Envoy-specific CRDs only (leaving the already-installed standard
+Gateway API CRDs untouched), then install the controller with `--skip-crds`:
+
 ```sh
+# Envoy Gateway's own CRDs only; do NOT touch the standard Gateway API CRDs.
+helm template eg-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+  --version v1.5.1 \
+  --set crds.gatewayAPI.enabled=false \
+  --set crds.envoyGateway.enabled=true \
+  | kubectl apply --server-side -f -
+
+# Controller, skipping the bundled CRDs.
 helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
   --version v1.5.1 \
-  --namespace envoy-gateway-system --create-namespace
+  --namespace envoy-gateway-system --create-namespace \
+  --skip-crds
 ```
 
 The chart installs the Envoy Gateway controller. You must also create a
