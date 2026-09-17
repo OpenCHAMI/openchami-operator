@@ -226,6 +226,51 @@ kubectl auth can-i --as=system:serviceaccount:openchami-operator-system:opencham
 # expect: yes
 ```
 
+### 5.3 Configure the operator's Vault and S3 connection
+
+The manager container reads its own Vault and S3 connection details from
+environment variables. Without these, the operator starts but reports
+`VaultConfigured=False` and `BucketReady=False` on every control plane,
+because it cannot reach Vault or the object store to provision secrets and
+buckets. Set them on the Deployment (or bake them into your kustomize
+overlay / an external-secrets injection):
+
+```sh
+kubectl -n openchami-operator-system set env \
+  deploy/openchami-operator-controller-manager \
+  VAULT_ADDR=https://vault.vault.svc.cluster.local:8200 \
+  VAULT_AUTH_METHOD=approle \
+  VAULT_ROLE_ID="$ROLE_ID" \
+  VAULT_SECRET_ID="$SECRET_ID" \
+  AWS_ENDPOINT_URL=https://versitygw.object-storage.svc.cluster.local:7070 \
+  AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY" \
+  AWS_SECRET_ACCESS_KEY="$S3_SECRET_KEY" \
+  AWS_REGION=us-east-1
+```
+
+**Vault environment variables**
+
+| Variable | Purpose |
+|---|---|
+| `VAULT_ADDR` | Vault API address. When unset, the operator starts without Vault and reports `VaultConfigured=False`. |
+| `VAULT_AUTH_METHOD` | Login method (case-insensitive): `kubernetes` (default), `approle`, or `token`. `approle`, `appRole`, and `app-role` are all accepted. |
+| `VAULT_KUBERNETES_ROLE` | Vault Kubernetes auth role, used when `VAULT_AUTH_METHOD=kubernetes`. |
+| `VAULT_ROLE_ID` / `VAULT_SECRET_ID` | AppRole credentials, used when `VAULT_AUTH_METHOD=approle`. The AppRole must be pre-configured in Vault (see §6). `VAULT_APPROLE_ROLE_ID` / `VAULT_APPROLE_SECRET_ID` are accepted as legacy aliases. |
+| `VAULT_TOKEN` | Bearer token, used when `VAULT_AUTH_METHOD=token`. Intended for dev/bootstrap only. |
+
+**S3 environment variables**
+
+| Variable | Purpose |
+|---|---|
+| `AWS_ENDPOINT_URL` | VersityGW (or S3-compatible) gateway URL. When unset, bucket reconcilers report `BucketReady=False`. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | S3 credentials. |
+| `AWS_REGION` | Request-signing region. Defaults to `us-east-1`. |
+| `AWS_S3_TLS_INSECURE` | `true` disables TLS verification. Dev/test only. |
+
+The `kubernetes` and `approle` methods are the supported production paths.
+Prefer `approle` (or `kubernetes`) over `token`: a `token` is a long-lived
+bearer credential that does not rotate.
+
 ---
 
 ## 6. Provision Vault

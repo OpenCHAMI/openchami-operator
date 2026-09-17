@@ -58,7 +58,11 @@ func NewClient(ctx context.Context, cfg Config) (Client, error) {
 }
 
 func (c *vaultClient) authenticate(ctx context.Context) error {
-	switch c.cfg.AuthMethod {
+	// Normalize the auth method so operators can spell it naturally in env
+	// vars or the CR (e.g. "approle", "appRole", "app-role" all resolve to
+	// the AppRole method). The canonical internal spellings remain
+	// "kubernetes", "appRole", and "token".
+	switch normalizeAuthMethod(c.cfg.AuthMethod) {
 	case "kubernetes":
 		mount := c.cfg.K8sMountPath
 		if mount == "" {
@@ -111,6 +115,25 @@ func (c *vaultClient) authenticate(ctx context.Context) error {
 
 	default:
 		return fmt.Errorf("unsupported auth method %q", c.cfg.AuthMethod)
+	}
+}
+
+// normalizeAuthMethod maps operator-friendly spellings of a Vault auth
+// method onto the canonical internal value. Matching is case-insensitive
+// and tolerant of hyphen/underscore separators so that env vars
+// (VAULT_AUTH_METHOD=approle) and CR values (authMethod: appRole) both work.
+// Unknown values are returned lower-cased and unchanged so the caller's
+// switch falls through to its default and reports them verbatim.
+func normalizeAuthMethod(m string) string {
+	switch strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(m)) {
+	case "kubernetes", "k8s":
+		return "kubernetes"
+	case "approle":
+		return "appRole"
+	case "token":
+		return "token"
+	default:
+		return strings.ToLower(m)
 	}
 }
 
