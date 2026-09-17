@@ -88,7 +88,7 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	}
 	cont := dep.Spec.Template.Spec.Containers[0]
 
-	var oidcIssuer, oidcSecretRefName, oidcSecretRefKey string
+	var oidcIssuer, tsIssuer, oidcSecretRefName, oidcSecretRefKey string
 	var oidcClientIDRefName, oidcClientIDRefKey string
 	for _, e := range cont.Env {
 		switch e.Name {
