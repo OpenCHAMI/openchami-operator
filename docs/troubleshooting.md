@@ -285,6 +285,48 @@ The two pods usually fail in **different ways** — one for the old reason (now 
 
 **Recovery:** if the symptom appears anyway, something downstream of the operator is overriding the namespace labels. Re-applying the CR triggers the operator to reconcile the labels back to `privileged`. For per-pod hardening inside a privileged namespace, layer Kyverno or OPA Gatekeeper.
 
+### `NamespaceReady=False` — Rancher / RKE2 admission denies the namespace SSA
+
+**Symptom:** on a Rancher-managed cluster (RKE2/k3s), `NamespaceReady` never goes `True`:
+```sh
+kubectl get openchamicontrolplane <name> \
+  -o jsonpath='{range .status.conditions[*]}{.type}={.status} [{.reason}] {.message}{"\n"}{end}'
+```
+```
+NamespaceReady=False [Error] failed to reconcile namespace: admission webhook "rancher.cattle.io.namespaces.create-non-kubesystem" denied the request: Unauthorized
+```
+
+**Cause:** Rancher installs the `rancher.cattle.io.namespaces.create-non-kubesystem` admission webhook, which gates any request that sets or changes Pod Security Admission labels on a namespace. The operator's NamespaceReconciler applies `pod-security.kubernetes.io/{enforce,warn,audit}` labels via server-side apply (`internal/reconcilers/namespace.go`, required for the host-network DaemonSets — see the PSA entry above). Rancher only allows a subject to set PSA labels if it holds the `updatepsa` verb on `management.cattle.io/projects`. The operator ServiceAccount does not have that permission by default, so Rancher rejects the SSA as `Unauthorized`. This is a Rancher-specific authorization requirement, **not** an operator bug — the `enforce=privileged` labels are mandatory for the control plane's host-network workloads and cannot be dropped.
+
+**Recovery:** grant the operator's controller-manager ServiceAccount the Rancher `updatepsa` permission with a ClusterRole + ClusterRoleBinding:
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openchami-rancher-psa
+rules:
+  - apiGroups:
+      - management.cattle.io
+    resources:
+      - projects
+    verbs:
+      - updatepsa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openchami-rancher-psa
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openchami-rancher-psa
+subjects:
+  - kind: ServiceAccount
+    name: openchami-operator-controller-manager
+    namespace: openchami-operator-system
+```
+Apply it once per Rancher cluster (before or after installing the operator; the next reconcile picks it up). On the next reconcile the namespace SSA succeeds and `NamespaceReady` goes `True`. See [install-production.md](install-production.md#53-rancher--rke2-psa-admission) for the same note in the install flow.
+
 ### Reading pod env vs Deployment spec when chasing config drift
 
 **Symptom:** you applied a fix to the operator, restarted it, and the Deployment's `spec.template.spec.containers[0].env` now looks correct — but the running pod's env (`kubectl get pod -o yaml`) still shows the old values, and the pod is still crashing on the old config.

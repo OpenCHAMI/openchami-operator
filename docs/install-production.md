@@ -226,6 +226,59 @@ kubectl auth can-i --as=system:serviceaccount:openchami-operator-system:opencham
 # expect: yes
 ```
 
+### 5.3 Rancher / RKE2 PSA admission
+
+On Rancher-managed clusters (including RKE2 and k3s), Rancher runs the
+`rancher.cattle.io.namespaces.create-non-kubesystem` admission webhook,
+which gates any namespace request that sets Pod Security Admission (PSA)
+labels. The operator's NamespaceReconciler stamps each per-cluster
+namespace with `pod-security.kubernetes.io/{enforce=privileged,
+warn=restricted, audit=restricted}` — `enforce=privileged` is **mandatory**
+because the control plane runs host-network DaemonSets (coredhcp,
+network-probe) and a hostPath log collector (funicular) that PSA
+`baseline`/`restricted` reject.
+
+Rancher only permits a subject to set PSA labels if it holds the
+`updatepsa` verb on `management.cattle.io/projects`. The operator
+ServiceAccount lacks this by default, so the namespace SSA is rejected with
+`admission webhook "rancher.cattle.io.namespaces.create-non-kubesystem"
+denied the request: Unauthorized` and `NamespaceReady` stays `False`.
+
+**On Rancher/RKE2 clusters, grant the operator the `updatepsa` permission
+before (or shortly after) install:**
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openchami-rancher-psa
+rules:
+  - apiGroups:
+      - management.cattle.io
+    resources:
+      - projects
+    verbs:
+      - updatepsa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openchami-rancher-psa
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openchami-rancher-psa
+subjects:
+  - kind: ServiceAccount
+    name: openchami-operator-controller-manager
+    namespace: openchami-operator-system
+```
+
+This ClusterRole/ClusterRoleBinding is only needed on Rancher-managed
+clusters; on vanilla Kubernetes it has no effect and can be omitted. See
+[troubleshooting.md](troubleshooting.md#namespacereadyfalse--rancher--rke2-admission-denies-the-namespace-ssa)
+for the diagnostic path.
+
 ---
 
 ## 6. Provision Vault
