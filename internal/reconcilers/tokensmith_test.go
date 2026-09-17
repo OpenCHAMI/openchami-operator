@@ -89,10 +89,13 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	cont := dep.Spec.Template.Spec.Containers[0]
 
 	var oidcIssuer, oidcSecretRefName, oidcSecretRefKey string
+	var tsIssuer string
 	for _, e := range cont.Env {
 		switch e.Name {
 		case tokensmithOIDCIssuerEnvName:
 			oidcIssuer = e.Value
+		case tokensmithIssuerEnvName:
+			tsIssuer = e.Value
 		case "OIDC_CLIENT_SECRET":
 			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 				oidcSecretRefName = e.ValueFrom.SecretKeyRef.Name
@@ -102,6 +105,10 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	}
 	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/default") {
 		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER to contain vault issuer suffix, got %q", oidcIssuer)
+	}
+	wantIssuer := "https://" + cp.Spec.Domain
+	if tsIssuer != wantIssuer {
+		t.Errorf("expected TOKENSMITH_ISSUER=%q, got %q", wantIssuer, tsIssuer)
 	}
 	wantSecret := SecretName(cp, SuffixTokensmithOIDC)
 	if oidcSecretRefName != wantSecret || oidcSecretRefKey != tokensmithOIDCClientSecretKey {

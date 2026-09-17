@@ -45,6 +45,16 @@ const (
 	tokensmithOIDCIssuerEnvName        = "TOKENSMITH_OIDC_PROVIDER"
 	tokensmithOIDCIntrospectionEnvName = "TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT"
 
+	// tokensmithIssuerEnvName is the `iss` claim value tokensmith stamps
+	// into every JWT it mints, and the public base URL where its OIDC
+	// discovery + JWKS are served. Newer tokensmith releases require
+	// this (via --issuer / TOKENSMITH_ISSUER) with no built-in default;
+	// without it the binary refuses to start. The operator serves
+	// tokensmith at the gateway root (see gateway.go: /oauth/token,
+	// /.well-known/jwks.json), so the issuer is the cluster's public
+	// FQDN — the same value vault.go derives for the Vault OIDC issuer.
+	tokensmithIssuerEnvName = "TOKENSMITH_ISSUER"
+
 	reasonOIDCConfigInvalid = "OIDCConfigInvalid"
 
 	// tokensmithTLSMountPath is where the tokensmith pod sees its
@@ -194,6 +204,16 @@ func tokensmithPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string
 	}
 }
 
+// tokensmithIssuer derives the value for TOKENSMITH_ISSUER (the `iss`
+// claim tokensmith stamps into minted JWTs and the public base URL for
+// its OIDC discovery/JWKS). Tokensmith is exposed at the gateway root,
+// so the issuer is the cluster's external FQDN — matching the Vault
+// OIDC issuer derived in vault.go. It must be scheme + host only (no
+// path), consistent with the gateway URL published in status.
+func tokensmithIssuer(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
+	return fmt.Sprintf("%s://%s", gatewayURLScheme, cp.Spec.Domain)
+}
+
 func (r *TokensmithReconciler) buildPVC(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *corev1.PersistentVolumeClaim {
 	return &corev1.PersistentVolumeClaim{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},
@@ -279,6 +299,11 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		{Name: "TOKENSMITH_KEY_DIR", Value: tokensmithDataPath + "/keys"},
 		{Name: "TOKENSMITH_RFC8693_BOOTSTRAP_STORE", Value: tokensmithDataPath + "/bootstrap-tokens"},
 		{Name: "TOKENSMITH_RFC8693_REFRESH_STORE", Value: tokensmithDataPath + "/refresh-tokens"},
+		// Required by newer tokensmith releases (no built-in default).
+		// Derived from the CR's spec.domain: tokensmith is reachable at
+		// the gateway root, so its public issuer identity is the
+		// cluster FQDN.
+		{Name: tokensmithIssuerEnvName, Value: tokensmithIssuer(cp)},
 	}
 
 	switch cp.Spec.Services.Tokensmith.OIDCProvider {
