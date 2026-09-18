@@ -242,6 +242,33 @@ kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/downloa
 ```
 The operator picks up the new RESTMapper on its next reconcile (within ~30s). `GatewayReady` flips to `True/Ready` once Envoy programs the gateway.
 
+### Envoy Gateway helm install rejected: "experimental CRDs on top of standard channel CRDs is prohibited"
+
+**Symptom:** installing the `gateway-helm` chart fails with:
+```
+customresourcedefinitions.apiextensions.k8s.io "gateways.gateway.networking.k8s.io"
+  is forbidden: ValidatingAdmissionPolicy 'safe-upgrades.gateway.networking.k8s.io' ...
+  denied request: Installing experimental CRDs on top of standard channel CRDs is
+  prohibited by default.
+```
+
+**Cause:** the `gateway-helm` chart bundles Gateway API CRDs from the **experimental** channel. When the standard-channel Gateway API CRDs are already installed (either by you, or by another controller such as Rancher, which ships its own Gateway API), the `safe-upgrades.gateway.networking.k8s.io` `ValidatingAdmissionPolicy` blocks the chart from overwriting them.
+
+**Recovery:** install only Envoy Gateway's own CRDs, leaving the standard Gateway API CRDs untouched, then install the controller with `--skip-crds`:
+```sh
+helm template eg-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+  --version v1.5.1 \
+  --set crds.gatewayAPI.enabled=false \
+  --set crds.envoyGateway.enabled=true \
+  | kubectl apply --server-side -f -
+
+helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.5.1 \
+  --namespace envoy-gateway-system --create-namespace \
+  --skip-crds
+```
+See [external-dependencies.md → Envoy Gateway](external-dependencies.md#envoy-gateway) and [install-production.md §2.5](install-production.md#25-envoy-gateway--gatewayclass).
+
 ### Service pod stuck `0/1 Running` while server log says "Server starting"
 
 **Symptom:** a service pod reaches steady-state `0/1 Running` (not CrashLoopBackOff), the container's stdout shows the server bound its port, yet the pod never becomes Ready. The `Service` has no `Endpoints` and downstream `ServicesReady` stays `False`.
