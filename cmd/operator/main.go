@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	cnpgv1 "github.com/cloudnative-pg/cloudnative-pg/api/v1"
@@ -242,27 +243,82 @@ func main() {
 // Returns nil with no error when VAULT_ADDR is unset, allowing the operator
 // to start in dev environments without Vault. The vault sub-reconciler will
 // then report VaultConfigured=False/Error until config is provided.
+//
+// VAULT_AUTH_METHOD selects the login method (case-insensitive; defaults to
+// "kubernetes"):
+//   - kubernetes — VAULT_KUBERNETES_ROLE names the Vault k8s auth role.
+//   - approle    — VAULT_ROLE_ID and VAULT_SECRET_ID carry the AppRole
+//     credentials. (VAULT_APPROLE_ROLE_ID / VAULT_APPROLE_SECRET_ID are
+//     accepted as fallbacks for backwards compatibility.)
+//   - token      — VAULT_TOKEN carries a bearer token. Dev/bootstrap only.
 func buildVaultClient() (vault.Client, error) {
-	addr := os.Getenv("VAULT_ADDR")
-	if addr == "" {
+	cfg, ok := vaultConfigFromEnv(os.Getenv)
+	if !ok {
 		return nil, nil
 	}
-	cfg := vault.Config{
+	return vault.NewClient(context.Background(), cfg)
+}
+
+// vaultConfigFromEnv assembles a vault.Config from the given environment
+// lookup. ok is false when VAULT_ADDR is unset (the operator then starts
+// without Vault). Factored out of buildVaultClient so the env-to-Config
+// mapping is unit-testable without a live Vault login.
+func vaultConfigFromEnv(getenv func(string) string) (cfg vault.Config, ok bool) {
+	addr := getenv("VAULT_ADDR")
+	if addr == "" {
+		return vault.Config{}, false
+	}
+	cfg = vault.Config{
 		Address:    addr,
-		AuthMethod: os.Getenv("VAULT_AUTH_METHOD"),
-		K8sRole:    os.Getenv("VAULT_KUBERNETES_ROLE"),
+		AuthMethod: getenv("VAULT_AUTH_METHOD"),
+		K8sRole:    getenv("VAULT_KUBERNETES_ROLE"),
 	}
 	if cfg.AuthMethod == "" {
 		cfg.AuthMethod = "kubernetes"
 	}
-	if cfg.AuthMethod == "appRole" {
-		cfg.AppRoleID = os.Getenv("VAULT_APPROLE_ROLE_ID")
-		cfg.AppRoleSecretID = os.Getenv("VAULT_APPROLE_SECRET_ID")
+	// Match case-insensitively so operators can pass "approle", "appRole",
+	// or "app-role"; vault.NewClient normalizes the same way internally.
+	switch normalizeVaultAuthMethod(cfg.AuthMethod) {
+	case "appRole":
+		cfg.AppRoleID = firstNonEmpty(
+			getenv("VAULT_ROLE_ID"),
+			getenv("VAULT_APPROLE_ROLE_ID"),
+		)
+		cfg.AppRoleSecretID = firstNonEmpty(
+			getenv("VAULT_SECRET_ID"),
+			getenv("VAULT_APPROLE_SECRET_ID"),
+		)
+	case "token":
+		cfg.Token = getenv("VAULT_TOKEN")
 	}
-	if cfg.AuthMethod == "token" {
-		cfg.Token = os.Getenv("VAULT_TOKEN")
+	return cfg, true
+}
+
+// normalizeVaultAuthMethod mirrors the normalization vault.NewClient applies,
+// so buildVaultClient can decide which credential env vars to read. Returns
+// the canonical spelling ("kubernetes", "appRole", "token") or the lower-cased
+// input for anything unrecognized.
+func normalizeVaultAuthMethod(m string) string {
+	switch strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(m)) {
+	case "kubernetes", "k8s":
+		return "kubernetes"
+	case "approle":
+		return "appRole"
+	case "token":
+		return "token"
+	default:
+		return strings.ToLower(m)
 	}
-	return vault.NewClient(context.Background(), cfg)
+}
+
+// firstNonEmpty returns the first non-empty string in vals, or "".
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // buildS3Client constructs an s3.Client from environment variables.

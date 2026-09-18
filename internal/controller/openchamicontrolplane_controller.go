@@ -80,8 +80,18 @@ const (
 // OpenCHAMIControlPlaneReconciler reconciles an OpenCHAMIControlPlane object.
 type OpenCHAMIControlPlaneReconciler struct {
 	client.Client
-	Scheme      *runtime.Scheme
-	Recorder    record.EventRecorder
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
+
+	// VaultClient / S3Client are OPTIONAL process-wide OVERRIDES. When set
+	// they are used for every CR (see clients.go vaultClientFor/s3ClientFor);
+	// when nil, the clients are built per-CR from spec.platform.*.
+	//
+	// PROTOTYPE (issue #15): these were previously the ONLY source of the
+	// clients, built from env vars in cmd/operator/main.go. They are kept
+	// as an override for unit tests (which inject fakes) and as a dev
+	// escape hatch for the "token" Vault auth method that the CRD enum
+	// cannot express. Production leaves them nil.
 	VaultClient vault.Client
 	S3Client    s3.Client
 	DryRun      bool
@@ -158,11 +168,28 @@ func (r *OpenCHAMIControlPlaneReconciler) reconcileAll(ctx context.Context, cp *
 		ObservedGeneration: cp.Generation,
 	})
 
+	// Build the Vault and S3 clients this CR needs from its own spec
+	// (spec.platform.*) plus the Secrets that spec references. See
+	// clients.go. When unconfigured/unavailable these return nil and the
+	// relevant sub-reconciler reports its condition False + requeues.
+	//
+	// PROTOTYPE (issue #15): replaces the process-wide r.VaultClient /
+	// r.S3Client env-built clients. Those struct fields are now an optional
+	// override consumed inside the factories (tests / dev escape hatch).
+	vaultClient, err := r.vaultClientFor(ctx, cp)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("building vault client: %w", err)
+	}
+	s3c, err := r.s3ClientFor(ctx, cp)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("building s3 client: %w", err)
+	}
+
 	subs := []reconcilers.SubReconciler{
 		&reconcilers.NamespaceReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.RBACReconciler{Client: r.Client, Recorder: r.Recorder},
-		&reconcilers.VaultReconciler{Client: r.Client, Recorder: r.Recorder, VaultClient: r.VaultClient},
-		&reconcilers.BucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: r.S3Client},
+		&reconcilers.VaultReconciler{Client: r.Client, Recorder: r.Recorder, VaultClient: vaultClient},
+		&reconcilers.BucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: s3c},
 		&reconcilers.DatabaseReconciler{Client: r.Client, Recorder: r.Recorder},
 		// ServiceIdentity provisions the per-cluster mTLS CA and the
 		// downstream server / client certs *before* tokensmith starts,
@@ -184,7 +211,7 @@ func (r *OpenCHAMIControlPlaneReconciler) reconcileAll(ctx context.Context, cp *
 		&reconcilers.NetworkPoliciesReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.TopologyReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.ServiceMonitorReconciler{Client: r.Client, Recorder: r.Recorder},
-		&reconcilers.LogBucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: r.S3Client},
+		&reconcilers.LogBucketReconciler{Client: r.Client, Recorder: r.Recorder, S3Client: s3c},
 		&reconcilers.FunicularReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.LogqCompactorReconciler{Client: r.Client, Recorder: r.Recorder},
 		&reconcilers.LogqQueryReconciler{Client: r.Client, Recorder: r.Recorder},
@@ -287,21 +314,41 @@ func (r *OpenCHAMIControlPlaneReconciler) reconcileDelete(ctx context.Context, c
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting namespace: %w", err)
 	}
 
-	if cp.Annotations[annotationCleanupVault] == annotationOptInTrue && r.VaultClient != nil {
-		prefix := "openchami/" + cp.Spec.ClusterName + "/"
-		if err := r.VaultClient.DeleteClusterPaths(ctx, prefix); err != nil {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting vault paths: %w", err)
+	// PROTOTYPE (issue #15): build the cleanup clients from the CR spec,
+	// same as the reconcile path. Note: on deletion the namespace (and
+	// therefore the VSO-synced s3-credentials Secret) may already be gone,
+	// in which case s3ClientFor returns nil and the opt-in bucket cleanup
+	// is skipped. This is a known limitation of the prototype — see the
+	// OPEN QUESTIONS note in clients.go about credential provenance for
+	// cleanup. A production implementation likely needs cleanup creds that
+	// outlive the namespace.
+	if cp.Annotations[annotationCleanupVault] == annotationOptInTrue {
+		vaultClient, err := r.vaultClientFor(ctx, cp)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("building vault client for cleanup: %w", err)
+		}
+		if vaultClient != nil {
+			prefix := "openchami/" + cp.Spec.ClusterName + "/"
+			if err := vaultClient.DeleteClusterPaths(ctx, prefix); err != nil {
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting vault paths: %w", err)
+			}
 		}
 	}
 
-	if cp.Annotations[annotationCleanupS3] == annotationOptInTrue && r.S3Client != nil {
-		bucket := reconcilers.BootBucketName(cp)
-		if err := r.S3Client.DeleteBucket(ctx, bucket); err != nil {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting s3 bucket: %w", err)
+	if cp.Annotations[annotationCleanupS3] == annotationOptInTrue {
+		s3c, err := r.s3ClientFor(ctx, cp)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("building s3 client for cleanup: %w", err)
 		}
-		logBucket := reconcilers.LogBucketName(cp)
-		if err := r.S3Client.DeleteBucket(ctx, logBucket); err != nil {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting log s3 bucket: %w", err)
+		if s3c != nil {
+			bucket := reconcilers.BootBucketName(cp)
+			if err := s3c.DeleteBucket(ctx, bucket); err != nil {
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting s3 bucket: %w", err)
+			}
+			logBucket := reconcilers.LogBucketName(cp)
+			if err := s3c.DeleteBucket(ctx, logBucket); err != nil {
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting log s3 bucket: %w", err)
+			}
 		}
 	}
 
