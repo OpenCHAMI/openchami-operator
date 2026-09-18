@@ -385,19 +385,33 @@ func TestVaultReconciler_AppRoleSecretIDBootstrap(t *testing.T) {
 	if want := "fake-secret-id-" + paths.AppRoleServices; id != want {
 		t.Errorf("expected secret-id %q, got %q", want, id)
 	}
+	if got := sec.Annotations[appRoleRoleIDAnnotation]; got != "fake-role-id-"+paths.AppRoleServices {
+		t.Errorf("expected RoleID binding annotation, got %q", got)
+	}
+	if got := sec.Labels[labelManagedBy]; got != managedByValue {
+		t.Errorf("expected managed-by label %q, got %q", managedByValue, got)
+	}
 }
 
 // TestVaultReconciler_AppRoleSecretIDIdempotent asserts a valid SecretID is
 // preserved across reconciles: the operator must not rotate a working SecretID
-// (which would churn VSO's cached login) when the Secret already carries one.
+// (which would churn VSO's cached login) when the Secret already carries one
+// bound to the current RoleID.
 func TestVaultReconciler_AppRoleSecretIDIdempotent(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newAppRoleControlPlane("beta")
 
+	// The fake EnsureAppRole returns "fake-role-id-<role>"; the stored
+	// SecretID must be annotated with that same RoleID to be considered bound
+	// to the current AppRole incarnation.
+	paths := vault.Paths("beta")
 	existing := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
 			Namespace: ControlPlaneNamespace(cp),
+			Annotations: map[string]string{
+				appRoleRoleIDAnnotation: "fake-role-id-" + paths.AppRoleServices,
+			},
 		},
 		Data: map[string][]byte{appRoleSecretIDKey: []byte("preexisting-secret-id")},
 	}
@@ -418,6 +432,84 @@ func TestVaultReconciler_AppRoleSecretIDIdempotent(t *testing.T) {
 	}
 	if got := string(sec.Data[appRoleSecretIDKey]); got != "preexisting-secret-id" {
 		t.Errorf("expected existing secret-id preserved, got %q", got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDRegeneratesOnRoleIDMismatch covers the
+// AppRole/Vault recreation case: the Kubernetes Secret survives (e.g. the
+// namespace was untouched) but Vault was reset, so the recreated AppRole has a
+// new RoleID. The stored SecretID was minted against the OLD RoleID and would
+// now 403. The operator must detect the mismatch via the binding annotation
+// and regenerate.
+func TestVaultReconciler_AppRoleSecretIDRegeneratesOnRoleIDMismatch(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("epsilon")
+
+	stale := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+			Annotations: map[string]string{
+				appRoleRoleIDAnnotation: "old-role-id-from-a-previous-vault",
+			},
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("stale-secret-id")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, stale).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertCalled(t, "GenerateSecretID")
+	paths := vault.Paths("epsilon")
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := string(sec.Data[appRoleSecretIDKey]); got == "stale-secret-id" || got == "" {
+		t.Errorf("expected a freshly generated secret-id, got %q", got)
+	}
+	if got := sec.Annotations[appRoleRoleIDAnnotation]; got != "fake-role-id-"+paths.AppRoleServices {
+		t.Errorf("expected RoleID annotation rebound to current RoleID, got %q", got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDAdoptsUnboundSecret covers a Secret an
+// administrator created by hand (or a pre-upgrade operator wrote) that carries
+// an `id` but no RoleID binding annotation. Its provenance is unknown, so the
+// operator regenerates and stamps the binding annotation, taking ownership.
+func TestVaultReconciler_AppRoleSecretIDAdoptsUnboundSecret(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("zeta")
+
+	unbound := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("admin-supplied-id")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, unbound).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertCalled(t, "GenerateSecretID")
+	paths := vault.Paths("zeta")
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := sec.Annotations[appRoleRoleIDAnnotation]; got != "fake-role-id-"+paths.AppRoleServices {
+		t.Errorf("expected RoleID binding annotation stamped, got %q", got)
 	}
 }
 
