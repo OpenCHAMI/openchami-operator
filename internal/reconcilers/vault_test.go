@@ -14,9 +14,11 @@ import (
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -334,4 +336,153 @@ func TestBuildVaultStaticSecret_UnknownSuffixPanics(t *testing.T) {
 	r := &VaultReconciler{}
 	cp := newControlPlane("audit-cluster")
 	_ = r.buildVaultStaticSecret(cp, "no-such-suffix", vault.Paths("audit-cluster"))
+}
+
+// newAppRoleControlPlane returns a cluster configured for appRole auth with a
+// conventional AppRoleSecretRef, mirroring what `ochami-admin init --vault-auth
+// appRole` produces.
+func newAppRoleControlPlane(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
+	cp := newControlPlane(name)
+	cp.Spec.Platform.Vault.AuthMethod = openchamiv1alpha1.VaultAuthMethodAppRole
+	cp.Spec.Platform.Vault.AppRoleSecretRef = &corev1.LocalObjectReference{
+		Name: name + "-vault-approle",
+	}
+	return cp
+}
+
+// TestVaultReconciler_AppRoleSecretIDBootstrap is the primary regression test
+// for issue #54: on a fresh appRole install the operator must generate a
+// SecretID and create the Kubernetes Secret VSO reads (keyed `id`) so VSO can
+// authenticate. Previously the operator only set the RoleID in VaultAuth and
+// left the SecretID Secret to an out-of-band admin step, so VSO logins 403'd.
+func TestVaultReconciler_AppRoleSecretIDBootstrap(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	paths := vault.Paths("alpha")
+	v.AssertCalled(t, "EnsureAppRole")
+	v.AssertCalled(t, "GenerateSecretID")
+	if got := v.CallCount("GenerateSecretID"); got != 1 {
+		t.Fatalf("expected exactly one GenerateSecretID call, got %d", got)
+	}
+
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("expected approle secret %s to exist: %v", key, err)
+	}
+	id := string(sec.Data[appRoleSecretIDKey])
+	if id == "" {
+		t.Fatalf("expected non-empty %q key in approle secret, got %+v", appRoleSecretIDKey, sec.Data)
+	}
+	if want := "fake-secret-id-" + paths.AppRoleServices; id != want {
+		t.Errorf("expected secret-id %q, got %q", want, id)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDIdempotent asserts a valid SecretID is
+// preserved across reconciles: the operator must not rotate a working SecretID
+// (which would churn VSO's cached login) when the Secret already carries one.
+func TestVaultReconciler_AppRoleSecretIDIdempotent(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("beta")
+
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("preexisting-secret-id")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, existing).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertNotCalled(t, "GenerateSecretID")
+
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := string(sec.Data[appRoleSecretIDKey]); got != "preexisting-secret-id" {
+		t.Errorf("expected existing secret-id preserved, got %q", got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDRegeneratesWhenEmpty asserts the operator
+// re-provisions a SecretID when the Secret exists but its `id` key is missing
+// or empty — the exact namespace-recreation scenario in issue #54 where the
+// Secret may be recreated blank while the Vault-side AppRole persists.
+func TestVaultReconciler_AppRoleSecretIDRegeneratesWhenEmpty(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("gamma")
+
+	blank := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, blank).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertCalled(t, "GenerateSecretID")
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := string(sec.Data[appRoleSecretIDKey]); got == "" {
+		t.Errorf("expected a freshly generated secret-id, got empty")
+	}
+}
+
+// TestVaultReconciler_AppRoleVaultAuthWiring asserts the produced VaultAuth
+// carries the live RoleID (not the role name) and references the SecretID
+// Secret by name — the two halves of the AppRole credential VSO needs.
+func TestVaultReconciler_AppRoleVaultAuthWiring(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("delta")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var auth vsov1beta1.VaultAuth
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: "openchami-" + cp.Spec.ClusterName}
+	if err := c.Get(context.Background(), key, &auth); err != nil {
+		t.Fatalf("reading VaultAuth: %v", err)
+	}
+	if auth.Spec.AppRole == nil {
+		t.Fatalf("expected VaultAuth.spec.appRole to be set")
+	}
+	paths := vault.Paths("delta")
+	if want := "fake-role-id-" + paths.AppRoleServices; auth.Spec.AppRole.RoleID != want {
+		t.Errorf("expected RoleID %q, got %q", want, auth.Spec.AppRole.RoleID)
+	}
+	if auth.Spec.AppRole.SecretRef != cp.Spec.Platform.Vault.AppRoleSecretRef.Name {
+		t.Errorf("expected SecretRef %q, got %q",
+			cp.Spec.Platform.Vault.AppRoleSecretRef.Name, auth.Spec.AppRole.SecretRef)
+	}
 }
