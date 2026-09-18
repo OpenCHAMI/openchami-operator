@@ -56,22 +56,17 @@ spec:
       authMethod: appRole
 
       # Kubernetes Secret holding the AppRole secret_id (key: `id`). VSO
-      # reads it from the per-cluster namespace `openchami-<clusterName>`,
-      # so the namespace must exist and contain the Secret BEFORE the CR
-      # is applied (the operator creates `openchami-<clusterName>` itself,
-      # but VSO's first auth round happens early enough that pre-staging is
-      # the reliable path).
+      # reads it from the per-cluster namespace `openchami-<clusterName>`.
       #
-      # Provision step (run once, out of band):
+      # The operator provisions this Secret for you: after ensuring the
+      # openchami-<clusterName>-services AppRole it generates a secret_id,
+      # writes it here under the `id` key, and stamps the annotation
+      # openchami.org/vault-approle-role-id. No out-of-band `kubectl create
+      # secret` step is required for a normal install (issue #54). The
+      # operator's Vault identity needs create/update on
+      # auth/approle/role/<role>/secret-id — see docs/install-production.md §6.
       #
-      #   kubectl create namespace openchami-venado
-      #   ROLE_ID=$(vault read  -field=role_id auth/approle/role/openchami-venado-services/role-id)
-      #   SECRET_ID=$(vault write -f -field=secret_id auth/approle/role/openchami-venado-services/secret-id)
-      #   kubectl -n openchami-venado create secret generic venado-vault-approle \
-      #     --from-literal=id="$SECRET_ID" \
-      #     --from-literal=role_id="$ROLE_ID"
-      #
-      # See docs/install-production.md §6 for the matching Vault policy.
+      # Manual/air-gapped staging is still supported; see §8.1 of that doc.
       appRoleSecretRef:
         name: venado-vault-approle        # CHANGEME
 

@@ -47,9 +47,14 @@ type Client interface {
 	// creates the signing key, an assignment, and an OIDC client, then returns
 	// the client's generated client_id and client_secret so the caller can
 	// materialize them into the tokensmith OIDC Kubernetes Secret.
-	// Only called when tokensmith.oidcProvider=vault. Idempotent: repeated
-	// calls return the same client_id and (Vault-preserved) client_secret.
-	EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string) (OIDCClientCredentials, error)
+	// redirectURIs sets the client's allowed redirect (callback) URIs for the
+	// authorization-code flow; an empty slice leaves the client with no
+	// allowed redirects (authorization requests will fail with
+	// invalid_redirect_uri). Only called when tokensmith.oidcProvider=vault.
+	// Idempotent: repeated calls return the same client_id and
+	// (Vault-preserved) client_secret and reconcile redirect_uris to the
+	// supplied list.
+	EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string, redirectURIs []string) (OIDCClientCredentials, error)
 
 	// DeleteClusterPaths deletes all KV paths under prefix.
 	// Used during cluster deletion when cleanup annotation is set.

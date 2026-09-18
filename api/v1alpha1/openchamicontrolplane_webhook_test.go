@@ -358,6 +358,37 @@ func TestValidateCreate_TokensmithExternalRequiresIssuer(t *testing.T) {
 	expectInvalid(t, err, "oidcIssuerURL")
 }
 
+func TestValidateCreate_OIDCRedirectURIsValid(t *testing.T) {
+	w := newWebhook(t)
+	c := newFixtureCluster("a")
+	c.Spec.Services.Tokensmith.OIDCRedirectURIs = []string{
+		"https://example.org/oidc/callback",
+		"http://127.0.0.1:8250/oidc/callback",
+	}
+	if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+		t.Fatalf("expected valid redirect URIs to pass, got: %v", err)
+	}
+}
+
+func TestValidateCreate_OIDCRedirectURIsRejectsMalformed(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		uri  string
+	}{
+		{"relative", "/oidc/callback"},
+		{"non-http scheme", "ftp://example.org/callback"},
+		{"no host", "https://"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Services.Tokensmith.OIDCRedirectURIs = []string{tc.uri}
+			_, err := w.ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, "oidcRedirectURIs")
+		})
+	}
+}
+
 func TestValidateCreate_ImagesPinnedRequiresMatchingEntries(t *testing.T) {
 	w := newWebhook(t)
 	c := newFixtureCluster("a")

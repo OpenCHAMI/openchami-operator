@@ -111,6 +111,12 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/default") {
 		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER to contain vault issuer suffix, got %q", oidcIssuer)
 	}
+	// TOKENSMITH_OIDC_PROVIDER must be derived from the Vault ADDRESS (shared
+	// source of truth with the Vault reconciler's config issuer), NOT the
+	// OpenCHAMI domain — otherwise the `iss` Vault mints won't match.
+	if want := VaultOIDCProviderURL(cp); oidcIssuer != want {
+		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER=%q (Vault-address derived), got %q", want, oidcIssuer)
+	}
 	wantIssuer := "https://" + cp.Spec.Domain
 	if tsIssuer != wantIssuer {
 		t.Errorf("expected TOKENSMITH_ISSUER=%q, got %q", wantIssuer, tsIssuer)
@@ -264,6 +270,57 @@ func tokensmithEnvValue(dep *appsv1.Deployment, name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// TestTokensmithReconciler_OIDCProviderModeEnv asserts that oidcProvider=vault
+// injects TOKENSMITH_OIDC_PROVIDER_MODE=vault so tokensmith selects its
+// Vault-specific provider implementation (JWT/JWKS validation) instead of
+// falling back to generic remote token introspection (which 403s against
+// Vault's OIDC provider). external must NOT set the mode.
+func TestTokensmithReconciler_OIDCProviderModeEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		issuer   string
+		wantMode string // "" means the env var must be absent
+	}{
+		{
+			name:     "vault sets provider mode",
+			provider: tokensmithOIDCProviderVault,
+			wantMode: tokensmithOIDCProviderVault,
+		},
+		{
+			name:     "external omits provider mode",
+			provider: tokensmithOIDCProviderExternal,
+			issuer:   "https://issuer.example/realm",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cp := newTokensmithCluster()
+			cp.Spec.Services.Tokensmith.OIDCProvider = test.provider
+			cp.Spec.Services.Tokensmith.OIDCIssuerURL = test.issuer
+
+			dep := (&TokensmithReconciler{}).buildDeployment(cp)
+			value, found := tokensmithEnvValue(dep, tokensmithOIDCProviderModeEnvName)
+
+			if test.wantMode == "" {
+				if found {
+					t.Fatalf("expected %s to be omitted for provider %q, got %q",
+						tokensmithOIDCProviderModeEnvName, test.provider, value)
+				}
+				return
+			}
+			if !found {
+				t.Fatalf("expected %s to be present for provider %q",
+					tokensmithOIDCProviderModeEnvName, test.provider)
+			}
+			if value != test.wantMode {
+				t.Fatalf("expected %s=%q, got %q", tokensmithOIDCProviderModeEnvName, test.wantMode, value)
+			}
+		})
+	}
 }
 
 func TestTokensmithReconciler_ReadyWhenAvailable(t *testing.T) {

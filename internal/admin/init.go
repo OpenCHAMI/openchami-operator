@@ -262,10 +262,12 @@ func (o *initOpts) buildCluster() *openchamiv1alpha1.OpenCHAMIControlPlane {
 		},
 	}
 
-	// AppRole auth: a Secret containing role_id/secret_id must be created
-	// out-of-band (invariant #7: no secrets in the spec). The webhook
-	// requires AppRoleSecretRef; we pre-populate it with a conventional
-	// name so the manifest applies cleanly once the Secret exists.
+	// AppRole auth: the webhook requires AppRoleSecretRef, so pre-populate it
+	// with a conventional name. The operator provisions the referenced Secret
+	// itself (generating the AppRole secret_id after ensuring the AppRole and
+	// writing it under the `id` key), so no out-of-band secret creation is
+	// required for a normal install — see internal/reconcilers/vault.go
+	// (ensureAppRoleSecretID) and docs/install-production.md §8.
 	if o.vaultAuth == initVaultAuthAppRole {
 		c.Spec.Platform.Vault.AppRoleSecretRef = &corev1.LocalObjectReference{
 			Name: o.clusterName + "-vault-approle",

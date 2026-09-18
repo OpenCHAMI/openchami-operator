@@ -282,6 +282,16 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
+	// 3b. OIDC redirect URIs must be absolute http(s) URLs. These are only
+	// consumed for oidcProvider=vault (they configure the operator-provisioned
+	// Vault OIDC client); reject malformed entries early rather than letting
+	// Vault fail the write. A relative or non-http(s) URI can never satisfy
+	// an authorization-code redirect.
+	allErrs = append(allErrs, validateOIDCRedirectURIs(
+		obj.Spec.Services.Tokensmith.OIDCRedirectURIs,
+		specPath.Child("services", "tokensmith", "oidcRedirectURIs"),
+	)...)
+
 	// 3a. ExternalEndpoint validation for the four HTTP services that
 	// support it. Setting an external endpoint requires Enabled=false
 	// (operator must not produce both an in-cluster Service and an
@@ -417,6 +427,32 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		)
 	}
 	return warnings, nil
+}
+
+// validateOIDCRedirectURIs checks each redirect URI is an absolute http(s) URL
+// with a host. Extracted from validate() so the per-entry branching does not
+// inflate that function's cyclomatic complexity.
+func validateOIDCRedirectURIs(uris []string, base *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	for i, uri := range uris {
+		p := base.Index(i)
+		u, err := url.Parse(uri)
+		if err != nil {
+			errs = append(errs, field.Invalid(p, uri,
+				fmt.Sprintf("must be a valid URL: %v", err)))
+			continue
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			errs = append(errs, field.Invalid(p, uri,
+				"must be an absolute http or https URL"))
+			continue
+		}
+		if u.Host == "" {
+			errs = append(errs, field.Invalid(p, uri,
+				"must include a host"))
+		}
+	}
+	return errs
 }
 
 // listOtherClusters returns every OpenCHAMIControlPlane on the API server except

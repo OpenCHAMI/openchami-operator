@@ -39,12 +39,20 @@ const (
 	tokensmithOIDCProviderVault    = "vault"
 	tokensmithOIDCProviderExternal = "external"
 
-	tokensmithOIDCIssuerSuffix = "/v1/identity/oidc/provider/default"
-
 	tokensmithOIDCClientSecretKey      = "client_secret"
 	tokensmithOIDCClientIDKey          = "client_id"
 	tokensmithOIDCIssuerEnvName        = "TOKENSMITH_OIDC_PROVIDER"
 	tokensmithOIDCIntrospectionEnvName = "TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT"
+
+	// tokensmithOIDCProviderModeEnvName selects which upstream OIDC provider
+	// implementation tokensmith uses. Setting the issuer URL alone is not
+	// enough: without the mode set to "vault", tokensmith falls back to its
+	// generic provider behaviour and attempts remote token introspection
+	// (provider_operation="introspect token" → 403), instead of using
+	// Vault's JWT/JWKS validation path. The operator therefore pairs
+	// TOKENSMITH_OIDC_PROVIDER=<vault issuer> with
+	// TOKENSMITH_OIDC_PROVIDER_MODE=vault whenever oidcProvider=vault.
+	tokensmithOIDCProviderModeEnvName = "TOKENSMITH_OIDC_PROVIDER_MODE"
 
 	// tokensmithIssuerEnvName is the `iss` claim value tokensmith stamps
 	// into every JWT it mints, and the public base URL where its OIDC
@@ -320,11 +328,23 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 
 	switch cp.Spec.Services.Tokensmith.OIDCProvider {
 	case tokensmithOIDCProviderVault:
-		base := strings.TrimSuffix(cp.Spec.Platform.Vault.Address, "/")
-		env = append(env, corev1.EnvVar{
-			Name:  tokensmithOIDCIssuerEnvName,
-			Value: base + tokensmithOIDCIssuerSuffix,
-		})
+		env = append(env,
+			corev1.EnvVar{
+				Name: tokensmithOIDCIssuerEnvName,
+				// Shared source of truth with the Vault reconciler
+				// (VaultOIDCIssuerBase): the URL here must equal the `iss`
+				// Vault stamps into its tokens, or exact-match validation
+				// fails. See VaultOIDCProviderURL in helpers.go.
+				Value: VaultOIDCProviderURL(cp),
+			},
+			// Select tokensmith's Vault-specific provider implementation.
+			// Without this the issuer URL alone leaves tokensmith on its
+			// generic provider, which attempts remote introspection (403).
+			corev1.EnvVar{
+				Name:  tokensmithOIDCProviderModeEnvName,
+				Value: tokensmithOIDCProviderVault,
+			},
+		)
 	case tokensmithOIDCProviderExternal:
 		env = append(env, corev1.EnvVar{
 			Name:  tokensmithOIDCIssuerEnvName,

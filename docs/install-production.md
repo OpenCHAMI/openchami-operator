@@ -386,6 +386,42 @@ vault kv put "$PREFIX/oidc/tokensmith-client" \
 Token TTLs at 15m/1h are dev defaults — production should match your
 existing Vault token-rotation policy.
 
+### 6.3 Operator Vault policy
+
+The commands above are the *bootstrap* identity's work. In dev
+(`seed-vault.sh`) that identity is the root token; in production the
+operator authenticates with its own AppRole or Kubernetes-auth role whose
+token must carry a policy broad enough to run the reconciler's Vault
+operations. Beyond the per-cluster `openchami-<cluster>-services` policy
+(which is what the *services* read, not the operator), the operator's own
+identity needs to manage mounts, policies, the AppRole, its SecretID, and
+the OIDC provider:
+
+```hcl
+# KV mount + per-cluster secrets the operator seeds
+path "sys/mounts/openchami"          { capabilities = ["read", "create", "update"] }
+path "openchami/*"                   { capabilities = ["create", "read", "update", "delete", "list"] }
+
+# Per-cluster services policy the operator writes
+path "sys/policies/acl/openchami-*"  { capabilities = ["create", "read", "update"] }
+
+# AppRole role + RoleID + SecretID (the operator now mints the SecretID
+# for VSO — this is the new capability required by issue #54's fix)
+path "auth/approle/role/openchami-*"          { capabilities = ["create", "read", "update", "delete"] }
+path "auth/approle/role/openchami-*/role-id"  { capabilities = ["read"] }
+path "auth/approle/role/openchami-*/secret-id"{ capabilities = ["create", "update"] }
+
+# OIDC provider for tokensmith (oidcProvider=vault)
+path "identity/oidc/*"               { capabilities = ["create", "read", "update"] }
+```
+
+Scope the path globs to your cluster naming to keep the operator least-
+privileged. The `.../secret-id` line is the only addition needed for the
+operator to own the AppRole SecretID lifecycle; if you previously staged
+the SecretID by hand (see section 8.1) and want to keep doing so, the
+operator will still adopt/replace it, so granting `secret-id` is
+recommended even then.
+
 ---
 
 ## 7. Provision S3 bucket access
@@ -425,9 +461,36 @@ model.
 
 ## 8. Stage the per-cluster AppRole Secret
 
-VSO authenticates to Vault using the AppRole `secret_id` stored as a
-Kubernetes Secret in the **per-cluster namespace** (not the namespace
-where the CR lives). The namespace must exist before VSO's first auth.
+**The operator provisions this Secret for you.** After it ensures the
+`openchami-<cluster>-services` AppRole, the vault reconciler generates a
+`secret_id`, writes it to the Kubernetes Secret named by
+`spec.platform.vault.appRoleSecretRef` (key `id`) in the per-cluster
+namespace, and stamps it with the annotation
+`openchami.org/vault-approle-role-id` recording which RoleID it was minted
+against. VSO reads `id` for the SecretID and gets the RoleID from the
+operator-owned `VaultAuth` resource. You do **not** need to create this
+Secret by hand for a normal install (this closes the bootstrap gap from
+issue #54).
+
+The operator regenerates the SecretID only when it is missing, empty, or
+bound to a stale RoleID (e.g. Vault or the AppRole was recreated, changing
+the RoleID). A valid SecretID minted against the current RoleID is
+preserved across reconciles — the operator never rotates a working
+credential out from under VSO. To force rotation, delete the Secret (or
+clear its `id`) and let the next reconcile re-provision it.
+
+> Note: because the operator now mints SecretIDs, its Vault identity needs
+> `create`/`update` on `auth/approle/role/<role>/secret-id` — see the
+> operator Vault policy in section 6.
+
+### 8.1 Manual staging (legacy / air-gapped)
+
+If your security model requires an administrator to own the SecretID
+lifecycle out of band, pre-create the Secret before the operator reconciles
+and the operator will adopt an unbound Secret (rewriting it with an
+operator-minted SecretID on first reconcile). To keep a fully
+admin-managed SecretID, stamp the binding annotation yourself so the
+operator recognises it as bound to the current RoleID:
 
 ```sh
 kubectl create namespace openchami-venado
@@ -438,14 +501,17 @@ SECRET_ID=$(vault write -f -field=secret_id auth/approle/role/openchami-venado-s
 kubectl -n openchami-venado create secret generic venado-vault-approle \
   --from-literal=id="$SECRET_ID" \
   --from-literal=role_id="$ROLE_ID"
+
+kubectl -n openchami-venado annotate secret venado-vault-approle \
+  "openchami.org/vault-approle-role-id=$ROLE_ID"
 ```
 
 Keys: `id` holds the secret_id (VSO's required key name); `role_id` is
 kept for human inspection — VSO discovers `role_id` from the operator-owned
-`VaultAuth` resource, not from this Secret.
-
-Rotation: re-run the `vault write ... secret-id` step and update the
-Secret in place; VSO picks up the change on its next refresh.
+`VaultAuth` resource, not from this Secret. Without the
+`openchami.org/vault-approle-role-id` annotation matching the current
+RoleID, the operator treats the Secret as unbound and replaces its `id`
+with a freshly minted SecretID.
 
 ---
 

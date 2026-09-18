@@ -13,8 +13,10 @@ import (
 
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +34,26 @@ const (
 	vsoKindVaultConnection   = "VaultConnection"
 	vsoKindVaultAuth         = "VaultAuth"
 	vsoKindVaultStaticSecret = "VaultStaticSecret"
+
+	// appRoleSecretIDKey is the data key VSO reads the AppRole secret_id
+	// from when a VaultAuth's appRole.secretRef points at a Kubernetes
+	// Secret. VSO expects the SecretID under the key `id`; the RoleID is
+	// carried separately in the VaultAuth spec (see buildVaultAuth), so
+	// this Secret contains only the SecretID.
+	appRoleSecretIDKey = "id"
+
+	// appRoleRoleIDAnnotation records which AppRole RoleID the stored
+	// SecretID was generated against. A SecretID is only valid for the
+	// specific AppRole incarnation it was minted from, so if Vault (or the
+	// AppRole) is recreated the RoleID changes and any previously stored
+	// SecretID becomes a stale 403. Binding the SecretID to its RoleID lets
+	// ensureAppRoleSecretID detect that mismatch and regenerate, while still
+	// preserving a valid SecretID across ordinary reconciles (RoleID
+	// unchanged). It also marks the Secret as operator-generated: a
+	// user-supplied Secret that predates this operator won't carry the
+	// annotation, so we adopt it by writing the annotation on the next
+	// (re)generation rather than trusting a bare `id` of unknown provenance.
+	appRoleRoleIDAnnotation = "openchami.org/vault-approle-role-id"
 )
 
 // vssEntries lists every VaultStaticSecret produced by this reconciler and
@@ -122,6 +144,19 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 			return r.fail(cp, fmt.Errorf("ensuring approle: %w", err))
 		}
 		appRoleID = roleID
+
+		// The operator owns the whole AppRole credential lifecycle: having
+		// created the AppRole (RoleID above) it must also supply VSO with a
+		// SecretID. VSO reads the SecretID from the Kubernetes Secret named
+		// by spec.platform.vault.appRoleSecretRef; if that Secret is missing
+		// (fresh install, or the namespace was deleted and recreated) VSO
+		// logins fail with 403 and no VaultStaticSecret ever materializes.
+		// ensureAppRoleSecretID generates a SecretID and writes the Secret,
+		// but only when it is absent, empty, or bound to a stale RoleID, so a
+		// valid SecretID is never rotated out from under a working VSO.
+		if err := r.ensureAppRoleSecretID(ctx, cp, paths, appRoleID); err != nil {
+			return r.fail(cp, fmt.Errorf("ensuring approle secret-id: %w", err))
+		}
 	default: // kubernetes
 		if err := r.VaultClient.EnsureKubernetesRole(ctx, paths.K8sRoleServices, vault.KubernetesRoleConfig{
 			BoundServiceAccountNames:      serviceAccountNames,
@@ -134,13 +169,20 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 	}
 
 	if cp.Spec.Services.Tokensmith.OIDCProvider == "vault" {
-		// Vault rejects issuer URLs that contain a path: it accepts only
-		// scheme + host (+ optional port) and appends the OIDC provider
-		// path itself. The cluster-name partition is carried by the OIDC
-		// key (`openchami-<clusterName>`) created inside EnsureOIDCConfig,
-		// not by the issuer URL.
-		issuer := fmt.Sprintf("https://%s", cp.Spec.Domain)
-		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, issuer)
+		// Vault requires the identity/oidc/config issuer to be scheme+host
+		// (+port) with no path; it appends the provider path itself when
+		// minting `iss`. The issuer MUST be derived from the Vault address —
+		// the same source tokensmith uses for TOKENSMITH_OIDC_PROVIDER — so
+		// the minted `iss` exactly matches what tokensmith validates against.
+		// Deriving it from spec.domain instead produced iss=https://<domain>/...
+		// while tokensmith expected the Vault .svc URL, so every token was
+		// rejected. Using the Vault address also avoids fighting over the
+		// Vault-GLOBAL identity/oidc/config when several control planes share
+		// one Vault. The cluster-name partition is carried by the OIDC key
+		// (`openchami-<clusterName>`) inside EnsureOIDCConfig, not the issuer.
+		issuer := VaultOIDCIssuerBase(cp)
+		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, issuer,
+			cp.Spec.Services.Tokensmith.OIDCRedirectURIs)
 		if err != nil {
 			return r.fail(cp, fmt.Errorf("ensuring oidc config: %w", err))
 		}
@@ -286,6 +328,111 @@ func (r *VaultReconciler) applyVSOResources(ctx context.Context, cp *openchamiv1
 				obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
 		}
 	}
+	return nil
+}
+
+// ensureAppRoleSecretID generates an AppRole secret_id and materializes the
+// Kubernetes Secret VSO reads it from. This closes the bootstrap and
+// namespace-recreation gap (issue #54): the operator already owns the AppRole
+// (policy, role, RoleID → VaultAuth), so it also owns the SecretID rather than
+// leaving it to an out-of-band administrator step.
+//
+// The Secret is named by spec.platform.vault.appRoleSecretRef and lives in the
+// control-plane namespace. VSO reads the SecretID from the key `id`
+// (appRoleSecretIDKey); the RoleID is supplied separately via the VaultAuth
+// spec, so this Secret carries only the SecretID.
+//
+// Regeneration policy — generate a fresh SecretID only when one of:
+//
+//   - the Secret is absent (fresh install, or the namespace was deleted and
+//     recreated);
+//   - the Secret carries an empty/missing `id`;
+//   - the stored SecretID was minted against a *different* RoleID than the
+//     current AppRole (Vault or the AppRole was reset/recreated, so the old
+//     SecretID is now a stale 403). The binding is recorded in the
+//     appRoleRoleIDAnnotation.
+//
+// Otherwise the existing SecretID is preserved untouched. Because the AppRole
+// is created with SecretIDTTL="0" (non-expiring), a SecretID minted against the
+// current RoleID stays valid indefinitely, so regenerating on every reconcile
+// would needlessly leak SecretIDs in Vault and churn VSO's cached login.
+//
+// A Secret lacking the RoleID annotation (e.g. one an administrator created by
+// hand before this operator version) is treated as unbound and regenerated so
+// the operator can take ownership with a SecretID of known provenance; the
+// annotation it writes marks the Secret operator-generated from then on. An
+// admin who wants to force rotation deletes the Secret (or clears its `id`).
+//
+// The operator-written Secret carries the standard managed-by / app labels so
+// it is identifiable as operator-generated. No ownerReference is set: the
+// OpenCHAMIControlPlane is namespaced and typically lives in a *different*
+// namespace than the control plane it manages, and Kubernetes forbids a
+// cross-namespace owner. Cleanup instead happens when the control plane is
+// deleted and the operator tears down the entire openchami-<cluster> namespace
+// (see the controller's deletion path), which garbage-collects this Secret.
+func (r *VaultReconciler) ensureAppRoleSecretID(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, paths vault.VaultPaths, roleID string) error {
+	ref := cp.Spec.Platform.Vault.AppRoleSecretRef
+	if ref == nil || ref.Name == "" {
+		// The admission webhook requires appRoleSecretRef when
+		// authMethod=appRole, so this should be unreachable; guard anyway so
+		// a misconfigured object fails loudly rather than panicking.
+		return fmt.Errorf("appRoleSecretRef must be set when authMethod is appRole")
+	}
+	ns := ControlPlaneNamespace(cp)
+
+	var existing corev1.Secret
+	err := r.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: ref.Name}, &existing)
+	switch {
+	case err == nil:
+		// Preserve the existing SecretID only when it is non-empty AND was
+		// minted against the current RoleID. A RoleID mismatch (or a missing
+		// binding annotation) means the stored SecretID cannot be trusted to
+		// authenticate, so fall through and regenerate.
+		id, hasID := existing.Data[appRoleSecretIDKey]
+		boundRoleID := existing.Annotations[appRoleRoleIDAnnotation]
+		if hasID && len(id) > 0 && boundRoleID == roleID && roleID != "" {
+			return nil
+		}
+	case apierrors.IsNotFound(err):
+		// Fall through: create the Secret below.
+	default:
+		return fmt.Errorf("reading approle secret %s/%s: %w", ns, ref.Name, err)
+	}
+
+	secretID, err := r.VaultClient.GenerateSecretID(ctx, paths.AppRoleServices)
+	if err != nil {
+		return fmt.Errorf("generating secret-id for %s: %w", paths.AppRoleServices, err)
+	}
+	if secretID == "" {
+		return fmt.Errorf("vault returned an empty secret-id for %s", paths.AppRoleServices)
+	}
+
+	secret := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ref.Name,
+			Namespace: ns,
+			Labels: map[string]string{
+				labelManagedBy: managedByValue,
+				labelAppName:   "vault-approle",
+			},
+			Annotations: map[string]string{
+				appRoleRoleIDAnnotation: roleID,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			appRoleSecretIDKey: []byte(secretID),
+		},
+	}
+	if err := r.Client.Patch(ctx, secret, client.Apply, //nolint:staticcheck // SSA via Patch
+		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
+		return fmt.Errorf("applying approle secret %s/%s: %w", ns, ref.Name, err)
+	}
+
+	RecordConditionEvent(r.Recorder, cp, corev1.EventTypeNormal,
+		conditions.ReasonReady,
+		fmt.Sprintf("Provisioned AppRole SecretID into Secret %s/%s for VSO", ns, ref.Name))
 	return nil
 }
 
