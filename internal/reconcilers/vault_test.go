@@ -7,6 +7,7 @@ package reconcilers
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -306,7 +307,7 @@ func TestVaultReconciler_OIDCProviderAuthorizesClient(t *testing.T) {
 	if wantID == "" {
 		t.Fatal("expected a generated client_id")
 	}
-	if !containsString(v.ProviderAllowedClientIDs, wantID) {
+	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
 		t.Errorf("expected provider allowed_client_ids to contain %q, got %v",
 			wantID, v.ProviderAllowedClientIDs)
 	}
@@ -328,10 +329,10 @@ func TestVaultReconciler_OIDCProviderPreservesOtherClients(t *testing.T) {
 	}
 
 	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
-	if !containsString(v.ProviderAllowedClientIDs, "some-other-admin-client") {
+	if !slices.Contains(v.ProviderAllowedClientIDs, "some-other-admin-client") {
 		t.Errorf("expected pre-existing client to be preserved, got %v", v.ProviderAllowedClientIDs)
 	}
-	if !containsString(v.ProviderAllowedClientIDs, wantID) {
+	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
 		t.Errorf("expected tokensmith client %q authorized, got %v", wantID, v.ProviderAllowedClientIDs)
 	}
 }
@@ -345,9 +346,9 @@ func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
 	v := vaultfake.NewClient()
 
 	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := r.Reconcile(context.Background(), cp); err != nil {
-			t.Fatalf("reconcile %d: %v", i, err)
+			t.Fatalf("reconcile: %v", err)
 		}
 	}
 
@@ -362,15 +363,6 @@ func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
 		t.Errorf("expected client_id authorized exactly once, got %d occurrences in %v",
 			n, v.ProviderAllowedClientIDs)
 	}
-}
-
-func containsString(s []string, want string) bool {
-	for _, v := range s {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestVaultReconciler_Unreachable(t *testing.T) {
