@@ -257,6 +257,21 @@ type TokensmithSpec struct {
 	// endpoint when provider discovery does not advertise one.
 	// +optional
 	OIDCIntrospectionEndpoint string `json:"oidcIntrospectionEndpoint,omitempty"`
+
+	// OIDCRedirectURIs is the list of allowed redirect (callback) URIs for
+	// the OIDC client the operator provisions when OIDCProvider is "vault".
+	// The OIDC authorization-code flow rejects any redirect_uri not in this
+	// list (Vault returns invalid_redirect_uri), so a client application
+	// (CLI or web) that performs interactive login must have its callback
+	// URL listed here.
+	//
+	// Only consumed when OIDCProvider is "vault"; ignored for "external"
+	// (where redirect URIs are configured on the external provider). Each
+	// entry must be an absolute http(s) URL. A localhost callback such as
+	// http://127.0.0.1:8250/oidc/callback is useful for CLI/dev login but
+	// should not be assumed as a production default.
+	// +optional
+	OIDCRedirectURIs []string `json:"oidcRedirectURIs,omitempty"`
 }
 
 // BootServiceSpec configures the boot-service.

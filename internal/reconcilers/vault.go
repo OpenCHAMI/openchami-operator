@@ -175,7 +175,8 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 		// key (`openchami-<clusterName>`) created inside EnsureOIDCConfig,
 		// not by the issuer URL.
 		issuer := fmt.Sprintf("https://%s", cp.Spec.Domain)
-		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, issuer)
+		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, issuer,
+			cp.Spec.Services.Tokensmith.OIDCRedirectURIs)
 		if err != nil {
 			return r.fail(cp, fmt.Errorf("ensuring oidc config: %w", err))
 		}

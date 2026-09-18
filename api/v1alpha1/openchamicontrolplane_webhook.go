@@ -282,6 +282,30 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
+	// 3b. OIDC redirect URIs must be absolute http(s) URLs. These are only
+	// consumed for oidcProvider=vault (they configure the operator-provisioned
+	// Vault OIDC client); reject malformed entries early rather than letting
+	// Vault fail the write. A relative or non-http(s) URI can never satisfy
+	// an authorization-code redirect.
+	for i, uri := range obj.Spec.Services.Tokensmith.OIDCRedirectURIs {
+		p := specPath.Child("services", "tokensmith", "oidcRedirectURIs").Index(i)
+		u, err := url.Parse(uri)
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(p, uri,
+				fmt.Sprintf("must be a valid URL: %v", err)))
+			continue
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			allErrs = append(allErrs, field.Invalid(p, uri,
+				"must be an absolute http or https URL"))
+			continue
+		}
+		if u.Host == "" {
+			allErrs = append(allErrs, field.Invalid(p, uri,
+				"must include a host"))
+		}
+	}
+
 	// 3a. ExternalEndpoint validation for the four HTTP services that
 	// support it. Setting an external endpoint requires Enabled=false
 	// (operator must not produce both an in-cluster Service and an

@@ -223,6 +223,124 @@ func TestVaultReconciler_OIDCClientCredentials(t *testing.T) {
 	}
 }
 
+// TestVaultReconciler_OIDCRedirectURIs asserts that redirect URIs configured on
+// the CR are threaded through to EnsureOIDCConfig so the Vault OIDC client
+// permits the authorization-code callback. Regression test for the
+// invalid_redirect_uri failure: an operator-created client with an empty
+// redirect_uris list cannot complete an authorization-code flow.
+func TestVaultReconciler_OIDCRedirectURIs(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	want := []string{
+		"https://alpha.test.local/oidc/callback",
+		"http://127.0.0.1:8250/oidc/callback",
+	}
+	cp.Spec.Services.Tokensmith.OIDCRedirectURIs = want
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := v.OIDCRedirectURIs[cp.Spec.ClusterName]
+	if len(got) != len(want) {
+		t.Fatalf("expected %d redirect URIs passed to EnsureOIDCConfig, got %v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("redirect URI[%d]: expected %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
+// TestVaultReconciler_OIDCProviderAuthorizesClient asserts the tokensmith OIDC
+// client's client_id is added to the provider's allowed_client_ids, so Vault
+// permits the client to use identity/oidc/provider/default (otherwise
+// /authorize fails with unauthorized_client).
+func TestVaultReconciler_OIDCProviderAuthorizesClient(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	if wantID == "" {
+		t.Fatal("expected a generated client_id")
+	}
+	if !containsString(v.ProviderAllowedClientIDs, wantID) {
+		t.Errorf("expected provider allowed_client_ids to contain %q, got %v",
+			wantID, v.ProviderAllowedClientIDs)
+	}
+}
+
+// TestVaultReconciler_OIDCProviderPreservesOtherClients asserts that
+// authorizing the tokensmith client preserves any other client IDs an
+// administrator intentionally authorized on the provider.
+func TestVaultReconciler_OIDCProviderPreservesOtherClients(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+	v.ProviderAllowedClientIDs = []string{"some-other-admin-client"}
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	if !containsString(v.ProviderAllowedClientIDs, "some-other-admin-client") {
+		t.Errorf("expected pre-existing client to be preserved, got %v", v.ProviderAllowedClientIDs)
+	}
+	if !containsString(v.ProviderAllowedClientIDs, wantID) {
+		t.Errorf("expected tokensmith client %q authorized, got %v", wantID, v.ProviderAllowedClientIDs)
+	}
+}
+
+// TestVaultReconciler_OIDCProviderIdempotent asserts repeated reconciles don't
+// duplicate the client ID in the provider's allowed_client_ids.
+func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+
+	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	n := 0
+	for _, id := range v.ProviderAllowedClientIDs {
+		if id == wantID {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("expected client_id authorized exactly once, got %d occurrences in %v",
+			n, v.ProviderAllowedClientIDs)
+	}
+}
+
+func containsString(s []string, want string) bool {
+	for _, v := range s {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestVaultReconciler_Unreachable(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("beta")
