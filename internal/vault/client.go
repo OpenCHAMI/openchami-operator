@@ -42,9 +42,14 @@ type Client interface {
 	// EnsureKubernetesRole creates or updates a Kubernetes auth role.
 	EnsureKubernetesRole(ctx context.Context, name string, cfg KubernetesRoleConfig) error
 
-	// EnsureOIDCConfig configures Vault's identity/oidc engine for a cluster.
-	// Only called when tokensmith.oidcProvider=vault.
-	EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string) error
+	// EnsureOIDCConfig configures Vault's identity/oidc engine for a cluster
+	// and provisions an OIDC client for tokensmith. It configures the issuer,
+	// creates the signing key, an assignment, and an OIDC client, then returns
+	// the client's generated client_id and client_secret so the caller can
+	// materialize them into the tokensmith OIDC Kubernetes Secret.
+	// Only called when tokensmith.oidcProvider=vault. Idempotent: repeated
+	// calls return the same client_id and (Vault-preserved) client_secret.
+	EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string) (OIDCClientCredentials, error)
 
 	// DeleteClusterPaths deletes all KV paths under prefix.
 	// Used during cluster deletion when cleanup annotation is set.
@@ -52,6 +57,16 @@ type Client interface {
 
 	// ListPaths lists all paths under prefix.
 	ListPaths(ctx context.Context, prefix string) ([]string, error)
+}
+
+// OIDCClientCredentials holds the credentials Vault generates for an
+// identity/oidc client. Both fields are assigned by Vault when the client is
+// created; the operator never chooses them.
+type OIDCClientCredentials struct {
+	// ClientID is the Vault-generated OAuth2 client_id.
+	ClientID string
+	// ClientSecret is the Vault-generated OAuth2 client_secret.
+	ClientSecret string
 }
 
 // AppRoleConfig configures an AppRole.

@@ -45,6 +45,10 @@ type Client struct {
 	// OIDCConfigs stores configured OIDC issuer URLs keyed by cluster name.
 	OIDCConfigs map[string]string
 
+	// OIDCClients stores the OIDC client credentials returned by
+	// EnsureOIDCConfig, keyed by cluster name.
+	OIDCClients map[string]vault.OIDCClientCredentials
+
 	// Errors injects errors keyed by method name.
 	// Set Errors["EnsureSecret"] = errors.New(...) to make every
 	// EnsureSecret call return that error.
@@ -62,6 +66,7 @@ func NewClient() *Client {
 		SecretIDs:   map[string]string{},
 		K8sRoles:    map[string]vault.KubernetesRoleConfig{},
 		OIDCConfigs: map[string]string{},
+		OIDCClients: map[string]vault.OIDCClientCredentials{},
 		Errors:      map[string]error{},
 	}
 }
@@ -165,15 +170,25 @@ func (c *Client) EnsureKubernetesRole(_ context.Context, name string, cfg vault.
 	return nil
 }
 
-func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName, issuerURL string) error {
+func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName, issuerURL string) (vault.OIDCClientCredentials, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.record("EnsureOIDCConfig", clusterName, issuerURL)
 	if err := c.Errors["EnsureOIDCConfig"]; err != nil {
-		return err
+		return vault.OIDCClientCredentials{}, err
 	}
 	c.OIDCConfigs[clusterName] = issuerURL
-	return nil
+	creds, ok := c.OIDCClients[clusterName]
+	if !ok {
+		// Mimic Vault: generate stable per-cluster credentials on first call
+		// and return the same values on subsequent calls (idempotent).
+		creds = vault.OIDCClientCredentials{
+			ClientID:     "fake-client-id-" + clusterName,
+			ClientSecret: "fake-client-secret-" + clusterName,
+		}
+		c.OIDCClients[clusterName] = creds
+	}
+	return creds, nil
 }
 
 func (c *Client) DeleteClusterPaths(_ context.Context, prefix string) error {
