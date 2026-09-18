@@ -169,12 +169,18 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 	}
 
 	if cp.Spec.Services.Tokensmith.OIDCProvider == "vault" {
-		// Vault rejects issuer URLs that contain a path: it accepts only
-		// scheme + host (+ optional port) and appends the OIDC provider
-		// path itself. The cluster-name partition is carried by the OIDC
-		// key (`openchami-<clusterName>`) created inside EnsureOIDCConfig,
-		// not by the issuer URL.
-		issuer := fmt.Sprintf("https://%s", cp.Spec.Domain)
+		// Vault requires the identity/oidc/config issuer to be scheme+host
+		// (+port) with no path; it appends the provider path itself when
+		// minting `iss`. The issuer MUST be derived from the Vault address —
+		// the same source tokensmith uses for TOKENSMITH_OIDC_PROVIDER — so
+		// the minted `iss` exactly matches what tokensmith validates against.
+		// Deriving it from spec.domain instead produced iss=https://<domain>/...
+		// while tokensmith expected the Vault .svc URL, so every token was
+		// rejected. Using the Vault address also avoids fighting over the
+		// Vault-GLOBAL identity/oidc/config when several control planes share
+		// one Vault. The cluster-name partition is carried by the OIDC key
+		// (`openchami-<clusterName>`) inside EnsureOIDCConfig, not the issuer.
+		issuer := VaultOIDCIssuerBase(cp)
 		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, issuer,
 			cp.Spec.Services.Tokensmith.OIDCRedirectURIs)
 		if err != nil {

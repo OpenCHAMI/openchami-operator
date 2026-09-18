@@ -270,7 +270,13 @@ type TokensmithSpec struct {
 	// entry must be an absolute http(s) URL. A localhost callback such as
 	// http://127.0.0.1:8250/oidc/callback is useful for CLI/dev login but
 	// should not be assumed as a production default.
+	//
+	// The CRD pattern enforces an http(s):// prefix at admission; the
+	// validating webhook additionally checks the URL is well-formed and
+	// carries a host.
 	// +optional
+	// +listType=set
+	// +kubebuilder:validation:items:Pattern=`^https?://.+`
 	OIDCRedirectURIs []string `json:"oidcRedirectURIs,omitempty"`
 }
 

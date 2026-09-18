@@ -174,12 +174,44 @@ func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected OIDCConfig recorded for cluster %q, got %+v", cp.Spec.ClusterName, v.OIDCConfigs)
 	}
-	want := "https://" + cp.Spec.Domain
+	// The issuer must be the Vault address scheme+host (no path) — the same
+	// source tokensmith derives TOKENSMITH_OIDC_PROVIDER from — NOT spec.domain.
+	want := VaultOIDCIssuerBase(cp)
 	if issuer != want {
-		t.Errorf("expected issuer = %q (scheme + host only), got %q", want, issuer)
+		t.Errorf("expected issuer = %q (Vault address scheme+host), got %q", want, issuer)
 	}
-	if strings.Contains(strings.TrimPrefix(issuer, "https://"), "/") {
+	if strings.Contains(strings.TrimPrefix(strings.TrimPrefix(issuer, "https://"), "http://"), "/") {
 		t.Errorf("issuer URL must not contain a path component (Vault rejects it), got %q", issuer)
+	}
+}
+
+// TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider is the regression
+// test for the iss mismatch found in end-to-end Vault→tokensmith testing: the
+// Vault config issuer used to be derived from spec.domain while tokensmith's
+// TOKENSMITH_OIDC_PROVIDER was derived from the Vault address, so the minted
+// `iss` never matched what tokensmith validated against and every exchange
+// failed. Both sides must now resolve to the SAME issuer.
+func TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	vaultConfigIssuer := v.OIDCConfigs[cp.Spec.ClusterName]
+	// Vault appends the provider path to the config issuer when minting `iss`.
+	mintedISS := vaultConfigIssuer + "/v1/identity/oidc/provider/default"
+
+	// What tokensmith is configured to expect.
+	tokensmithProvider := VaultOIDCProviderURL(cp)
+
+	if mintedISS != tokensmithProvider {
+		t.Errorf("issuer mismatch: Vault mints iss=%q but tokensmith expects %q",
+			mintedISS, tokensmithProvider)
 	}
 }
 

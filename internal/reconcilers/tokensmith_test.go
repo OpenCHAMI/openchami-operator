@@ -111,6 +111,12 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/default") {
 		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER to contain vault issuer suffix, got %q", oidcIssuer)
 	}
+	// TOKENSMITH_OIDC_PROVIDER must be derived from the Vault ADDRESS (shared
+	// source of truth with the Vault reconciler's config issuer), NOT the
+	// OpenCHAMI domain — otherwise the `iss` Vault mints won't match.
+	if want := VaultOIDCProviderURL(cp); oidcIssuer != want {
+		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER=%q (Vault-address derived), got %q", want, oidcIssuer)
+	}
 	wantIssuer := "https://" + cp.Spec.Domain
 	if tsIssuer != wantIssuer {
 		t.Errorf("expected TOKENSMITH_ISSUER=%q, got %q", wantIssuer, tsIssuer)
