@@ -105,6 +105,9 @@ Same-repository pull requests publish temporary images as
 provenance attestations. Fork pull requests build and smoke-test locally in CI
 without pushing packages.
 
+See [Publishing](publishing.md) for the complete validation, PR-image, release,
+and private-registry procedures.
+
 ## Tear down
 
 ```sh

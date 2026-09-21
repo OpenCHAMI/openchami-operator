@@ -1143,6 +1143,35 @@ spec:
                     description: TokensmithSpec configures the tokensmith OIDC token
                       service.
                     properties:
+                      cliOIDC:
+                        description: |-
+                          CLIOIDC configures a separate public Vault OIDC client for CLI login.
+                          CLI users receive this client's public client_id and authenticate with
+                          PKCE. They never receive the confidential TokenSmith client_secret.
+                          Used only when OIDCProvider is "vault".
+                        properties:
+                          assignments:
+                            default:
+                            - allow_all
+                            description: |-
+                              Assignments lists Vault identity OIDC assignments allowed to authorize
+                              this client. Vault denies all identities when the list is empty.
+                            items:
+                              type: string
+                            minItems: 1
+                            type: array
+                          redirectURIs:
+                            default:
+                            - http://127.0.0.1:8250/callback
+                            description: |-
+                              RedirectURIs lists the exact callbacks Vault may redirect to after login.
+                              Plain HTTP is accepted only for loopback hosts; other callbacks must use
+                              HTTPS.
+                            items:
+                              type: string
+                            minItems: 1
+                            type: array
+                        type: object
                       enabled:
                         default: true
                         type: boolean
@@ -1195,29 +1224,6 @@ spec:
                         - vault
                         - external
                         type: string
-                      oidcRedirectURIs:
-                        description: |-
-                          OIDCRedirectURIs is the list of allowed redirect (callback) URIs for
-                          the OIDC client the operator provisions when OIDCProvider is "vault".
-                          The OIDC authorization-code flow rejects any redirect_uri not in this
-                          list (Vault returns invalid_redirect_uri), so a client application
-                          (CLI or web) that performs interactive login must have its callback
-                          URL listed here.
-
-                          Only consumed when OIDCProvider is "vault"; ignored for "external"
-                          (where redirect URIs are configured on the external provider). Each
-                          entry must be an absolute http(s) URL. A localhost callback such as
-                          http://127.0.0.1:8250/oidc/callback is useful for CLI/dev login but
-                          should not be assumed as a production default.
-
-                          The CRD pattern enforces an http(s):// prefix at admission; the
-                          validating webhook additionally checks the URL is well-formed and
-                          carries a host.
-                        items:
-                          pattern: ^https?://.+
-                          type: string
-                        type: array
-                        x-kubernetes-list-type: set
                       replicas:
                         default: 2
                         description: Replicas is ignored for DaemonSet and CronJob

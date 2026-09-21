@@ -48,11 +48,9 @@ type Client struct {
 	// OIDCClients stores the OIDC client credentials returned by
 	// EnsureOIDCConfig, keyed by cluster name.
 	OIDCClients map[string]vault.OIDCClientCredentials
-
-	// OIDCRedirectURIs stores the redirect URIs passed to EnsureOIDCConfig,
-	// keyed by cluster name, so tests can assert what the operator configured
-	// on the Vault OIDC client.
-	OIDCRedirectURIs map[string][]string
+	// PublicOIDCClients stores the separate secretless CLI clients provisioned
+	// by EnsureOIDCConfig. The model intentionally has no client-secret field.
+	PublicOIDCClients map[string]vault.PublicOIDCClient
 
 	// ProviderAllowedClientIDs models the default OIDC provider's
 	// allowed_client_ids list. Tests may seed it (e.g. with a pre-existing
@@ -71,17 +69,17 @@ type Client struct {
 // NewClient returns an empty FakeClient ready for use.
 func NewClient() *Client {
 	return &Client{
-		Calls:            map[string][][]any{},
-		Mounts:           map[string]bool{},
-		Secrets:          map[string]map[string]any{},
-		Policies:         map[string]string{},
-		AppRoles:         map[string]vault.AppRoleConfig{},
-		SecretIDs:        map[string]string{},
-		K8sRoles:         map[string]vault.KubernetesRoleConfig{},
-		OIDCConfigs:      map[string]string{},
-		OIDCClients:      map[string]vault.OIDCClientCredentials{},
-		OIDCRedirectURIs: map[string][]string{},
-		Errors:           map[string]error{},
+		Calls:             map[string][][]any{},
+		Mounts:            map[string]bool{},
+		Secrets:           map[string]map[string]any{},
+		Policies:          map[string]string{},
+		AppRoles:          map[string]vault.AppRoleConfig{},
+		SecretIDs:         map[string]string{},
+		K8sRoles:          map[string]vault.KubernetesRoleConfig{},
+		OIDCConfigs:       map[string]string{},
+		OIDCClients:       map[string]vault.OIDCClientCredentials{},
+		PublicOIDCClients: map[string]vault.PublicOIDCClient{},
+		Errors:            map[string]error{},
 	}
 }
 
@@ -184,15 +182,14 @@ func (c *Client) EnsureKubernetesRole(_ context.Context, name string, cfg vault.
 	return nil
 }
 
-func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName, issuerURL string, redirectURIs []string) (vault.OIDCClientCredentials, error) {
+func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName string, cfg vault.OIDCConfig) (vault.OIDCClientCredentials, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.record("EnsureOIDCConfig", clusterName, issuerURL, redirectURIs)
+	c.record("EnsureOIDCConfig", clusterName, cfg)
 	if err := c.Errors["EnsureOIDCConfig"]; err != nil {
 		return vault.OIDCClientCredentials{}, err
 	}
-	c.OIDCConfigs[clusterName] = issuerURL
-	c.OIDCRedirectURIs[clusterName] = redirectURIs
+	c.OIDCConfigs[clusterName] = cfg.IssuerURL
 	creds, ok := c.OIDCClients[clusterName]
 	if !ok {
 		// Mimic Vault: generate stable per-cluster credentials on first call
@@ -203,7 +200,17 @@ func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName, issuerURL stri
 		}
 		c.OIDCClients[clusterName] = creds
 	}
-	c.authorizeClientOnProvider(creds.ClientID)
+	publicClientID := "fake-public-client-id-" + clusterName
+	if existing, ok := c.PublicOIDCClients[clusterName]; ok {
+		publicClientID = existing.ClientID
+	}
+	c.PublicOIDCClients[clusterName] = vault.PublicOIDCClient{
+		Name:         "openchami-" + clusterName + "-cli",
+		ClientID:     publicClientID,
+		RedirectURIs: append([]string(nil), cfg.CLIRedirectURIs...),
+		Assignments:  append([]string(nil), cfg.CLIAssignments...),
+	}
+	c.authorizeClientOnProvider(publicClientID)
 	return creds, nil
 }
 

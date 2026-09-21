@@ -107,7 +107,11 @@ func newControlPlane(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
 				},
 				Tokensmith: openchamiv1alpha1.TokensmithSpec{
 					ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true},
-					OIDCProvider:    "vault",
+					OIDCProvider:    tokensmithOIDCProviderVault,
+					CLIOIDC: openchamiv1alpha1.CLIOIDCConfig{
+						RedirectURIs: []string{openchamiv1alpha1.DefaultTokensmithCLIRedirectURI},
+						Assignments:  []string{openchamiv1alpha1.DefaultTokensmithCLIAssignment},
+					},
 				},
 				BootService: openchamiv1alpha1.BootServiceSpec{
 					ServiceDefaults: openchamiv1alpha1.ServiceDefaults{Enabled: true},
@@ -256,19 +260,13 @@ func TestVaultReconciler_OIDCClientCredentials(t *testing.T) {
 	}
 }
 
-// TestVaultReconciler_OIDCRedirectURIs asserts that redirect URIs configured on
-// the CR are threaded through to EnsureOIDCConfig so the Vault OIDC client
-// permits the authorization-code callback. Regression test for the
-// invalid_redirect_uri failure: an operator-created client with an empty
-// redirect_uris list cannot complete an authorization-code flow.
-func TestVaultReconciler_OIDCRedirectURIs(t *testing.T) {
+func TestVaultReconciler_ProvisionsSeparatePublicCLIClient(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
-	want := []string{
-		"https://alpha.test.local/oidc/callback",
-		"http://127.0.0.1:8250/oidc/callback",
+	cp.Spec.Services.Tokensmith.CLIOIDC = openchamiv1alpha1.CLIOIDCConfig{
+		RedirectURIs: []string{"https://cli.alpha.test/callback"},
+		Assignments:  []string{"alpha-operators"},
 	}
-	cp.Spec.Services.Tokensmith.OIDCRedirectURIs = want
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
 
@@ -276,23 +274,28 @@ func TestVaultReconciler_OIDCRedirectURIs(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), cp); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-
-	got := v.OIDCRedirectURIs[cp.Spec.ClusterName]
-	if len(got) != len(want) {
-		t.Fatalf("expected %d redirect URIs passed to EnsureOIDCConfig, got %v", len(want), got)
+	cli, ok := v.PublicOIDCClients[cp.Spec.ClusterName]
+	if !ok {
+		t.Fatalf("expected public CLI client for %q", cp.Spec.ClusterName)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("redirect URI[%d]: expected %q, got %q", i, want[i], got[i])
-		}
+	if cli.Name != "openchami-alpha-cli" || cli.ClientID == "" {
+		t.Errorf("unexpected public CLI client: %+v", cli)
+	}
+	if len(cli.RedirectURIs) != 1 || cli.RedirectURIs[0] != "https://cli.alpha.test/callback" {
+		t.Errorf("CLI redirect URIs = %v", cli.RedirectURIs)
+	}
+	if len(cli.Assignments) != 1 || cli.Assignments[0] != "alpha-operators" {
+		t.Errorf("CLI assignments = %v", cli.Assignments)
+	}
+	if cli.ClientID == v.OIDCClients[cp.Spec.ClusterName].ClientID {
+		t.Error("public CLI client_id must differ from the confidential TokenSmith client_id")
 	}
 }
 
-// TestVaultReconciler_OIDCProviderAuthorizesClient asserts the tokensmith OIDC
+// TestVaultReconciler_OIDCProviderAuthorizesCLIClient asserts the public CLI
 // client's client_id is added to the provider's allowed_client_ids, so Vault
-// permits the client to use identity/oidc/provider/default (otherwise
-// /authorize fails with unauthorized_client).
-func TestVaultReconciler_OIDCProviderAuthorizesClient(t *testing.T) {
+// permits that client to use identity/oidc/provider/default during PKCE login.
+func TestVaultReconciler_OIDCProviderAuthorizesCLIClient(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
@@ -303,9 +306,9 @@ func TestVaultReconciler_OIDCProviderAuthorizesClient(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	wantID := v.PublicOIDCClients[cp.Spec.ClusterName].ClientID
 	if wantID == "" {
-		t.Fatal("expected a generated client_id")
+		t.Fatal("expected a generated public CLI client_id")
 	}
 	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
 		t.Errorf("expected provider allowed_client_ids to contain %q, got %v",
@@ -314,7 +317,7 @@ func TestVaultReconciler_OIDCProviderAuthorizesClient(t *testing.T) {
 }
 
 // TestVaultReconciler_OIDCProviderPreservesOtherClients asserts that
-// authorizing the tokensmith client preserves any other client IDs an
+// authorizing the CLI client preserves any other client IDs an
 // administrator intentionally authorized on the provider.
 func TestVaultReconciler_OIDCProviderPreservesOtherClients(t *testing.T) {
 	scheme := newScheme(t)
@@ -328,12 +331,12 @@ func TestVaultReconciler_OIDCProviderPreservesOtherClients(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	wantID := v.PublicOIDCClients[cp.Spec.ClusterName].ClientID
 	if !slices.Contains(v.ProviderAllowedClientIDs, "some-other-admin-client") {
 		t.Errorf("expected pre-existing client to be preserved, got %v", v.ProviderAllowedClientIDs)
 	}
 	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
-		t.Errorf("expected tokensmith client %q authorized, got %v", wantID, v.ProviderAllowedClientIDs)
+		t.Errorf("expected CLI client %q authorized, got %v", wantID, v.ProviderAllowedClientIDs)
 	}
 }
 
@@ -352,7 +355,7 @@ func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
 		}
 	}
 
-	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	wantID := v.PublicOIDCClients[cp.Spec.ClusterName].ClientID
 	n := 0
 	for _, id := range v.ProviderAllowedClientIDs {
 		if id == wantID {

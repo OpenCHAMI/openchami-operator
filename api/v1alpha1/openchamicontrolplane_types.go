@@ -24,6 +24,13 @@ type VaultAuthMethod string
 const (
 	VaultAuthMethodKubernetes VaultAuthMethod = "kubernetes"
 	VaultAuthMethodAppRole    VaultAuthMethod = "appRole"
+
+	// DefaultTokensmithCLIRedirectURI is the loopback callback used by native
+	// CLI clients when a control plane does not specify another redirect URI.
+	DefaultTokensmithCLIRedirectURI = "http://127.0.0.1:8250/callback"
+	// DefaultTokensmithCLIAssignment permits every Vault identity to authorize
+	// the CLI client. Sites can replace it with narrower Vault assignments.
+	DefaultTokensmithCLIAssignment = "allow_all"
 )
 
 // ImageSpec overrides the default container image for a service.
@@ -238,6 +245,26 @@ type SMDSpec struct {
 	ServiceDefaults `json:",inline"`
 }
 
+// CLIOIDCConfig configures the public Vault OIDC client used by native CLI
+// applications. Vault requires public clients to use PKCE and does not issue a
+// client secret for them.
+type CLIOIDCConfig struct {
+	// RedirectURIs lists the exact callbacks Vault may redirect to after login.
+	// Plain HTTP is accepted only for loopback hosts; other callbacks must use
+	// HTTPS.
+	// +kubebuilder:default={"http://127.0.0.1:8250/callback"}
+	// +kubebuilder:validation:MinItems=1
+	// +optional
+	RedirectURIs []string `json:"redirectURIs,omitempty"`
+
+	// Assignments lists Vault identity OIDC assignments allowed to authorize
+	// this client. Vault denies all identities when the list is empty.
+	// +kubebuilder:default={"allow_all"}
+	// +kubebuilder:validation:MinItems=1
+	// +optional
+	Assignments []string `json:"assignments,omitempty"`
+}
+
 // TokensmithSpec configures the tokensmith OIDC token service.
 type TokensmithSpec struct {
 	ServiceDefaults `json:",inline"`
@@ -258,26 +285,12 @@ type TokensmithSpec struct {
 	// +optional
 	OIDCIntrospectionEndpoint string `json:"oidcIntrospectionEndpoint,omitempty"`
 
-	// OIDCRedirectURIs is the list of allowed redirect (callback) URIs for
-	// the OIDC client the operator provisions when OIDCProvider is "vault".
-	// The OIDC authorization-code flow rejects any redirect_uri not in this
-	// list (Vault returns invalid_redirect_uri), so a client application
-	// (CLI or web) that performs interactive login must have its callback
-	// URL listed here.
-	//
-	// Only consumed when OIDCProvider is "vault"; ignored for "external"
-	// (where redirect URIs are configured on the external provider). Each
-	// entry must be an absolute http(s) URL. A localhost callback such as
-	// http://127.0.0.1:8250/oidc/callback is useful for CLI/dev login but
-	// should not be assumed as a production default.
-	//
-	// The CRD pattern enforces an http(s):// prefix at admission; the
-	// validating webhook additionally checks the URL is well-formed and
-	// carries a host.
+	// CLIOIDC configures a separate public Vault OIDC client for CLI login.
+	// CLI users receive this client's public client_id and authenticate with
+	// PKCE. They never receive the confidential TokenSmith client_secret.
+	// Used only when OIDCProvider is "vault".
 	// +optional
-	// +listType=set
-	// +kubebuilder:validation:items:Pattern=`^https?://.+`
-	OIDCRedirectURIs []string `json:"oidcRedirectURIs,omitempty"`
+	CLIOIDC CLIOIDCConfig `json:"cliOIDC,omitempty"`
 }
 
 // BootServiceSpec configures the boot-service.
