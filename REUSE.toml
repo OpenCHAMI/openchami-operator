@@ -34,7 +34,6 @@ path = [
   ".gitignore",
   ".dockerignore",
   ".golangci.yml",
-  ".custom-gcl.yml",
   ".goreleaser.yml",
   "Dockerfile",
   "Dockerfile.goreleaser",

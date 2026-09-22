@@ -162,6 +162,12 @@ func (w *OpenCHAMIControlPlaneWebhook) Default(_ context.Context, obj *OpenCHAMI
 	if obj.Spec.Services.Tokensmith.Replicas == 0 {
 		obj.Spec.Services.Tokensmith.Replicas = 1
 	}
+	if len(obj.Spec.Services.Tokensmith.CLIOIDC.RedirectURIs) == 0 {
+		obj.Spec.Services.Tokensmith.CLIOIDC.RedirectURIs = []string{DefaultTokensmithCLIRedirectURI}
+	}
+	if len(obj.Spec.Services.Tokensmith.CLIOIDC.Assignments) == 0 {
+		obj.Spec.Services.Tokensmith.CLIOIDC.Assignments = []string{DefaultTokensmithCLIAssignment}
+	}
 	if obj.Spec.Services.BootService.Replicas == 0 {
 		obj.Spec.Services.BootService.Replicas = 2
 	}
@@ -282,14 +288,9 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
-	// 3b. OIDC redirect URIs must be absolute http(s) URLs. These are only
-	// consumed for oidcProvider=vault (they configure the operator-provisioned
-	// Vault OIDC client); reject malformed entries early rather than letting
-	// Vault fail the write. A relative or non-http(s) URI can never satisfy
-	// an authorization-code redirect.
-	allErrs = append(allErrs, validateOIDCRedirectURIs(
-		obj.Spec.Services.Tokensmith.OIDCRedirectURIs,
-		specPath.Child("services", "tokensmith", "oidcRedirectURIs"),
+	allErrs = append(allErrs, validateCLIOIDC(
+		specPath.Child("services", "tokensmith", "cliOIDC"),
+		obj.Spec.Services.Tokensmith.CLIOIDC,
 	)...)
 
 	// 3a. ExternalEndpoint validation for the four HTTP services that
@@ -427,32 +428,6 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		)
 	}
 	return warnings, nil
-}
-
-// validateOIDCRedirectURIs checks each redirect URI is an absolute http(s) URL
-// with a host. Extracted from validate() so the per-entry branching does not
-// inflate that function's cyclomatic complexity.
-func validateOIDCRedirectURIs(uris []string, base *field.Path) field.ErrorList {
-	var errs field.ErrorList
-	for i, uri := range uris {
-		p := base.Index(i)
-		u, err := url.Parse(uri)
-		if err != nil {
-			errs = append(errs, field.Invalid(p, uri,
-				fmt.Sprintf("must be a valid URL: %v", err)))
-			continue
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			errs = append(errs, field.Invalid(p, uri,
-				"must be an absolute http or https URL"))
-			continue
-		}
-		if u.Host == "" {
-			errs = append(errs, field.Invalid(p, uri,
-				"must include a host"))
-		}
-	}
-	return errs
 }
 
 // listOtherClusters returns every OpenCHAMIControlPlane on the API server except
@@ -598,4 +573,51 @@ func isHTTPURL(s string) bool {
 		return false
 	}
 	return u.Host != ""
+}
+
+func validateCLIOIDC(path *field.Path, cfg CLIOIDCConfig) field.ErrorList {
+	var allErrs field.ErrorList
+
+	// Vault's public CLI client has no secret, so redirect URI integrity and
+	// identity assignments are its primary authorization boundaries. Native
+	// loopback callbacks may use HTTP; non-loopback callbacks must use HTTPS.
+	for i, redirectURI := range cfg.RedirectURIs {
+		if !isSecureOIDCRedirectURI(redirectURI) {
+			allErrs = append(allErrs, field.Invalid(
+				path.Child("redirectURIs").Index(i),
+				redirectURI,
+				"redirect URI must be an absolute https:// URL or an http:// loopback URL without a fragment",
+			))
+		}
+	}
+	for i, assignment := range cfg.Assignments {
+		if strings.TrimSpace(assignment) == "" {
+			allErrs = append(allErrs, field.Invalid(
+				path.Child("assignments").Index(i),
+				assignment,
+				"assignment must not be empty",
+			))
+		}
+	}
+
+	return allErrs
+}
+
+func isSecureOIDCRedirectURI(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || u.Fragment != "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

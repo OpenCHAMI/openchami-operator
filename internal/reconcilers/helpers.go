@@ -90,6 +90,9 @@ var boolTrue = true
 // keys — the kubernetes.io/basic-auth shape CNPG and the consumer
 // Deployments both expect.
 const (
+	kubernetesServiceName      = "kubernetes"
+	kubernetesServiceNamespace = "default"
+
 	SuffixSMDDB                  = "smd-db"
 	SuffixBootServiceDB          = "boot-service-db"
 	SuffixS3Credentials          = "s3-credentials"
@@ -632,8 +635,8 @@ const defaultKubernetesAPIPort int32 = 443
 func KubernetesAPIEgressPeers(ctx context.Context, c client.Client) (KubernetesAPIEgress, error) {
 	var slices discoveryv1.EndpointSliceList
 	err := c.List(ctx, &slices,
-		client.InNamespace("default"),
-		client.MatchingLabels{discoveryv1.LabelServiceName: "kubernetes"},
+		client.InNamespace(kubernetesServiceNamespace),
+		client.MatchingLabels{discoveryv1.LabelServiceName: kubernetesServiceName},
 	)
 	bestEffort := os.Getenv("OPENCHAMI_BEST_EFFORT_DNS") == "true" //nolint:goconst // env value, not a label
 	if err != nil {

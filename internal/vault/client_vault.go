@@ -14,6 +14,11 @@ import (
 	"github.com/hashicorp/vault/api/auth/kubernetes"
 )
 
+const (
+	vaultOIDCDefaultAssignment = "allow_all"
+	vaultOIDCTokenTTL          = "30m"
+)
+
 // Config holds connection parameters for a real Vault client.
 type Config struct {
 	Address string
@@ -229,8 +234,8 @@ func (c *vaultClient) EnsureKubernetesRole(ctx context.Context, name string, cfg
 	return nil
 }
 
-func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string, redirectURIs []string) (OIDCClientCredentials, error) {
-	data := map[string]any{"issuer": issuerURL}
+func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, cfg OIDCConfig) (OIDCClientCredentials, error) {
+	data := map[string]any{"issuer": cfg.IssuerURL}
 	_, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/config", data)
 	if err != nil {
@@ -254,22 +259,34 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerU
 	// (shipped with every Vault) is sufficient for the operator's single-tenant
 	// per-cluster model.
 	clientName := "openchami-" + clusterName + "-tokensmith"
-	// redirect_uris must be a non-nil slice so a write with an empty list
-	// clears any previously configured URIs (Vault treats a missing key as
-	// "leave unchanged"); an explicit empty slice reconciles to none.
-	if redirectURIs == nil {
-		redirectURIs = []string{}
-	}
 	clientData := map[string]any{
 		"key":              keyName,
-		"assignments":      []string{"allow_all"},
-		"id_token_ttl":     "30m",
-		"access_token_ttl": "30m",
-		"redirect_uris":    redirectURIs,
+		"client_type":      "confidential",
+		"assignments":      []string{vaultOIDCDefaultAssignment},
+		"id_token_ttl":     vaultOIDCTokenTTL,
+		"access_token_ttl": vaultOIDCTokenTTL,
 	}
 	if _, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/client/"+clientName, clientData); err != nil {
 		return OIDCClientCredentials{}, fmt.Errorf("creating oidc client: %w", err)
+	}
+
+	// The CLI client is public and therefore has no distributable secret. Vault
+	// enforces PKCE for this client type; only its generated client_id is safe to
+	// hand to users. It is deliberately distinct from TokenSmith's confidential
+	// client above so the TokenSmith client_secret never crosses into CLI config.
+	cliClientName := "openchami-" + clusterName + "-cli"
+	cliClientData := map[string]any{
+		"key":              keyName,
+		"client_type":      "public",
+		"redirect_uris":    cfg.CLIRedirectURIs,
+		"assignments":      cfg.CLIAssignments,
+		"id_token_ttl":     vaultOIDCTokenTTL,
+		"access_token_ttl": vaultOIDCTokenTTL,
+	}
+	if _, err := c.api.Logical().WriteWithContext(ctx,
+		"identity/oidc/client/"+cliClientName, cliClientData); err != nil {
+		return OIDCClientCredentials{}, fmt.Errorf("creating public CLI oidc client: %w", err)
 	}
 
 	resp, err := c.api.Logical().ReadWithContext(ctx,
@@ -286,13 +303,23 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerU
 	if creds.ClientID == "" {
 		return OIDCClientCredentials{}, fmt.Errorf("oidc client %q returned empty client_id", clientName)
 	}
+	cliResp, err := c.api.Logical().ReadWithContext(ctx,
+		"identity/oidc/client/"+cliClientName)
+	if err != nil {
+		return OIDCClientCredentials{}, fmt.Errorf("reading public CLI oidc client: %w", err)
+	}
+	if cliResp == nil || cliResp.Data == nil {
+		return OIDCClientCredentials{}, fmt.Errorf("public CLI oidc client %q returned no data", cliClientName)
+	}
+	cliClientID, _ := cliResp.Data["client_id"].(string)
+	if cliClientID == "" {
+		return OIDCClientCredentials{}, fmt.Errorf("public CLI oidc client %q returned empty client_id", cliClientName)
+	}
 
-	// Authorize the client on the OIDC provider. tokensmith's issuer points at
-	// identity/oidc/provider/default, and Vault rejects /authorize with
-	// unauthorized_client unless the provider's allowed_client_ids lists this
-	// client's client_id. Reconcile it idempotently while preserving any other
-	// client IDs already authorized on the provider.
-	if err := c.ensureProviderAllowsClient(ctx, "default", creds.ClientID); err != nil {
+	// Authorize the public CLI client on the OIDC provider. Vault rejects
+	// /authorize with unauthorized_client unless the provider allows the
+	// client_id performing the auth-code + PKCE flow.
+	if err := c.ensureProviderAllowsClient(ctx, "default", cliClientID); err != nil {
 		return OIDCClientCredentials{}, err
 	}
 

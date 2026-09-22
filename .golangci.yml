@@ -29,6 +29,7 @@ linters:
         - name: import-shadowing
     modernize:
       disable:
+        - embedlit
         - omitzero
   exclusions:
     generated: lax

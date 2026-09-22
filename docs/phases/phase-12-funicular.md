@@ -103,7 +103,7 @@ Env vars:
 Service:
   Type: ClusterIP
   Port: spec.logging.queryPort (default: 8080)
-  
+
 Health checks:
   LivenessProbe:  HTTP GET /health
   ReadinessProbe: HTTP GET /health

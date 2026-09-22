@@ -139,6 +139,12 @@ func TestDefault_AppliesAllDerivedDefaults(t *testing.T) {
 	if c.Spec.Services.Tokensmith.Replicas != 1 {
 		t.Errorf("tokensmith.replicas = %d, want 1", c.Spec.Services.Tokensmith.Replicas)
 	}
+	if got := c.Spec.Services.Tokensmith.CLIOIDC.RedirectURIs; len(got) != 1 || got[0] != DefaultTokensmithCLIRedirectURI {
+		t.Errorf("tokensmith.cliOIDC.redirectURIs = %v, want [%q]", got, DefaultTokensmithCLIRedirectURI)
+	}
+	if got := c.Spec.Services.Tokensmith.CLIOIDC.Assignments; len(got) != 1 || got[0] != DefaultTokensmithCLIAssignment {
+		t.Errorf("tokensmith.cliOIDC.assignments = %v, want [%q]", got, DefaultTokensmithCLIAssignment)
+	}
 	if c.Spec.Services.BootService.Replicas != 2 {
 		t.Errorf("bootService.replicas = %d, want 2", c.Spec.Services.BootService.Replicas)
 	}
@@ -173,6 +179,10 @@ func TestDefault_PreservesUserValues(t *testing.T) {
 			Database: DatabaseSpec{Instances: 1},
 			Services: ServicesSpec{
 				SMD: SMDSpec{ServiceDefaults: ServiceDefaults{Replicas: 5}},
+				Tokensmith: TokensmithSpec{CLIOIDC: CLIOIDCConfig{
+					RedirectURIs: []string{"https://cli.example.test/callback"},
+					Assignments:  []string{"operators"},
+				}},
 				CoreDHCP: CoreDHCPSpec{
 					UnknownLeaseDuration: "30m",
 					KnownLeaseDuration:   "12h",
@@ -204,6 +214,12 @@ func TestDefault_PreservesUserValues(t *testing.T) {
 	}
 	if c.Spec.Services.SMD.Replicas != 5 {
 		t.Errorf("smd.replicas overwritten: %d", c.Spec.Services.SMD.Replicas)
+	}
+	if got := c.Spec.Services.Tokensmith.CLIOIDC.RedirectURIs; len(got) != 1 || got[0] != "https://cli.example.test/callback" {
+		t.Errorf("tokensmith.cliOIDC.redirectURIs overwritten: %v", got)
+	}
+	if got := c.Spec.Services.Tokensmith.CLIOIDC.Assignments; len(got) != 1 || got[0] != "operators" {
+		t.Errorf("tokensmith.cliOIDC.assignments overwritten: %v", got)
 	}
 	if c.Spec.Services.Magellan.ConcurrencyPolicy != batchv1.AllowConcurrent {
 		t.Errorf("concurrencyPolicy overwritten: %q", c.Spec.Services.Magellan.ConcurrencyPolicy)
@@ -358,33 +374,38 @@ func TestValidateCreate_TokensmithExternalRequiresIssuer(t *testing.T) {
 	expectInvalid(t, err, "oidcIssuerURL")
 }
 
-func TestValidateCreate_OIDCRedirectURIsValid(t *testing.T) {
-	w := newWebhook(t)
-	c := newFixtureCluster("a")
-	c.Spec.Services.Tokensmith.OIDCRedirectURIs = []string{
-		"https://example.org/oidc/callback",
-		"http://127.0.0.1:8250/oidc/callback",
-	}
-	if _, err := w.ValidateCreate(context.Background(), c); err != nil {
-		t.Fatalf("expected valid redirect URIs to pass, got: %v", err)
-	}
-}
-
-func TestValidateCreate_OIDCRedirectURIsRejectsMalformed(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		uri  string
+func TestValidateCreate_TokensmithCLIOIDCRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		redirects []string
+		assign    []string
+		wantField string
 	}{
-		{"relative", "/oidc/callback"},
-		{"non-http scheme", "ftp://example.org/callback"},
-		{"no host", "https://"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+		{
+			name:      "redirect URI must be absolute HTTP URL",
+			redirects: []string{"localhost:8250/callback"},
+			assign:    []string{"allow_all"},
+			wantField: "cliOIDC.redirectURIs",
+		},
+		{
+			name:      "assignment must not be blank",
+			redirects: []string{DefaultTokensmithCLIRedirectURI},
+			assign:    []string{" "},
+			wantField: "cliOIDC.assignments",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			w := newWebhook(t)
 			c := newFixtureCluster("a")
-			c.Spec.Services.Tokensmith.OIDCRedirectURIs = []string{tc.uri}
+			c.Spec.Services.Tokensmith.CLIOIDC = CLIOIDCConfig{
+				RedirectURIs: test.redirects,
+				Assignments:  test.assign,
+			}
+
 			_, err := w.ValidateCreate(context.Background(), c)
-			expectInvalid(t, err, "oidcRedirectURIs")
+			expectInvalid(t, err, test.wantField)
 		})
 	}
 }

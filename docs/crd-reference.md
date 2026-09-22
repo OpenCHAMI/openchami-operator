@@ -208,7 +208,17 @@ When disabled, you must set `spec.services.coreDHCP.nodeSelector` and `spec.serv
 spec:
   services:
     smd:               { enabled: true,  replicas: 1, image: {repository: ..., tag: ..., pullPolicy: IfNotPresent}, resources: {} }
-    tokensmith:        { enabled: true,  replicas: 1, image: {...}, resources: {}, oidcProvider: ..., oidcIssuerURL: ..., oidcIntrospectionEndpoint: ... }
+    tokensmith:
+      enabled: true
+      replicas: 1
+      image: {...}
+      resources: {}
+      oidcProvider: vault
+      oidcIssuerURL: ""
+      oidcIntrospectionEndpoint: ""
+      cliOIDC:
+        redirectURIs: ["http://127.0.0.1:8250/callback"]
+        assignments: ["allow_all"]
     bootService:       { enabled: true,  replicas: 2, image: {...}, resources: {} }
     metadataService:   { enabled: true,  replicas: 2, image: {...}, resources: {} }
     coreDHCP:
@@ -240,6 +250,14 @@ Set it when the upstream issuer discovery document omits both
 `token_introspection_endpoint` and `introspection_endpoint`; the operator
 passes the value through as `TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT` and does
 not derive provider-specific paths.
+
+When `oidcProvider` is `vault`, `cliOIDC` configures a separate public Vault
+client named `openchami-<cluster>-cli`. Its default loopback redirect is suitable
+for a native CLI and its default `allow_all` assignment is Vault's built-in
+assignment. Replace the assignment list to restrict authorization. Public
+clients use PKCE and receive no secret; CLI users must never receive the
+confidential `openchami-<cluster>-tokensmith` client secret. See
+[Local Vault OIDC CLI testing](vault-oidc-local-testing.md).
 
 #### Per-service overrides
 

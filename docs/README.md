@@ -6,6 +6,8 @@ The complete documentation tree for the operator.
 - [Quickstart](quickstart.md) — local dev cluster in under 15 minutes.
 - [Install (production)](install-production.md) — end-to-end walkthrough for a fresh non-dev Kubernetes cluster.
 - [ochami-admin CLI](cli.md) — user-facing reference for `init` / `describe` / `backup` / `restore` / `logs`.
+- [Publishing](publishing.md) — validation, PR images, releases, and private registries.
+- [Local Vault OIDC CLI testing](vault-oidc-local-testing.md) — public-client PKCE through TokenSmith and SMD.
 
 **Reading the codebase top-to-bottom:**
 1. [Quickstart](quickstart.md) — local dev cluster, applying a CR, watching it reconcile.
@@ -24,7 +26,9 @@ The complete documentation tree for the operator.
 14. [Dev loop](dev-loop.md) — every make target, kind config, dry-run mode.
 15. [Contributing](contributing.md) — adding a sub-reconciler / CRD field / webhook check.
 16. [Troubleshooting](troubleshooting.md) — common reconcile failure modes with fixes.
-17. [Relationship to integration-sandbox](relationship-to-integration-sandbox.md) — what each suite does and doesn't cover.
+17. [Publishing](publishing.md) — how repository and site-owned images are produced.
+18. [Local Vault OIDC CLI testing](vault-oidc-local-testing.md) — focused authentication shakedown.
+19. [Relationship to integration-sandbox](relationship-to-integration-sandbox.md) — what each suite does and doesn't cover.
 
 Reference (skim, don't read):
 - [Phase docs](phases/) — original implementation roadmap. Each phase is "done" or "in progress"; this is historical context, not a task list.

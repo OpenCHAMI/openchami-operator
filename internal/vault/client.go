@@ -42,19 +42,17 @@ type Client interface {
 	// EnsureKubernetesRole creates or updates a Kubernetes auth role.
 	EnsureKubernetesRole(ctx context.Context, name string, cfg KubernetesRoleConfig) error
 
-	// EnsureOIDCConfig configures Vault's identity/oidc engine for a cluster
-	// and provisions an OIDC client for tokensmith. It configures the issuer,
-	// creates the signing key, an assignment, and an OIDC client, then returns
-	// the client's generated client_id and client_secret so the caller can
-	// materialize them into the tokensmith OIDC Kubernetes Secret.
-	// redirectURIs sets the client's allowed redirect (callback) URIs for the
-	// authorization-code flow; an empty slice leaves the client with no
-	// allowed redirects (authorization requests will fail with
-	// invalid_redirect_uri). Only called when tokensmith.oidcProvider=vault.
-	// Idempotent: repeated calls return the same client_id and
-	// (Vault-preserved) client_secret and reconcile redirect_uris to the
-	// supplied list.
-	EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string, redirectURIs []string) (OIDCClientCredentials, error)
+	// EnsureOIDCConfig configures Vault's identity/oidc engine for a cluster and
+	// provisions two clients: a confidential TokenSmith client and a public CLI
+	// client that requires PKCE. It returns only the confidential client's
+	// generated client_id and client_secret so the caller can materialize them
+	// into the TokenSmith OIDC Kubernetes Secret. CLI users obtain the public
+	// client_id from Vault and never receive TokenSmith's client_secret. The
+	// caller must pass the Vault-address-derived issuer so Vault-minted `iss`
+	// values match TokenSmith's provider URL.
+	// Only called when tokensmith.oidcProvider=vault. Idempotent: repeated
+	// calls return the same client_id and (Vault-preserved) client_secret.
+	EnsureOIDCConfig(ctx context.Context, clusterName string, cfg OIDCConfig) (OIDCClientCredentials, error)
 
 	// DeleteClusterPaths deletes all KV paths under prefix.
 	// Used during cluster deletion when cleanup annotation is set.
@@ -72,6 +70,23 @@ type OIDCClientCredentials struct {
 	ClientID string
 	// ClientSecret is the Vault-generated OAuth2 client_secret.
 	ClientSecret string
+}
+
+// OIDCConfig describes the issuer and public CLI client configuration used to
+// provision a cluster's Vault identity/oidc clients.
+type OIDCConfig struct {
+	IssuerURL       string
+	CLIRedirectURIs []string
+	CLIAssignments  []string
+}
+
+// PublicOIDCClient describes the secretless CLI client exposed by the fake
+// Vault implementation for behavioral assertions.
+type PublicOIDCClient struct {
+	Name         string
+	ClientID     string
+	RedirectURIs []string
+	Assignments  []string
 }
 
 // AppRoleConfig configures an AppRole.

@@ -56,7 +56,11 @@ Steps (all idempotent):
 5. `EnsurePolicy(paths.PolicyServices, ServicesPolicy(clusterName))`
 6. If appRole: `EnsureAppRole`
 7. If kubernetes: `EnsureKubernetesRole`
-8. If tokensmith.oidcProvider=vault: `EnsureOIDCConfig`
+8. If tokensmith.oidcProvider=vault: `EnsureOIDCConfig` provisions:
+   - confidential `openchami-<cluster>-tokensmith`; its generated `client_id`
+     and `client_secret` continue to the TokenSmith-only KV/Kubernetes Secret
+   - public `openchami-<cluster>-cli`; CLI users receive only its `client_id`
+     and authenticate with PKCE, never with the TokenSmith client secret
 9. Apply VSO resources in cluster namespace:
    - `VaultConnection` (one per cluster)
    - `VaultAuth` (kubernetes or appRole based on spec)

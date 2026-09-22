@@ -62,9 +62,9 @@ func kubernetesEndpoints(ips ...string) *discoveryv1.EndpointSlice {
 	port := testAPIServerPort
 	return &discoveryv1.EndpointSlice{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "kubernetes",
-			Namespace: "default",
-			Labels:    map[string]string{discoveryv1.LabelServiceName: "kubernetes"},
+			Name:      kubernetesServiceName,
+			Namespace: kubernetesServiceNamespace,
+			Labels:    map[string]string{discoveryv1.LabelServiceName: kubernetesServiceName},
 		},
 		AddressType: discoveryv1.AddressTypeIPv4,
 		Endpoints:   eps,

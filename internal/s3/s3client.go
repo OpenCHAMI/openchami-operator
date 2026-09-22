@@ -75,12 +75,10 @@ func (c *realClient) EnsureBucket(ctx context.Context, bucket string) error {
 	// BucketAlreadyOwnedByYou and BucketAlreadyExists (when the existing
 	// bucket is ours) are both success cases — the goal is convergence,
 	// not first-write semantics.
-	var owned *s3types.BucketAlreadyOwnedByYou
-	if errors.As(err, &owned) {
+	if _, ok := errors.AsType[*s3types.BucketAlreadyOwnedByYou](err); ok {
 		return nil
 	}
-	var exists *s3types.BucketAlreadyExists
-	if errors.As(err, &exists) {
+	if _, ok := errors.AsType[*s3types.BucketAlreadyExists](err); ok {
 		// Verify ownership before treating as success: HeadBucket against
 		// the same credentials only succeeds for buckets we can read.
 		ok, headErr := c.bucketReachable(ctx, bucket)
@@ -136,8 +134,7 @@ func (c *realClient) bucketReachable(ctx context.Context, bucket string) (bool, 
 	if err == nil {
 		return true, nil
 	}
-	var notFound *s3types.NotFound
-	if errors.As(err, &notFound) {
+	if _, ok := errors.AsType[*s3types.NotFound](err); ok {
 		return false, nil
 	}
 	// Some gateways (notably VersityGW versions older than 1.0.7) return a
@@ -155,8 +152,7 @@ func (c *realClient) DeleteBucket(ctx context.Context, bucket string) error {
 	}
 	_, err := c.api.DeleteBucket(ctx, &awss3.DeleteBucketInput{Bucket: &bucket})
 	if err != nil {
-		var nsb *s3types.NoSuchBucket
-		if errors.As(err, &nsb) {
+		if _, ok := errors.AsType[*s3types.NoSuchBucket](err); ok {
 			return nil
 		}
 		return fmt.Errorf("deleting bucket %s: %w", bucket, err)
@@ -175,8 +171,7 @@ func (c *realClient) emptyBucket(ctx context.Context, bucket string) error {
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			var nsb *s3types.NoSuchBucket
-			if errors.As(err, &nsb) {
+			if _, ok := errors.AsType[*s3types.NoSuchBucket](err); ok {
 				return nil
 			}
 			return fmt.Errorf("listing objects in %s: %w", bucket, err)
