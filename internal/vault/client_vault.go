@@ -229,7 +229,7 @@ func (c *vaultClient) EnsureKubernetesRole(ctx context.Context, name string, cfg
 	return nil
 }
 
-func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string) (OIDCClientCredentials, error) {
+func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerURL string, redirectURIs []string) (OIDCClientCredentials, error) {
 	data := map[string]any{"issuer": issuerURL}
 	_, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/config", data)
@@ -254,11 +254,18 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerU
 	// (shipped with every Vault) is sufficient for the operator's single-tenant
 	// per-cluster model.
 	clientName := "openchami-" + clusterName + "-tokensmith"
+	// redirect_uris must be a non-nil slice so a write with an empty list
+	// clears any previously configured URIs (Vault treats a missing key as
+	// "leave unchanged"); an explicit empty slice reconciles to none.
+	if redirectURIs == nil {
+		redirectURIs = []string{}
+	}
 	clientData := map[string]any{
 		"key":              keyName,
 		"assignments":      []string{"allow_all"},
 		"id_token_ttl":     "30m",
 		"access_token_ttl": "30m",
+		"redirect_uris":    redirectURIs,
 	}
 	if _, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/client/"+clientName, clientData); err != nil {
@@ -279,7 +286,65 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName, issuerU
 	if creds.ClientID == "" {
 		return OIDCClientCredentials{}, fmt.Errorf("oidc client %q returned empty client_id", clientName)
 	}
+
+	// Authorize the client on the OIDC provider. tokensmith's issuer points at
+	// identity/oidc/provider/default, and Vault rejects /authorize with
+	// unauthorized_client unless the provider's allowed_client_ids lists this
+	// client's client_id. Reconcile it idempotently while preserving any other
+	// client IDs already authorized on the provider.
+	if err := c.ensureProviderAllowsClient(ctx, "default", creds.ClientID); err != nil {
+		return OIDCClientCredentials{}, err
+	}
+
 	return creds, nil
+}
+
+// ensureProviderAllowsClient adds clientID to the named OIDC provider's
+// allowed_client_ids, preserving every other authorized client and the
+// provider's existing scopes.
+//
+// The write is a read-modify-write so unrelated client IDs an administrator
+// intentionally authorized are kept. Two cases are treated as "already allows
+// everything" and left untouched: a provider whose allowed_client_ids is the
+// Vault wildcard ["*"], and (defensively) one that already lists clientID.
+// A provider that does not yet exist is created with the single clientID.
+func (c *vaultClient) ensureProviderAllowsClient(ctx context.Context, providerName, clientID string) error {
+	path := "identity/oidc/provider/" + providerName
+	resp, err := c.api.Logical().ReadWithContext(ctx, path)
+	if err != nil {
+		return fmt.Errorf("reading oidc provider %q: %w", providerName, err)
+	}
+
+	existing := []string{}
+	if resp != nil && resp.Data != nil {
+		if raw, ok := resp.Data["allowed_client_ids"].([]any); ok {
+			for _, v := range raw {
+				if s, ok := v.(string); ok {
+					existing = append(existing, s)
+				}
+			}
+		}
+	}
+
+	for _, id := range existing {
+		// "*" authorizes every client; adding our ID would be redundant and,
+		// worse, replacing ["*"] with a concrete list would REVOKE clients that
+		// were relying on the wildcard. Leave a wildcard provider untouched.
+		if id == "*" || id == clientID {
+			return nil
+		}
+	}
+
+	allowed := append(append([]string{}, existing...), clientID)
+	data := map[string]any{"allowed_client_ids": allowed}
+	// Preserve the provider's issuer/scopes: writing only allowed_client_ids
+	// leaves other configured fields unchanged (Vault treats absent keys as
+	// "no change" on an existing provider). For a not-yet-existing default
+	// provider this creates it authorizing just our client.
+	if _, err := c.api.Logical().WriteWithContext(ctx, path, data); err != nil {
+		return fmt.Errorf("authorizing client on oidc provider %q: %w", providerName, err)
+	}
+	return nil
 }
 
 func (c *vaultClient) DeleteClusterPaths(ctx context.Context, prefix string) error {

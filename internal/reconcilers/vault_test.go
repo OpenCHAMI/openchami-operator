@@ -7,6 +7,7 @@ package reconcilers
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,9 +15,11 @@ import (
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	vsov1beta1 "github.com/hashicorp/vault-secrets-operator/api/v1beta1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -172,12 +175,44 @@ func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected OIDCConfig recorded for cluster %q, got %+v", cp.Spec.ClusterName, v.OIDCConfigs)
 	}
-	want := "https://" + cp.Spec.Domain
+	// The issuer must be the Vault address scheme+host (no path) — the same
+	// source tokensmith derives TOKENSMITH_OIDC_PROVIDER from — NOT spec.domain.
+	want := VaultOIDCIssuerBase(cp)
 	if issuer != want {
-		t.Errorf("expected issuer = %q (scheme + host only), got %q", want, issuer)
+		t.Errorf("expected issuer = %q (Vault address scheme+host), got %q", want, issuer)
 	}
-	if strings.Contains(strings.TrimPrefix(issuer, "https://"), "/") {
+	if strings.Contains(strings.TrimPrefix(strings.TrimPrefix(issuer, "https://"), "http://"), "/") {
 		t.Errorf("issuer URL must not contain a path component (Vault rejects it), got %q", issuer)
+	}
+}
+
+// TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider is the regression
+// test for the iss mismatch found in end-to-end Vault→tokensmith testing: the
+// Vault config issuer used to be derived from spec.domain while tokensmith's
+// TOKENSMITH_OIDC_PROVIDER was derived from the Vault address, so the minted
+// `iss` never matched what tokensmith validated against and every exchange
+// failed. Both sides must now resolve to the SAME issuer.
+func TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	vaultConfigIssuer := v.OIDCConfigs[cp.Spec.ClusterName]
+	// Vault appends the provider path to the config issuer when minting `iss`.
+	mintedISS := vaultConfigIssuer + "/v1/identity/oidc/provider/default"
+
+	// What tokensmith is configured to expect.
+	tokensmithProvider := VaultOIDCProviderURL(cp)
+
+	if mintedISS != tokensmithProvider {
+		t.Errorf("issuer mismatch: Vault mints iss=%q but tokensmith expects %q",
+			mintedISS, tokensmithProvider)
 	}
 }
 
@@ -218,6 +253,115 @@ func TestVaultReconciler_OIDCClientCredentials(t *testing.T) {
 	if clientID != want.ClientID || clientSecret != want.ClientSecret {
 		t.Errorf("stored credentials %q/%q do not match Vault OIDC client %q/%q",
 			clientID, clientSecret, want.ClientID, want.ClientSecret)
+	}
+}
+
+// TestVaultReconciler_OIDCRedirectURIs asserts that redirect URIs configured on
+// the CR are threaded through to EnsureOIDCConfig so the Vault OIDC client
+// permits the authorization-code callback. Regression test for the
+// invalid_redirect_uri failure: an operator-created client with an empty
+// redirect_uris list cannot complete an authorization-code flow.
+func TestVaultReconciler_OIDCRedirectURIs(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	want := []string{
+		"https://alpha.test.local/oidc/callback",
+		"http://127.0.0.1:8250/oidc/callback",
+	}
+	cp.Spec.Services.Tokensmith.OIDCRedirectURIs = want
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := v.OIDCRedirectURIs[cp.Spec.ClusterName]
+	if len(got) != len(want) {
+		t.Fatalf("expected %d redirect URIs passed to EnsureOIDCConfig, got %v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("redirect URI[%d]: expected %q, got %q", i, want[i], got[i])
+		}
+	}
+}
+
+// TestVaultReconciler_OIDCProviderAuthorizesClient asserts the tokensmith OIDC
+// client's client_id is added to the provider's allowed_client_ids, so Vault
+// permits the client to use identity/oidc/provider/default (otherwise
+// /authorize fails with unauthorized_client).
+func TestVaultReconciler_OIDCProviderAuthorizesClient(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	if wantID == "" {
+		t.Fatal("expected a generated client_id")
+	}
+	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
+		t.Errorf("expected provider allowed_client_ids to contain %q, got %v",
+			wantID, v.ProviderAllowedClientIDs)
+	}
+}
+
+// TestVaultReconciler_OIDCProviderPreservesOtherClients asserts that
+// authorizing the tokensmith client preserves any other client IDs an
+// administrator intentionally authorized on the provider.
+func TestVaultReconciler_OIDCProviderPreservesOtherClients(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+	v.ProviderAllowedClientIDs = []string{"some-other-admin-client"}
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	if !slices.Contains(v.ProviderAllowedClientIDs, "some-other-admin-client") {
+		t.Errorf("expected pre-existing client to be preserved, got %v", v.ProviderAllowedClientIDs)
+	}
+	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
+		t.Errorf("expected tokensmith client %q authorized, got %v", wantID, v.ProviderAllowedClientIDs)
+	}
+}
+
+// TestVaultReconciler_OIDCProviderIdempotent asserts repeated reconciles don't
+// duplicate the client ID in the provider's allowed_client_ids.
+func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	for range 3 {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+	}
+
+	wantID := v.OIDCClients[cp.Spec.ClusterName].ClientID
+	n := 0
+	for _, id := range v.ProviderAllowedClientIDs {
+		if id == wantID {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("expected client_id authorized exactly once, got %d occurrences in %v",
+			n, v.ProviderAllowedClientIDs)
 	}
 }
 
@@ -334,4 +478,245 @@ func TestBuildVaultStaticSecret_UnknownSuffixPanics(t *testing.T) {
 	r := &VaultReconciler{}
 	cp := newControlPlane("audit-cluster")
 	_ = r.buildVaultStaticSecret(cp, "no-such-suffix", vault.Paths("audit-cluster"))
+}
+
+// newAppRoleControlPlane returns a cluster configured for appRole auth with a
+// conventional AppRoleSecretRef, mirroring what `ochami-admin init --vault-auth
+// appRole` produces.
+func newAppRoleControlPlane(name string) *openchamiv1alpha1.OpenCHAMIControlPlane {
+	cp := newControlPlane(name)
+	cp.Spec.Platform.Vault.AuthMethod = openchamiv1alpha1.VaultAuthMethodAppRole
+	cp.Spec.Platform.Vault.AppRoleSecretRef = &corev1.LocalObjectReference{
+		Name: name + "-vault-approle",
+	}
+	return cp
+}
+
+// TestVaultReconciler_AppRoleSecretIDBootstrap is the primary regression test
+// for issue #54: on a fresh appRole install the operator must generate a
+// SecretID and create the Kubernetes Secret VSO reads (keyed `id`) so VSO can
+// authenticate. Previously the operator only set the RoleID in VaultAuth and
+// left the SecretID Secret to an out-of-band admin step, so VSO logins 403'd.
+func TestVaultReconciler_AppRoleSecretIDBootstrap(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	paths := vault.Paths("alpha")
+	v.AssertCalled(t, "EnsureAppRole")
+	v.AssertCalled(t, "GenerateSecretID")
+	if got := v.CallCount("GenerateSecretID"); got != 1 {
+		t.Fatalf("expected exactly one GenerateSecretID call, got %d", got)
+	}
+
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("expected approle secret %s to exist: %v", key, err)
+	}
+	id := string(sec.Data[appRoleSecretIDKey])
+	if id == "" {
+		t.Fatalf("expected non-empty %q key in approle secret, got %+v", appRoleSecretIDKey, sec.Data)
+	}
+	if want := "fake-secret-id-" + paths.AppRoleServices; id != want {
+		t.Errorf("expected secret-id %q, got %q", want, id)
+	}
+	if got := sec.Annotations[appRoleRoleIDAnnotation]; got != "fake-role-id-"+paths.AppRoleServices {
+		t.Errorf("expected RoleID binding annotation, got %q", got)
+	}
+	if got := sec.Labels[labelManagedBy]; got != managedByValue {
+		t.Errorf("expected managed-by label %q, got %q", managedByValue, got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDIdempotent asserts a valid SecretID is
+// preserved across reconciles: the operator must not rotate a working SecretID
+// (which would churn VSO's cached login) when the Secret already carries one
+// bound to the current RoleID.
+func TestVaultReconciler_AppRoleSecretIDIdempotent(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("beta")
+
+	// The fake EnsureAppRole returns "fake-role-id-<role>"; the stored
+	// SecretID must be annotated with that same RoleID to be considered bound
+	// to the current AppRole incarnation.
+	paths := vault.Paths("beta")
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+			Annotations: map[string]string{
+				appRoleRoleIDAnnotation: "fake-role-id-" + paths.AppRoleServices,
+			},
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("preexisting-secret-id")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, existing).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertNotCalled(t, "GenerateSecretID")
+
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := string(sec.Data[appRoleSecretIDKey]); got != "preexisting-secret-id" {
+		t.Errorf("expected existing secret-id preserved, got %q", got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDRegeneratesOnRoleIDMismatch covers the
+// AppRole/Vault recreation case: the Kubernetes Secret survives (e.g. the
+// namespace was untouched) but Vault was reset, so the recreated AppRole has a
+// new RoleID. The stored SecretID was minted against the OLD RoleID and would
+// now 403. The operator must detect the mismatch via the binding annotation
+// and regenerate.
+func TestVaultReconciler_AppRoleSecretIDRegeneratesOnRoleIDMismatch(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("epsilon")
+
+	stale := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+			Annotations: map[string]string{
+				appRoleRoleIDAnnotation: "old-role-id-from-a-previous-vault",
+			},
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("stale-secret-id")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, stale).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertCalled(t, "GenerateSecretID")
+	paths := vault.Paths("epsilon")
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := string(sec.Data[appRoleSecretIDKey]); got == "stale-secret-id" || got == "" {
+		t.Errorf("expected a freshly generated secret-id, got %q", got)
+	}
+	if got := sec.Annotations[appRoleRoleIDAnnotation]; got != "fake-role-id-"+paths.AppRoleServices {
+		t.Errorf("expected RoleID annotation rebound to current RoleID, got %q", got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDAdoptsUnboundSecret covers a Secret an
+// administrator created by hand (or a pre-upgrade operator wrote) that carries
+// an `id` but no RoleID binding annotation. Its provenance is unknown, so the
+// operator regenerates and stamps the binding annotation, taking ownership.
+func TestVaultReconciler_AppRoleSecretIDAdoptsUnboundSecret(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("zeta")
+
+	unbound := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("admin-supplied-id")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, unbound).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertCalled(t, "GenerateSecretID")
+	paths := vault.Paths("zeta")
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := sec.Annotations[appRoleRoleIDAnnotation]; got != "fake-role-id-"+paths.AppRoleServices {
+		t.Errorf("expected RoleID binding annotation stamped, got %q", got)
+	}
+}
+
+// TestVaultReconciler_AppRoleSecretIDRegeneratesWhenEmpty asserts the operator
+// re-provisions a SecretID when the Secret exists but its `id` key is missing
+// or empty — the exact namespace-recreation scenario in issue #54 where the
+// Secret may be recreated blank while the Vault-side AppRole persists.
+func TestVaultReconciler_AppRoleSecretIDRegeneratesWhenEmpty(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("gamma")
+
+	blank := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Spec.Platform.Vault.AppRoleSecretRef.Name,
+			Namespace: ControlPlaneNamespace(cp),
+		},
+		Data: map[string][]byte{appRoleSecretIDKey: []byte("")},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp, blank).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	v.AssertCalled(t, "GenerateSecretID")
+	var sec corev1.Secret
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: cp.Spec.Platform.Vault.AppRoleSecretRef.Name}
+	if err := c.Get(context.Background(), key, &sec); err != nil {
+		t.Fatalf("reading approle secret: %v", err)
+	}
+	if got := string(sec.Data[appRoleSecretIDKey]); got == "" {
+		t.Errorf("expected a freshly generated secret-id, got empty")
+	}
+}
+
+// TestVaultReconciler_AppRoleVaultAuthWiring asserts the produced VaultAuth
+// carries the live RoleID (not the role name) and references the SecretID
+// Secret by name — the two halves of the AppRole credential VSO needs.
+func TestVaultReconciler_AppRoleVaultAuthWiring(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newAppRoleControlPlane("delta")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var auth vsov1beta1.VaultAuth
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: "openchami-" + cp.Spec.ClusterName}
+	if err := c.Get(context.Background(), key, &auth); err != nil {
+		t.Fatalf("reading VaultAuth: %v", err)
+	}
+	if auth.Spec.AppRole == nil {
+		t.Fatalf("expected VaultAuth.spec.appRole to be set")
+	}
+	paths := vault.Paths("delta")
+	if want := "fake-role-id-" + paths.AppRoleServices; auth.Spec.AppRole.RoleID != want {
+		t.Errorf("expected RoleID %q, got %q", want, auth.Spec.AppRole.RoleID)
+	}
+	if auth.Spec.AppRole.SecretRef != cp.Spec.Platform.Vault.AppRoleSecretRef.Name {
+		t.Errorf("expected SecretRef %q, got %q",
+			cp.Spec.Platform.Vault.AppRoleSecretRef.Name, auth.Spec.AppRole.SecretRef)
+	}
 }
