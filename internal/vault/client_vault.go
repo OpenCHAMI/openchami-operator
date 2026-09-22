@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/api/auth/approle"
@@ -42,8 +43,9 @@ type Config struct {
 
 // vaultClient implements Client against a real Vault server.
 type vaultClient struct {
-	api *vaultapi.Client
-	cfg Config
+	api    *vaultapi.Client
+	cfg    Config
+	oidcMu sync.Mutex
 }
 
 // NewClient builds a Vault client and authenticates using cfg.
@@ -235,11 +237,11 @@ func (c *vaultClient) EnsureKubernetesRole(ctx context.Context, name string, cfg
 }
 
 func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, cfg OIDCConfig) (OIDCClientCredentials, error) {
-	data := map[string]any{"issuer": cfg.IssuerURL}
-	_, err := c.api.Logical().WriteWithContext(ctx,
-		"identity/oidc/config", data)
-	if err != nil {
-		return OIDCClientCredentials{}, fmt.Errorf("configuring oidc issuer: %w", err)
+	c.oidcMu.Lock()
+	defer c.oidcMu.Unlock()
+
+	if err := c.ensureOIDCIssuer(ctx, cfg.IssuerURL); err != nil {
+		return OIDCClientCredentials{}, err
 	}
 	keyName := "openchami-" + clusterName
 	keyData := map[string]any{
@@ -324,6 +326,29 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 	}
 
 	return creds, nil
+}
+
+func (c *vaultClient) ensureOIDCIssuer(ctx context.Context, issuer string) error {
+	const path = "identity/oidc/config"
+	resp, err := c.api.Logical().ReadWithContext(ctx, path)
+	if err != nil && !isNotFound(err) {
+		return fmt.Errorf("reading oidc issuer: %w", err)
+	}
+	if err == nil && resp != nil && resp.Data != nil {
+		existing, _ := resp.Data["issuer"].(string)
+		if existing == issuer {
+			return nil
+		}
+		if existing != "" {
+			return fmt.Errorf("vault oidc issuer conflict: existing issuer %q differs from requested issuer %q", existing, issuer)
+		}
+	}
+
+	data := map[string]any{"issuer": issuer}
+	if _, err := c.api.Logical().WriteWithContext(ctx, path, data); err != nil {
+		return fmt.Errorf("configuring oidc issuer: %w", err)
+	}
+	return nil
 }
 
 // ensureProviderAllowsClient adds clientID to the named OIDC provider's

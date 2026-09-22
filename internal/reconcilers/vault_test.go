@@ -175,9 +175,9 @@ func TestVaultReconciler_OIDCIssuerHasNoPath(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	issuer, ok := v.OIDCConfigs[cp.Spec.ClusterName]
-	if !ok {
-		t.Fatalf("expected OIDCConfig recorded for cluster %q, got %+v", cp.Spec.ClusterName, v.OIDCConfigs)
+	issuer := v.OIDCIssuer
+	if issuer == "" {
+		t.Fatal("expected global OIDC issuer to be configured")
 	}
 	// The issuer must be the Vault address scheme+host (no path) — the same
 	// source tokensmith derives TOKENSMITH_OIDC_PROVIDER from — NOT spec.domain.
@@ -207,7 +207,7 @@ func TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	vaultConfigIssuer := v.OIDCConfigs[cp.Spec.ClusterName]
+	vaultConfigIssuer := v.OIDCIssuer
 	// Vault appends the provider path to the config issuer when minting `iss`.
 	mintedISS := vaultConfigIssuer + "/v1/identity/oidc/provider/default"
 
@@ -217,6 +217,34 @@ func TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider(t *testing.T) {
 	if mintedISS != tokensmithProvider {
 		t.Errorf("issuer mismatch: Vault mints iss=%q but tokensmith expects %q",
 			mintedISS, tokensmithProvider)
+	}
+}
+
+func TestVaultReconciler_OIDCGlobalIssuerRejectsConflict(t *testing.T) {
+	scheme := newScheme(t)
+	alpha := newControlPlane("alpha")
+	beta := newControlPlane("beta")
+	beta.Spec.Platform.Vault.Address = "https://other-vault.example.test"
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(alpha, beta).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), alpha); err != nil {
+		t.Fatalf("reconcile alpha: %v", err)
+	}
+	issuer := v.OIDCIssuer
+	if issuer == "" {
+		t.Fatal("expected alpha to configure global OIDC issuer")
+	}
+
+	if _, err := r.Reconcile(context.Background(), beta); err == nil {
+		t.Fatal("expected beta reconcile to reject conflicting global OIDC issuer")
+	}
+	if v.OIDCIssuer != issuer {
+		t.Fatalf("conflict must not overwrite global issuer: got %q, want %q", v.OIDCIssuer, issuer)
+	}
+	if _, ok := v.OIDCClients[beta.Spec.ClusterName]; ok {
+		t.Fatal("conflict must stop before provisioning beta OIDC clients")
 	}
 }
 
