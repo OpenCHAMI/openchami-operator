@@ -719,7 +719,3 @@ type OpenCHAMIControlPlaneList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OpenCHAMIControlPlane `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&OpenCHAMIControlPlane{}, &OpenCHAMIControlPlaneList{})
-}
