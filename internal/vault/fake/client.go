@@ -7,6 +7,7 @@ package fake
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"strings"
 	"sync"
@@ -42,8 +43,8 @@ type Client struct {
 	// K8sRoles stores Kubernetes auth role configurations keyed by name.
 	K8sRoles map[string]vault.KubernetesRoleConfig
 
-	// OIDCConfigs stores configured OIDC issuer URLs keyed by cluster name.
-	OIDCConfigs map[string]string
+	// OIDCIssuer stores Vault's global identity/oidc/config issuer.
+	OIDCIssuer string
 
 	// OIDCClients stores the OIDC client credentials returned by
 	// EnsureOIDCConfig, keyed by cluster name.
@@ -76,7 +77,6 @@ func NewClient() *Client {
 		AppRoles:          map[string]vault.AppRoleConfig{},
 		SecretIDs:         map[string]string{},
 		K8sRoles:          map[string]vault.KubernetesRoleConfig{},
-		OIDCConfigs:       map[string]string{},
 		OIDCClients:       map[string]vault.OIDCClientCredentials{},
 		PublicOIDCClients: map[string]vault.PublicOIDCClient{},
 		Errors:            map[string]error{},
@@ -189,7 +189,13 @@ func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName string, cfg vau
 	if err := c.Errors["EnsureOIDCConfig"]; err != nil {
 		return vault.OIDCClientCredentials{}, err
 	}
-	c.OIDCConfigs[clusterName] = cfg.IssuerURL
+	if c.OIDCIssuer == "" {
+		c.OIDCIssuer = cfg.IssuerURL
+	} else if c.OIDCIssuer != cfg.IssuerURL {
+		return vault.OIDCClientCredentials{}, fmt.Errorf(
+			"vault oidc issuer conflict: existing issuer %q differs from requested issuer %q",
+			c.OIDCIssuer, cfg.IssuerURL)
+	}
 	creds, ok := c.OIDCClients[clusterName]
 	if !ok {
 		// Mimic Vault: generate stable per-cluster credentials on first call
