@@ -209,28 +209,29 @@ func ServiceURL(cp *openchamiv1alpha1.OpenCHAMIControlPlane, svc string) string 
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", svc, ControlPlaneNamespace(cp), port)
 }
 
-// vaultOIDCProviderPathSuffix is the path Vault serves its default OIDC
-// provider under. Vault mints ID tokens whose `iss` claim is the
-// identity/oidc/config issuer (scheme+host, no path) with THIS suffix
-// appended. Both the Vault reconciler (which sets the config issuer) and the
-// tokensmith reconciler (which sets TOKENSMITH_OIDC_PROVIDER) derive their
-// values from VaultOIDCIssuerBase / VaultOIDCProviderURL below so the two
-// sides cannot drift — a mismatch makes tokensmith's exact-match issuer
-// validation reject every Vault-minted token.
-const vaultOIDCProviderPathSuffix = "/v1/identity/oidc/provider/default"
+// vaultOIDCProviderPathSuffix is the path Vault serves the shared named
+// "openchami" OIDC provider under. Vault mints ID tokens whose `iss` claim is
+// the provider's issuer (scheme+host, no path) with THIS suffix appended. Both
+// the Vault reconciler (which sets the provider issuer) and the tokensmith
+// reconciler (which sets TOKENSMITH_OIDC_PROVIDER) derive their values from
+// VaultOIDCIssuerBase / VaultOIDCProviderURL below so the two sides cannot
+// drift — a mismatch makes tokensmith's exact-match issuer validation reject
+// every Vault-minted token. This name MUST match vaultOIDCProviderName in
+// internal/vault/client_vault.go.
+const vaultOIDCProviderPathSuffix = "/v1/identity/oidc/provider/openchami"
 
-// VaultOIDCIssuerBase returns the scheme+host(+port) the operator writes to
-// Vault's identity/oidc/config `issuer`. Vault requires this to be scheme +
-// host + optional port with NO path; it appends the provider path itself when
-// minting the `iss` claim.
+// VaultOIDCIssuerBase returns the scheme+host(+port) the operator writes as the
+// `issuer` of the shared named "openchami" Vault OIDC provider. Vault requires
+// this to be scheme + host + optional port with NO path; it appends the
+// provider path itself when minting the `iss` claim.
 //
 // The single source of truth is spec.platform.vault.address — the same value
 // tokensmith dials for TOKENSMITH_OIDC_PROVIDER. Using the Vault address (not
 // the per-cluster OpenCHAMI domain) is what makes the minted `iss` match what
-// tokensmith expects, and it avoids the multi-cluster hazard that
-// identity/oidc/config is a Vault-GLOBAL resource: every control plane sharing
-// a Vault writes the same issuer (its own Vault address) instead of fighting
-// over a per-cluster domain.
+// tokensmith expects. Because the provider is shared, every control plane
+// writes the same issuer (its own Vault address); the operator never writes the
+// Vault-global identity/oidc/config, so control planes cannot overwrite each
+// other's issuer (issue #58).
 //
 // Any path/query/fragment on the configured address is stripped so a value
 // like http://vault:8200/ still yields a valid (path-less) issuer.
@@ -248,8 +249,8 @@ func VaultOIDCIssuerBase(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 // VaultOIDCProviderURL returns the full Vault OIDC provider URL tokensmith uses
 // as TOKENSMITH_OIDC_PROVIDER — VaultOIDCIssuerBase plus the provider path
 // suffix. This is exactly the `iss` value Vault stamps into tokens issued from
-// identity/oidc/provider/default, so tokensmith's exact-match validation
-// succeeds.
+// the shared identity/oidc/provider/openchami provider, so tokensmith's
+// exact-match validation succeeds.
 func VaultOIDCProviderURL(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 	return VaultOIDCIssuerBase(cp) + vaultOIDCProviderPathSuffix
 }

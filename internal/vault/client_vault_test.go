@@ -41,11 +41,6 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 			_, _ = w.Write([]byte(`{"data":{"client_id":"cli-id"}}`))
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/provider/default" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"allowed_client_ids":["admin-client"]}}`))
-			return
-		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
@@ -60,6 +55,7 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 
 	credentials, err := client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
 		IssuerURL:       "https://alpha.example.test",
+		ScopesSupported: []string{"groups"},
 		CLIRedirectURIs: []string{"http://127.0.0.1:8250/callback"},
 		CLIAssignments:  []string{vaultOIDCDefaultAssignment},
 	})
@@ -68,6 +64,15 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	}
 	if credentials.ClientID != "tokensmith-id" || credentials.ClientSecret != "tokensmith-secret" {
 		t.Fatalf("unexpected TokenSmith credentials: %+v", credentials)
+	}
+	if credentials.CLIClientID != "cli-id" {
+		t.Fatalf("unexpected CLI client_id: %q", credentials.CLIClientID)
+	}
+
+	// The Vault-GLOBAL identity/oidc/config must NOT be written (issue #58):
+	// the operator only writes the named provider's issuer.
+	if _, wrote := writes["/v1/identity/oidc/config"]; wrote {
+		t.Error("operator must not write the global identity/oidc/config")
 	}
 
 	tokensmith := writes["/v1/identity/oidc/client/openchami-alpha-tokensmith"]
@@ -83,8 +88,18 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	}
 	assertJSONStrings(t, cli["redirect_uris"], []string{"http://127.0.0.1:8250/callback"})
 	assertJSONStrings(t, cli["assignments"], []string{vaultOIDCDefaultAssignment})
-	provider := writes["/v1/identity/oidc/provider/default"]
-	assertJSONStrings(t, provider["allowed_client_ids"], []string{"admin-client", "cli-id"})
+
+	// The shared named provider is written with a fixed wildcard
+	// allowed_client_ids (issue #57): no per-control-plane read-modify-write.
+	provider := writes["/v1/identity/oidc/provider/openchami"]
+	if provider == nil {
+		t.Fatal("expected a write to the named openchami provider")
+	}
+	if provider["issuer"] != "https://alpha.example.test" {
+		t.Errorf("provider issuer = %v, want https://alpha.example.test", provider["issuer"])
+	}
+	assertJSONStrings(t, provider["allowed_client_ids"], []string{"*"})
+	assertJSONStrings(t, provider["scopes_supported"], []string{"groups"})
 }
 
 func assertJSONStrings(t *testing.T, got any, want []string) {

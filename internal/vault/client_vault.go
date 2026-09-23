@@ -17,6 +17,14 @@ import (
 const (
 	vaultOIDCDefaultAssignment = "allow_all"
 	vaultOIDCTokenTTL          = "30m"
+	// vaultOIDCProviderName is the single, shared named OIDC provider the
+	// operator manages. Every OpenCHAMIControlPlane sharing a Vault instance
+	// uses this same provider; per-control-plane isolation is carried entirely
+	// by the per-cluster clients and signing key, never by mutating shared
+	// provider state. See internal/reconcilers/helpers.go
+	// (vaultOIDCProviderPathSuffix) which must reference the same name so the
+	// minted `iss` matches what tokensmith validates.
+	vaultOIDCProviderName = "openchami"
 )
 
 // Config holds connection parameters for a real Vault client.
@@ -235,12 +243,12 @@ func (c *vaultClient) EnsureKubernetesRole(ctx context.Context, name string, cfg
 }
 
 func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, cfg OIDCConfig) (OIDCClientCredentials, error) {
-	data := map[string]any{"issuer": cfg.IssuerURL}
-	_, err := c.api.Logical().WriteWithContext(ctx,
-		"identity/oidc/config", data)
-	if err != nil {
-		return OIDCClientCredentials{}, fmt.Errorf("configuring oidc issuer: %w", err)
-	}
+	// NOTE: We intentionally do NOT write identity/oidc/config. That endpoint
+	// is a Vault-GLOBAL singleton (one issuer per Vault instance); writing it
+	// per-control-plane made whichever control plane reconciled last silently
+	// own every other control plane's issuer (issue #58). The issuer is instead
+	// pinned on the named `openchami` OIDC provider below, which every control
+	// plane writes identically.
 	keyName := "openchami-" + clusterName
 	keyData := map[string]any{
 		"rotation_period":    "24h",
@@ -250,6 +258,16 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 	if _, err := c.api.Logical().WriteWithContext(ctx,
 		"identity/oidc/key/"+keyName, keyData); err != nil {
 		return OIDCClientCredentials{}, fmt.Errorf("creating oidc key: %w", err)
+	}
+
+	// Ensure the shared named provider exists with a stable issuer and a
+	// wildcard allowed_client_ids. Writing ["*"] means the provider authorizes
+	// ANY client the operator creates without a read-modify-write on a shared
+	// list (issue #57): access is instead scoped per-client via `assignments`
+	// on each individual client below. Every control plane writes this same
+	// fixed payload, so concurrent reconciles converge instead of racing.
+	if err := c.ensureOIDCProvider(ctx, cfg); err != nil {
+		return OIDCClientCredentials{}, err
 	}
 
 	// Provision the OIDC client tokensmith authenticates as. Vault generates
@@ -315,61 +333,32 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 	if cliClientID == "" {
 		return OIDCClientCredentials{}, fmt.Errorf("public CLI oidc client %q returned empty client_id", cliClientName)
 	}
-
-	// Authorize the public CLI client on the OIDC provider. Vault rejects
-	// /authorize with unauthorized_client unless the provider allows the
-	// client_id performing the auth-code + PKCE flow.
-	if err := c.ensureProviderAllowsClient(ctx, "default", cliClientID); err != nil {
-		return OIDCClientCredentials{}, err
-	}
+	creds.CLIClientID = cliClientID
 
 	return creds, nil
 }
 
-// ensureProviderAllowsClient adds clientID to the named OIDC provider's
-// allowed_client_ids, preserving every other authorized client and the
-// provider's existing scopes.
+// ensureOIDCProvider creates or updates the shared named OIDC provider. The
+// payload is identical for every control plane: a stable issuer derived from
+// the Vault address and a wildcard allowed_client_ids. Because the write is a
+// fixed create-or-update (never a read-modify-write on a per-control-plane
+// list) concurrent reconciliations converge on the same value instead of
+// losing each other's updates (issue #57).
 //
-// The write is a read-modify-write so unrelated client IDs an administrator
-// intentionally authorized are kept. Two cases are treated as "already allows
-// everything" and left untouched: a provider whose allowed_client_ids is the
-// Vault wildcard ["*"], and (defensively) one that already lists clientID.
-// A provider that does not yet exist is created with the single clientID.
-func (c *vaultClient) ensureProviderAllowsClient(ctx context.Context, providerName, clientID string) error {
-	path := "identity/oidc/provider/" + providerName
-	resp, err := c.api.Logical().ReadWithContext(ctx, path)
-	if err != nil {
-		return fmt.Errorf("reading oidc provider %q: %w", providerName, err)
+// The issuer set here is scheme+host(+port) with no path; Vault appends
+// `/v1/identity/oidc/provider/<name>` itself when minting the `iss` claim, and
+// tokensmith validates against that exact URL (see helpers.go).
+func (c *vaultClient) ensureOIDCProvider(ctx context.Context, cfg OIDCConfig) error {
+	data := map[string]any{
+		"issuer":             cfg.IssuerURL,
+		"allowed_client_ids": []string{"*"},
 	}
-
-	existing := []string{}
-	if resp != nil && resp.Data != nil {
-		if raw, ok := resp.Data["allowed_client_ids"].([]any); ok {
-			for _, v := range raw {
-				if s, ok := v.(string); ok {
-					existing = append(existing, s)
-				}
-			}
-		}
+	if len(cfg.ScopesSupported) > 0 {
+		data["scopes_supported"] = cfg.ScopesSupported
 	}
-
-	for _, id := range existing {
-		// "*" authorizes every client; adding our ID would be redundant and,
-		// worse, replacing ["*"] with a concrete list would REVOKE clients that
-		// were relying on the wildcard. Leave a wildcard provider untouched.
-		if id == "*" || id == clientID {
-			return nil
-		}
-	}
-
-	allowed := append(append([]string{}, existing...), clientID)
-	data := map[string]any{"allowed_client_ids": allowed}
-	// Preserve the provider's issuer/scopes: writing only allowed_client_ids
-	// leaves other configured fields unchanged (Vault treats absent keys as
-	// "no change" on an existing provider). For a not-yet-existing default
-	// provider this creates it authorizing just our client.
-	if _, err := c.api.Logical().WriteWithContext(ctx, path, data); err != nil {
-		return fmt.Errorf("authorizing client on oidc provider %q: %w", providerName, err)
+	if _, err := c.api.Logical().WriteWithContext(ctx,
+		"identity/oidc/provider/"+vaultOIDCProviderName, data); err != nil {
+		return fmt.Errorf("configuring oidc provider %q: %w", vaultOIDCProviderName, err)
 	}
 	return nil
 }

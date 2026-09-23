@@ -42,14 +42,18 @@ type Client interface {
 	// EnsureKubernetesRole creates or updates a Kubernetes auth role.
 	EnsureKubernetesRole(ctx context.Context, name string, cfg KubernetesRoleConfig) error
 
-	// EnsureOIDCConfig configures Vault's identity/oidc engine for a cluster and
-	// provisions two clients: a confidential TokenSmith client and a public CLI
-	// client that requires PKCE. It returns only the confidential client's
-	// generated client_id and client_secret so the caller can materialize them
-	// into the TokenSmith OIDC Kubernetes Secret. CLI users obtain the public
-	// client_id from Vault and never receive TokenSmith's client_secret. The
-	// caller must pass the Vault-address-derived issuer so Vault-minted `iss`
-	// values match TokenSmith's provider URL.
+	// EnsureOIDCConfig ensures the shared named "openchami" OIDC provider
+	// exists (with a stable issuer and wildcard allowed_client_ids) and
+	// provisions two per-cluster clients: a confidential TokenSmith client and
+	// a public CLI client that requires PKCE. Access is scoped per-client via
+	// assignments rather than by mutating the provider's client list, so
+	// concurrent reconciliation of multiple control planes cannot race. It does
+	// NOT write the Vault-global identity/oidc/config. It returns the
+	// confidential client's generated client_id and client_secret (for the
+	// TokenSmith Kubernetes Secret) and the public CLI client_id (safe to hand
+	// to users; the client_secret never crosses to CLI config). The caller must
+	// pass the Vault-address-derived issuer so Vault-minted `iss` values match
+	// TokenSmith's provider URL.
 	// Only called when tokensmith.oidcProvider=vault. Idempotent: repeated
 	// calls return the same client_id and (Vault-preserved) client_secret.
 	EnsureOIDCConfig(ctx context.Context, clusterName string, cfg OIDCConfig) (OIDCClientCredentials, error)
@@ -62,20 +66,34 @@ type Client interface {
 	ListPaths(ctx context.Context, prefix string) ([]string, error)
 }
 
-// OIDCClientCredentials holds the credentials Vault generates for an
-// identity/oidc client. Both fields are assigned by Vault when the client is
+// OIDCClientCredentials holds the credentials Vault generates for a cluster's
+// identity/oidc clients. All fields are assigned by Vault when the clients are
 // created; the operator never chooses them.
 type OIDCClientCredentials struct {
-	// ClientID is the Vault-generated OAuth2 client_id.
+	// ClientID is the Vault-generated OAuth2 client_id for the confidential
+	// TokenSmith client.
 	ClientID string
-	// ClientSecret is the Vault-generated OAuth2 client_secret.
+	// ClientSecret is the Vault-generated OAuth2 client_secret for the
+	// confidential TokenSmith client.
 	ClientSecret string
+	// CLIClientID is the Vault-generated OAuth2 client_id for the public CLI
+	// client. Public clients have no secret (they use PKCE), so this is safe to
+	// surface to end users.
+	CLIClientID string
 }
 
-// OIDCConfig describes the issuer and public CLI client configuration used to
-// provision a cluster's Vault identity/oidc clients.
+// OIDCConfig describes the issuer, provider scopes, and public CLI client
+// configuration used to provision a cluster's Vault identity/oidc clients.
 type OIDCConfig struct {
-	IssuerURL       string
+	// IssuerURL is the scheme+host(+port) with no path that Vault stamps as the
+	// scheme://host:port component of minted `iss` claims for the shared
+	// "openchami" provider.
+	IssuerURL string
+	// ScopesSupported are the scopes advertised on the shared provider. Because
+	// the provider is shared across all control planes, this set is global to
+	// the Vault instance; passing an empty slice leaves the provider's existing
+	// scopes unchanged.
+	ScopesSupported []string
 	CLIRedirectURIs []string
 	CLIAssignments  []string
 }

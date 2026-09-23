@@ -111,7 +111,7 @@ loopback redirect. `curl` does not follow the redirect, so no callback listener
 is required:
 
 ```sh
-export AUTH_URL="$VAULT_ADDR/v1/identity/oidc/provider/default/authorize"
+export AUTH_URL="$VAULT_ADDR/v1/identity/oidc/provider/openchami/authorize"
 export REDIRECT_LOCATION="$(curl -sS -D - -o /dev/null \
   -H "X-Vault-Token: $VAULT_USER_TOKEN" \
   --get "$AUTH_URL" \
@@ -138,7 +138,7 @@ Exchange the code without a client secret:
 
 ```sh
 export VAULT_OIDC_RESPONSE="$(curl -sS \
-  -X POST "$VAULT_ADDR/v1/identity/oidc/provider/default/token" \
+  -X POST "$VAULT_ADDR/v1/identity/oidc/provider/openchami/token" \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode 'grant_type=authorization_code' \
   --data-urlencode "code=$AUTH_CODE" \
