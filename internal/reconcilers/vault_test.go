@@ -335,7 +335,7 @@ func TestVaultReconciler_OIDCConcurrentReconcileConverges(t *testing.T) {
 	rB := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
 
 	var wg sync.WaitGroup
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
