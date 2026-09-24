@@ -7,6 +7,7 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,6 +40,18 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/client/openchami-alpha-cli" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"data":{"client_id":"cli-id"}}`))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+			// Reflect whatever was last written so the read-before-write and
+			// post-create read-back see a consistent issuer. 404 until created.
+			if prev, ok := writes["/v1/identity/oidc/provider/openchami"]; ok {
+				w.Header().Set("Content-Type", "application/json")
+				resp := map[string]any{"data": prev}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -100,6 +113,58 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	}
 	assertJSONStrings(t, provider["allowed_client_ids"], []string{"*"})
 	assertJSONStrings(t, provider["scopes_supported"], []string{"groups"})
+}
+
+// TestVaultClient_EnsureOIDCConfigIssuerConflict asserts that when the shared
+// openchami provider already exists with a different issuer, EnsureOIDCConfig
+// returns an OIDCIssuerConflictError and does NOT overwrite the provider.
+func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
+	t.Parallel()
+
+	providerWrites := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+			// Provider already pinned to a different issuer by another CP.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"issuer":"https://other.example.test","allowed_client_ids":["*"]}}`))
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+			providerWrites++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		if r.Method == http.MethodPut {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
+		IssuerURL: "https://alpha.example.test",
+	})
+	var conflict *OIDCIssuerConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected OIDCIssuerConflictError, got %v", err)
+	}
+	if conflict.Existing != "https://other.example.test" || conflict.Requested != "https://alpha.example.test" {
+		t.Errorf("unexpected conflict detail: %+v", conflict)
+	}
+	if providerWrites != 0 {
+		t.Errorf("provider must not be written on issuer conflict, got %d writes", providerWrites)
+	}
 }
 
 func assertJSONStrings(t *testing.T, got any, want []string) {

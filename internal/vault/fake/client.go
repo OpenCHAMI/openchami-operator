@@ -58,7 +58,10 @@ type Client struct {
 	// tests assert this rather than a per-control-plane read-modify-write list.
 	OIDCProviderAllowedClientIDs []string
 	// OIDCProviderIssuer records the issuer written to the shared named OIDC
-	// provider by EnsureOIDCConfig.
+	// provider by EnsureOIDCConfig. Tests may seed it before reconciling to
+	// simulate a pre-existing provider whose issuer another control plane (or
+	// an administrator) already set; EnsureOIDCConfig then returns an
+	// OIDCIssuerConflictError if a control plane requests a different issuer.
 	OIDCProviderIssuer string
 	// OIDCProviderScopes records the scopes_supported written to the shared
 	// named OIDC provider by EnsureOIDCConfig.
@@ -198,10 +201,17 @@ func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName string, cfg vau
 	}
 	c.OIDCConfigs[clusterName] = cfg.IssuerURL
 
-	// Mirror the real client: the shared named provider is written with a fixed
-	// wildcard allowed_client_ids (no per-control-plane read-modify-write), a
-	// stable issuer, and the requested scopes. Every control plane writes the
-	// same payload, so concurrent calls converge instead of racing.
+	// Mirror the real client's issuer invariant: the shared named provider's
+	// issuer must be agreed on by every control plane. If the provider already
+	// exists with a different issuer, return a conflict and leave it untouched
+	// (issue #58). allowed_client_ids is always the fixed wildcard, never a
+	// per-control-plane read-modify-write, so concurrent calls converge (#57).
+	if c.OIDCProviderIssuer != "" && c.OIDCProviderIssuer != cfg.IssuerURL {
+		return vault.OIDCClientCredentials{}, &vault.OIDCIssuerConflictError{
+			Existing:  c.OIDCProviderIssuer,
+			Requested: cfg.IssuerURL,
+		}
+	}
 	c.OIDCProviderWrites++
 	c.OIDCProviderIssuer = cfg.IssuerURL
 	c.OIDCProviderAllowedClientIDs = []string{"*"}

@@ -336,6 +336,49 @@ func TestValidateCreate_VaultAddressRejectsPublicHTTP(t *testing.T) {
 	}
 }
 
+// TestValidateCreate_VaultOIDCIssuerAcceptsValid asserts that a well-formed
+// scheme://host[:port] issuer (with no path) is accepted, including private
+// hosts over http — the issuer need not be publicly routable.
+func TestValidateCreate_VaultOIDCIssuerAcceptsValid(t *testing.T) {
+	for _, issuer := range []string{
+		"https://vault.example.org",
+		"https://vault.example.org:8200",
+		"http://vault.vault.svc.cluster.local:8200",
+		"http://vault-internal:8200",
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.OIDCIssuer = issuer
+			if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+				t.Fatalf("expected oidcIssuer %q to be accepted, got %v", issuer, err)
+			}
+		})
+	}
+}
+
+// TestValidateCreate_VaultOIDCIssuerRejectsInvalid asserts that issuers with a
+// path/query/fragment or missing scheme/host are rejected, since Vault requires
+// the issuer to be scheme://host[:port] with no path.
+func TestValidateCreate_VaultOIDCIssuerRejectsInvalid(t *testing.T) {
+	for _, issuer := range []string{
+		"https://vault.example.org/oidc",        // path
+		"https://vault.example.org/v1/identity", // path
+		"https://vault.example.org?a=b",         // query
+		"vault.example.org",                     // no scheme
+		"https://",                              // no host
+		"ftp://vault.example.org",               // bad scheme
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.OIDCIssuer = issuer
+			_, err := w.ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, "vault.oidcIssuer")
+		})
+	}
+}
+
 // TestValidateCreate_NodeSelectorKeyDiscriminator pins the post-fix
 // behaviour: the canonical convention is keys like
 // `openchami.org/<clusterName>-<probe>-network-ready`, so the validator

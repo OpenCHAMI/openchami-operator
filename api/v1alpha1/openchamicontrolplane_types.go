@@ -203,8 +203,21 @@ type NetworkProbeSpec struct {
 // VaultSpec configures access to the external Vault instance.
 // Vault is never deployed by this operator.
 type VaultSpec struct {
+	// Address is the URL the operator uses to communicate with the Vault API.
 	// +kubebuilder:validation:Required
 	Address string `json:"address"`
+
+	// OIDCIssuer is the canonical scheme://host[:port] advertised as the
+	// issuer of the shared "openchami" Vault OIDC provider. It is distinct from
+	// Address: Address is how the operator dials Vault (often an in-cluster
+	// .svc URL), whereas OIDCIssuer is the stable issuer that OIDC clients —
+	// including TokenSmith — validate the `iss` claim against and must be able
+	// to reach for token verification. It need not be publicly routable, only
+	// reachable by those clients and stable across reconciliations. When
+	// omitted, it falls back to Address for backwards compatibility. Must be
+	// scheme + host + optional port with no path.
+	// +optional
+	OIDCIssuer string `json:"oidcIssuer,omitempty"`
 
 	// +kubebuilder:default=kubernetes
 	AuthMethod VaultAuthMethod `json:"authMethod,omitempty"`

@@ -270,7 +270,23 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
-	// 2. AppRole auth requires AppRoleSecretRef.
+	// 2. When set, the Vault OIDC issuer must be a valid scheme://host[:port]
+	// with no path/query/fragment. Vault requires the provider issuer in this
+	// form (it appends the provider path itself) and rejects anything with a
+	// path. Unlike the dial address, the issuer may legitimately be private, so
+	// we do not require https here — only well-formedness — but a path
+	// component is always an error.
+	if issuer := strings.TrimSpace(obj.Spec.Platform.Vault.OIDCIssuer); issuer != "" {
+		if !isValidOIDCIssuer(issuer) {
+			allErrs = append(allErrs, field.Invalid(
+				specPath.Child("platform", "vault", "oidcIssuer"),
+				obj.Spec.Platform.Vault.OIDCIssuer,
+				"oidcIssuer must be a valid URL of the form scheme://host[:port] with no path, query, or fragment",
+			))
+		}
+	}
+
+	// 3. AppRole auth requires AppRoleSecretRef.
 	if obj.Spec.Platform.Vault.AuthMethod == VaultAuthMethodAppRole &&
 		obj.Spec.Platform.Vault.AppRoleSecretRef == nil {
 		allErrs = append(allErrs, field.Required(
@@ -279,7 +295,7 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
-	// 3. External OIDC provider requires OIDCIssuerURL.
+	// 4. External OIDC provider requires OIDCIssuerURL.
 	if obj.Spec.Services.Tokensmith.OIDCProvider == "external" &&
 		obj.Spec.Services.Tokensmith.OIDCIssuerURL == "" {
 		allErrs = append(allErrs, field.Required(
@@ -478,6 +494,27 @@ func nodeSelectorHasClusterDiscriminator(selector map[string]string, clusterName
 		}
 	}
 	return false
+}
+
+// isValidOIDCIssuer reports whether s is a well-formed OIDC issuer base: a URL
+// with an http/https scheme and a host, and no path, query, or fragment. Vault
+// stamps `<issuer>/v1/identity/oidc/provider/<name>` as the `iss` claim, so the
+// configured issuer must itself carry no path.
+func isValidOIDCIssuer(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Host == "" {
+		return false
+	}
+	if u.Path != "" && u.Path != "/" {
+		return false
+	}
+	return u.RawQuery == "" && u.Fragment == ""
 }
 
 // isAllowedVaultAddress reports whether addr satisfies the operator's vault

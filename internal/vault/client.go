@@ -6,7 +6,30 @@
 // The interface is implemented by client_vault.go (real) and fake/client.go (test).
 package vault
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
+
+// OIDCIssuerConflictError is returned by EnsureOIDCConfig when the shared
+// "openchami" OIDC provider already exists with an issuer that differs from the
+// one the reconciling control plane requests. All control planes sharing a
+// Vault must agree on the provider's canonical issuer; a disagreement is a
+// configuration error the operator refuses to resolve by overwriting shared
+// state, so the existing provider is left untouched.
+type OIDCIssuerConflictError struct {
+	// Existing is the issuer currently configured on the provider.
+	Existing string
+	// Requested is the issuer the reconciling control plane asked for.
+	Requested string
+}
+
+func (e *OIDCIssuerConflictError) Error() string {
+	return fmt.Sprintf(
+		"vault OIDC provider %q already uses issuer %q, but this control plane requests issuer %q; "+
+			"all control planes sharing this Vault must agree on the provider issuer",
+		"openchami", e.Existing, e.Requested)
+}
 
 // Client is the interface the vault sub-reconciler uses to interact with Vault.
 // All methods are idempotent: calling them twice has no additional effect.

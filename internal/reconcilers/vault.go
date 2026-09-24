@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -191,6 +192,15 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 			CLIAssignments:  cp.Spec.Services.Tokensmith.CLIOIDC.Assignments,
 		})
 		if err != nil {
+			// An issuer conflict means another control plane sharing this Vault
+			// already pinned the shared "openchami" provider to a different
+			// issuer. This is a configuration error (the two control planes
+			// disagree on spec.platform.vault.oidcIssuer / address), not a
+			// transient failure; surface it verbatim so the operator can
+			// reconcile the specs rather than silently overwriting shared state.
+			if _, ok := errors.AsType[*vault.OIDCIssuerConflictError](err); ok {
+				return r.fail(cp, fmt.Errorf("oidc provider issuer conflict: %w", err))
+			}
 			return r.fail(cp, fmt.Errorf("ensuring oidc config: %w", err))
 		}
 		// EnsureOIDCConfig also created a separate public PKCE CLI client, but

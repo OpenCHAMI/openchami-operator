@@ -33,7 +33,8 @@ Group/version: `openchami.openchami.org/v1alpha1`. Kind: `OpenCHAMIControlPlane`
 spec:
   platform:
     vault:
-      address: https://vault.example.com:8200       # required
+      address: https://vault.example.com:8200       # required (operator dial address)
+      oidcIssuer: https://vault.example.org          # optional; canonical OIDC issuer
       authMethod: kubernetes | appRole              # default kubernetes
       appRoleSecretRef:                             # required if authMethod=appRole
         name: openchami-foo-approle                 # secret with role_id, secret_id keys
@@ -42,6 +43,16 @@ spec:
 ```
 
 Vault is **external** (invariant 1). The operator never creates a Vault deployment.
+
+`address` is the URL the operator uses to communicate with the Vault API — often an
+in-cluster `.svc` address. `oidcIssuer` is the canonical `scheme://host[:port]` (no
+path) advertised as the issuer of the shared `openchami` Vault OIDC provider; it is
+what OIDC clients — including TokenSmith — validate the `iss` claim against and must
+be able to reach. It need not be publicly routable, only stable and reachable by
+those clients. When omitted, `oidcIssuer` falls back to `address`. All
+`OpenCHAMIControlPlane` resources sharing one Vault must agree on this issuer; a
+disagreement is reported as a configuration conflict rather than silently
+overwriting the shared provider.
 
 ### ObjectStorageSpec
 

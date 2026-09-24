@@ -338,17 +338,62 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 	return creds, nil
 }
 
-// ensureOIDCProvider creates or updates the shared named OIDC provider. The
-// payload is identical for every control plane: a stable issuer derived from
-// the Vault address and a wildcard allowed_client_ids. Because the write is a
-// fixed create-or-update (never a read-modify-write on a per-control-plane
-// list) concurrent reconciliations converge on the same value instead of
-// losing each other's updates (issue #57).
+// ensureOIDCProvider creates or reconciles the shared named OIDC provider,
+// treating its issuer as an invariant that all control planes sharing the Vault
+// must agree on.
 //
-// The issuer set here is scheme+host(+port) with no path; Vault appends
+//   - Provider does not exist: create it with the requested issuer, then read it
+//     back and verify the issuer landed (guards against a concurrent creator
+//     having won with a different issuer).
+//   - Provider exists, issuer matches: reconcile the fields we manage
+//     (allowed_client_ids wildcard + scopes). allowed_client_ids is always the
+//     fixed wildcard ["*"], never a per-control-plane read-modify-write, so
+//     concurrent reconciliations converge instead of losing updates (issue #57).
+//   - Provider exists, issuer differs: return an OIDCIssuerConflictError and do
+//     NOT modify the provider. Silently overwriting would let two control planes
+//     flip the shared issuer back and forth on every reconcile (issue #58).
+//
+// The issuer is scheme+host(+port) with no path; Vault appends
 // `/v1/identity/oidc/provider/<name>` itself when minting the `iss` claim, and
 // tokensmith validates against that exact URL (see helpers.go).
+//
+// Caveat: read-before-create does not make concurrent initial creation atomic
+// (both callers may GET 404 then POST). Vault exposes only create-or-update
+// here, so absent a CAS primitive that window remains; the post-create
+// read-back and subsequent reconciles detect the resulting conflict rather than
+// letting it silently persist.
 func (c *vaultClient) ensureOIDCProvider(ctx context.Context, cfg OIDCConfig) error {
+	path := "identity/oidc/provider/" + vaultOIDCProviderName
+
+	existing, err := c.api.Logical().ReadWithContext(ctx, path)
+	if err != nil {
+		return fmt.Errorf("reading oidc provider %q: %w", vaultOIDCProviderName, err)
+	}
+	if existing != nil && existing.Data != nil {
+		if current, _ := existing.Data["issuer"].(string); current != "" && current != cfg.IssuerURL {
+			return &OIDCIssuerConflictError{Existing: current, Requested: cfg.IssuerURL}
+		}
+	}
+
+	if err := c.writeOIDCProvider(ctx, path, cfg); err != nil {
+		return err
+	}
+
+	// Read back after writing so a concurrent creator that won the race with a
+	// different issuer is detected immediately rather than on a later reconcile.
+	readback, err := c.api.Logical().ReadWithContext(ctx, path)
+	if err != nil {
+		return fmt.Errorf("reading back oidc provider %q: %w", vaultOIDCProviderName, err)
+	}
+	if readback != nil && readback.Data != nil {
+		if current, _ := readback.Data["issuer"].(string); current != "" && current != cfg.IssuerURL {
+			return &OIDCIssuerConflictError{Existing: current, Requested: cfg.IssuerURL}
+		}
+	}
+	return nil
+}
+
+func (c *vaultClient) writeOIDCProvider(ctx context.Context, path string, cfg OIDCConfig) error {
 	data := map[string]any{
 		"issuer":             cfg.IssuerURL,
 		"allowed_client_ids": []string{"*"},
@@ -356,8 +401,7 @@ func (c *vaultClient) ensureOIDCProvider(ctx context.Context, cfg OIDCConfig) er
 	if len(cfg.ScopesSupported) > 0 {
 		data["scopes_supported"] = cfg.ScopesSupported
 	}
-	if _, err := c.api.Logical().WriteWithContext(ctx,
-		"identity/oidc/provider/"+vaultOIDCProviderName, data); err != nil {
+	if _, err := c.api.Logical().WriteWithContext(ctx, path, data); err != nil {
 		return fmt.Errorf("configuring oidc provider %q: %w", vaultOIDCProviderName, err)
 	}
 	return nil
