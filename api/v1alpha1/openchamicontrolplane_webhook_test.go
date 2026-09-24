@@ -357,12 +357,13 @@ func TestValidateCreate_VaultOIDCIssuerAcceptsValid(t *testing.T) {
 }
 
 // TestValidateCreate_VaultOIDCIssuerAcceptsInternalHTTP asserts that plain http
-// is accepted for cluster-internal hosts (dev configurations), matching the
-// Vault dial address policy — the issuer never crosses a trust boundary there.
+// is accepted for provably-internal hosts (dev configurations); the issuer
+// never crosses a trust boundary there. Note single-label hostnames are NOT
+// accepted here (see RejectsSingleLabelHTTP) — only for the dial address.
 func TestValidateCreate_VaultOIDCIssuerAcceptsInternalHTTP(t *testing.T) {
 	for _, issuer := range []string{
 		"http://127.0.0.1:8200",
-		"http://vault:8200", // single-label
+		"http://vault.vault.svc:8200",
 		"http://vault.vault.svc.cluster.local:8200",
 		"http://10.0.0.5:8200", // RFC1918
 	} {
@@ -371,7 +372,7 @@ func TestValidateCreate_VaultOIDCIssuerAcceptsInternalHTTP(t *testing.T) {
 			c := newFixtureCluster("a")
 			c.Spec.Platform.Vault.OIDCIssuer = issuer
 			if _, err := w.ValidateCreate(context.Background(), c); err != nil {
-				t.Fatalf("expected cluster-internal http oidcIssuer %q to be accepted, got %v", issuer, err)
+				t.Fatalf("expected internal http oidcIssuer %q to be accepted, got %v", issuer, err)
 			}
 		})
 	}
@@ -385,6 +386,26 @@ func TestValidateCreate_VaultOIDCIssuerRejectsPublicHTTP(t *testing.T) {
 	for _, issuer := range []string{
 		"http://vault.example.org",
 		"http://8.8.8.8:8200",
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.OIDCIssuer = issuer
+			_, err := w.ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, "vault.oidcIssuer")
+		})
+	}
+}
+
+// TestValidateCreate_VaultOIDCIssuerRejectsSingleLabelHTTP pins the deliberate
+// difference from the dial address: a bare single-label host is a dev
+// convenience for the Vault dial address but is NOT accepted as a plaintext
+// canonical issuer, because a single-label name is not provably cluster-local
+// (a DNS search domain could make it site-wide reachable). https must be used.
+func TestValidateCreate_VaultOIDCIssuerRejectsSingleLabelHTTP(t *testing.T) {
+	for _, issuer := range []string{
+		"http://vault:8200",
+		"http://openchami-vault-dev:8200",
 	} {
 		t.Run(issuer, func(t *testing.T) {
 			w := newWebhook(t)
