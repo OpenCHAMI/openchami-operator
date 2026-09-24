@@ -247,12 +247,13 @@ func VaultAddress(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 // (issue #58), and a disagreement is reported as a conflict rather than
 // silently overwritten (see ensureOIDCProvider).
 //
-// The admission webhook (isValidOIDCIssuer) already rejects an oidcIssuer that
-// carries a path, query, or fragment, so a validated CR never reaches here with
-// one. The scheme+host reconstruction below is therefore only a defensive
-// normalization — chiefly for the address fallback, whose own validation does
-// not forbid a trailing path — and must never emit a value with a path
-// component (Vault rejects the provider issuer otherwise).
+// The admission webhook (isValidOIDCIssuer) rejects an oidcIssuer that carries
+// userinfo, a path, a query, or a fragment, so a validated oidcIssuer passes
+// through here unchanged apart from the explicitly-supported trailing "/". The
+// scheme+host reconstruction below is therefore only a defensive normalization
+// — chiefly for the address fallback, whose own validation does not forbid a
+// trailing path — and must never emit a value with a path component (Vault
+// rejects the provider issuer otherwise).
 func VaultOIDCIssuerBase(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 	source := strings.TrimSpace(cp.Spec.Platform.Vault.OIDCIssuer)
 	if source == "" {

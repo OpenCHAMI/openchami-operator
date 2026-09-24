@@ -271,17 +271,20 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 	}
 
 	// 2. When set, the Vault OIDC issuer must be a valid scheme://host[:port]
-	// with no path/query/fragment. Vault requires the provider issuer in this
-	// form (it appends the provider path itself) and rejects anything with a
-	// path. Unlike the dial address, the issuer may legitimately be private, so
-	// we do not require https here — only well-formedness — but a path
-	// component is always an error.
+	// with no userinfo, path, query, or fragment. Vault requires the provider
+	// issuer in this form (it appends the provider path itself) and rejects
+	// anything with a path. The issuer is client-facing (used for
+	// discovery/JWKS/token operations), so it follows the same http/https
+	// policy as the dial address: https is always allowed, http only for
+	// cluster-internal hosts. See isValidOIDCIssuer.
 	if issuer := strings.TrimSpace(obj.Spec.Platform.Vault.OIDCIssuer); issuer != "" {
 		if !isValidOIDCIssuer(issuer) {
 			allErrs = append(allErrs, field.Invalid(
 				specPath.Child("platform", "vault", "oidcIssuer"),
 				obj.Spec.Platform.Vault.OIDCIssuer,
-				"oidcIssuer must be a valid URL of the form scheme://host[:port] with no path, query, or fragment",
+				"oidcIssuer must be a valid URL of the form scheme://host[:port] with no userinfo, path, query, or fragment; "+
+					"http:// is allowed only for hosts unreachable from outside the cluster (loopback, single-label/.svc DNS, "+
+					"RFC1918/link-local IPs), public hosts require https://",
 			))
 		}
 	}
@@ -496,10 +499,23 @@ func nodeSelectorHasClusterDiscriminator(selector map[string]string, clusterName
 	return false
 }
 
-// isValidOIDCIssuer reports whether s is a well-formed OIDC issuer base: a URL
-// with an http/https scheme and a host, and no path, query, or fragment. Vault
-// stamps `<issuer>/v1/identity/oidc/provider/<name>` as the `iss` claim, so the
-// configured issuer must itself carry no path.
+// isValidOIDCIssuer reports whether s is a well-formed, policy-compliant OIDC
+// issuer base. It must be a URL of the form scheme://host[:port] with:
+//   - an http or https scheme;
+//   - a real hostname (u.Hostname() non-empty);
+//   - no userinfo, path (a bare "/" is allowed), query, or fragment.
+//
+// Vault stamps `<issuer>/v1/identity/oidc/provider/<name>` as the `iss` claim,
+// so the configured issuer must itself carry no path. Rejecting userinfo and
+// requiring a real hostname guarantees the accepted value survives
+// VaultOIDCIssuerBase() (which reconstructs scheme+host) without any semantic
+// normalization beyond the explicitly-supported trailing "/".
+//
+// The http/https policy matches the Vault dial address (isAllowedVaultAddress):
+// https is always allowed; http is allowed only for hosts unreachable from
+// outside the cluster (loopback, single-label/.svc DNS, RFC1918/link-local
+// IPs). The canonical issuer is client-facing and used for discovery/JWKS/token
+// operations, so a public issuer must use TLS just like the dial address.
 func isValidOIDCIssuer(s string) bool {
 	u, err := url.Parse(s)
 	if err != nil {
@@ -508,13 +524,24 @@ func isValidOIDCIssuer(s string) bool {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return false
 	}
-	if u.Host == "" {
+	if u.Hostname() == "" {
+		return false
+	}
+	if u.User != nil {
 		return false
 	}
 	if u.Path != "" && u.Path != "/" {
 		return false
 	}
-	return u.RawQuery == "" && u.Fragment == ""
+	if u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	// http is only acceptable for cluster-internal hosts; public hosts must
+	// use https, consistent with the Vault dial address policy.
+	if u.Scheme == "http" && !isClusterInternalHost(u.Hostname()) {
+		return false
+	}
+	return true
 }
 
 // isAllowedVaultAddress reports whether addr satisfies the operator's vault

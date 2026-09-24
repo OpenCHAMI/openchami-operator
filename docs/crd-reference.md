@@ -49,9 +49,12 @@ in-cluster `.svc` address. `oidcIssuer` is the canonical `scheme://host[:port]` 
 path) advertised as the issuer of the shared `openchami` Vault OIDC provider; it is
 what OIDC clients — including TokenSmith — validate the `iss` claim against and must
 be able to reach. It need not be publicly routable, only stable and reachable by
-those clients. When omitted, `oidcIssuer` falls back to `address`. All
-`OpenCHAMIControlPlane` resources sharing one Vault must agree on this issuer; a
-disagreement is reported as a configuration conflict rather than silently
+those clients. It must be `scheme://host[:port]` with no userinfo, path, query, or
+fragment, and follows the same TLS policy as `address`: `https` for any host, `http`
+only for cluster-internal hosts (loopback, single-label/`.svc` DNS, RFC1918/link-local
+IPs) — public issuers must use `https`. When omitted, `oidcIssuer` falls back to
+`address`. All `OpenCHAMIControlPlane` resources sharing one Vault must agree on this
+issuer; a disagreement is reported as a configuration conflict rather than silently
 overwriting the shared provider.
 
 ### ObjectStorageSpec

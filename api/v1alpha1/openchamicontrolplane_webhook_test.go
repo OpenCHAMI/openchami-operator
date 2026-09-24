@@ -336,17 +336,14 @@ func TestValidateCreate_VaultAddressRejectsPublicHTTP(t *testing.T) {
 	}
 }
 
-// TestValidateCreate_VaultOIDCIssuerAcceptsValid asserts that a well-formed
-// scheme://host[:port] issuer (with no path) is accepted, including private
-// hosts over http — the issuer need not be publicly routable. A bare trailing
-// slash is treated as "no path" and accepted.
+// TestValidateCreate_VaultOIDCIssuerAcceptsValid asserts that well-formed
+// scheme://host[:port] issuers are accepted: https for any host, and a bare
+// trailing slash treated as "no path".
 func TestValidateCreate_VaultOIDCIssuerAcceptsValid(t *testing.T) {
 	for _, issuer := range []string{
 		"https://vault.example.org",
 		"https://vault.example.org:8200",
 		"https://vault.example.org/", // trailing slash == no path
-		"http://vault.vault.svc.cluster.local:8200",
-		"http://vault-internal:8200",
 	} {
 		t.Run(issuer, func(t *testing.T) {
 			w := newWebhook(t)
@@ -359,20 +356,64 @@ func TestValidateCreate_VaultOIDCIssuerAcceptsValid(t *testing.T) {
 	}
 }
 
-// TestValidateCreate_VaultOIDCIssuerRejectsInvalid asserts that issuers with a
-// path/query/fragment or missing scheme/host are rejected rather than silently
-// normalized, since Vault requires the issuer to be scheme://host[:port] with
-// no path and a typo pins shared Vault state for every control plane.
+// TestValidateCreate_VaultOIDCIssuerAcceptsInternalHTTP asserts that plain http
+// is accepted for cluster-internal hosts (dev configurations), matching the
+// Vault dial address policy — the issuer never crosses a trust boundary there.
+func TestValidateCreate_VaultOIDCIssuerAcceptsInternalHTTP(t *testing.T) {
+	for _, issuer := range []string{
+		"http://127.0.0.1:8200",
+		"http://vault:8200", // single-label
+		"http://vault.vault.svc.cluster.local:8200",
+		"http://10.0.0.5:8200", // RFC1918
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.OIDCIssuer = issuer
+			if _, err := w.ValidateCreate(context.Background(), c); err != nil {
+				t.Fatalf("expected cluster-internal http oidcIssuer %q to be accepted, got %v", issuer, err)
+			}
+		})
+	}
+}
+
+// TestValidateCreate_VaultOIDCIssuerRejectsPublicHTTP asserts that plain http to
+// a publicly-routable host is rejected: the canonical issuer is client-facing
+// (discovery/JWKS/token), so public issuers must use https, just like the dial
+// address.
+func TestValidateCreate_VaultOIDCIssuerRejectsPublicHTTP(t *testing.T) {
+	for _, issuer := range []string{
+		"http://vault.example.org",
+		"http://8.8.8.8:8200",
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			w := newWebhook(t)
+			c := newFixtureCluster("a")
+			c.Spec.Platform.Vault.OIDCIssuer = issuer
+			_, err := w.ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, "vault.oidcIssuer")
+		})
+	}
+}
+
+// TestValidateCreate_VaultOIDCIssuerRejectsInvalid asserts that issuers with
+// userinfo, a path/query/fragment, a missing scheme/host, or a non-http(s)
+// scheme are rejected rather than silently normalized. Anything accepted here
+// must pass through VaultOIDCIssuerBase() unchanged (a typo pins shared Vault
+// state for every control plane).
 func TestValidateCreate_VaultOIDCIssuerRejectsInvalid(t *testing.T) {
 	for _, issuer := range []string{
-		"https://vault.example.org/foo",         // path
-		"https://vault.example.org/v1/identity", // path
-		"https://vault.example.org?foo=bar",     // query
-		"https://vault.example.org#foo",         // fragment
-		"not-a-url",                             // no scheme/host
-		"vault.example.org",                     // no scheme
-		"https://",                              // no host
-		"ftp://vault.example.org",               // bad scheme
+		"https://vault.example.org/foo",           // path
+		"https://vault.example.org/v1/identity",   // path
+		"https://vault.example.org?foo=bar",       // query
+		"https://vault.example.org#foo",           // fragment
+		"https://user@vault.example.org",          // userinfo
+		"https://user:password@vault.example.org", // userinfo
+		"https://:8200",                           // no host
+		"not-a-url",                               // no scheme/host
+		"vault.example.org",                       // no scheme
+		"https://",                                // no host
+		"ftp://vault.example.org",                 // bad scheme
 	} {
 		t.Run(issuer, func(t *testing.T) {
 			w := newWebhook(t)
