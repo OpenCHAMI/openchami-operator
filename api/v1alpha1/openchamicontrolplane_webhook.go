@@ -41,6 +41,12 @@ const (
 	pinKeyFunicular       = "funicular-collector"
 )
 
+// URL scheme literals reused across address/issuer validation.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // enabledServicesForImagePinning returns the canonical names of every
 // service this control plane has enabled (and therefore needs a Pinned
 // entry for when Stream=pinned). Order is irrelevant for correctness
@@ -526,7 +532,7 @@ func isValidOIDCIssuer(s string) bool {
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 		return false
 	}
 	if u.Hostname() == "" {
@@ -543,7 +549,7 @@ func isValidOIDCIssuer(s string) bool {
 	}
 	// http is only acceptable for cluster-internal hosts; public hosts must
 	// use https, consistent with the Vault dial address policy.
-	if u.Scheme == "http" && !isClusterInternalHost(u.Hostname()) {
+	if u.Scheme == schemeHTTP && !isClusterInternalHost(u.Hostname()) {
 		return false
 	}
 	return true
@@ -644,7 +650,7 @@ func isHTTPURL(s string) bool {
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 		return false
 	}
 	return u.Host != ""
@@ -683,10 +689,10 @@ func isSecureOIDCRedirectURI(s string) bool {
 	if err != nil || u.Host == "" || u.Fragment != "" {
 		return false
 	}
-	if u.Scheme == "https" {
+	if u.Scheme == schemeHTTPS {
 		return true
 	}
-	if u.Scheme != "http" {
+	if u.Scheme != schemeHTTP {
 		return false
 	}
 	host := u.Hostname()

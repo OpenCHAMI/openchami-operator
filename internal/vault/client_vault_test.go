@@ -15,6 +15,12 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 )
 
+const (
+	// Shared test literals, centralised so repeated uses don't trip goconst.
+	testProviderPath = "/v1/identity/oidc/provider/openchami"
+	testAlphaIssuer  = "https://alpha.example.test"
+)
+
 func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *testing.T) {
 	t.Parallel()
 
@@ -42,10 +48,10 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 			_, _ = w.Write([]byte(`{"data":{"client_id":"cli-id"}}`))
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+		if r.Method == http.MethodGet && r.URL.Path == testProviderPath {
 			// Reflect whatever was last written so the read-before-write and
 			// post-create read-back see a consistent issuer. 404 until created.
-			if prev, ok := writes["/v1/identity/oidc/provider/openchami"]; ok {
+			if prev, ok := writes[testProviderPath]; ok {
 				w.Header().Set("Content-Type", "application/json")
 				resp := map[string]any{"data": prev}
 				_ = json.NewEncoder(w).Encode(resp)
@@ -67,7 +73,7 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	client := &vaultClient{api: api}
 
 	credentials, err := client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
-		IssuerURL:       "https://alpha.example.test",
+		IssuerURL:       testAlphaIssuer,
 		ScopesSupported: []string{"groups"},
 		CLIRedirectURIs: []string{"http://127.0.0.1:8250/callback"},
 		CLIAssignments:  []string{vaultOIDCDefaultAssignment},
@@ -104,11 +110,11 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 
 	// The shared named provider is written with a fixed wildcard
 	// allowed_client_ids (issue #57): no per-control-plane read-modify-write.
-	provider := writes["/v1/identity/oidc/provider/openchami"]
+	provider := writes[testProviderPath]
 	if provider == nil {
 		t.Fatal("expected a write to the named openchami provider")
 	}
-	if provider["issuer"] != "https://alpha.example.test" {
+	if provider["issuer"] != testAlphaIssuer {
 		t.Errorf("provider issuer = %v, want https://alpha.example.test", provider["issuer"])
 	}
 	assertJSONStrings(t, provider["allowed_client_ids"], []string{"*"})
@@ -123,13 +129,13 @@ func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
 
 	providerWrites := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+		if r.Method == http.MethodGet && r.URL.Path == testProviderPath {
 			// Provider already pinned to a different issuer by another CP.
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"data":{"issuer":"https://other.example.test","allowed_client_ids":["*"]}}`))
 			return
 		}
-		if r.Method == http.MethodPut && r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+		if r.Method == http.MethodPut && r.URL.Path == testProviderPath {
 			providerWrites++
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"data":{}}`))
@@ -153,13 +159,13 @@ func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
 	client := &vaultClient{api: api}
 
 	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
-		IssuerURL: "https://alpha.example.test",
+		IssuerURL: testAlphaIssuer,
 	})
 	var conflict *OIDCIssuerConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("expected OIDCIssuerConflictError, got %v", err)
 	}
-	if conflict.Existing != "https://other.example.test" || conflict.Requested != "https://alpha.example.test" {
+	if conflict.Existing != "https://other.example.test" || conflict.Requested != testAlphaIssuer {
 		t.Errorf("unexpected conflict detail: %+v", conflict)
 	}
 	if providerWrites != 0 {
@@ -177,7 +183,7 @@ func TestVaultClient_EnsureOIDCConfigReadBackConflict(t *testing.T) {
 
 	provGets := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+		if r.URL.Path == testProviderPath {
 			switch r.Method {
 			case http.MethodGet:
 				provGets++
@@ -215,13 +221,13 @@ func TestVaultClient_EnsureOIDCConfigReadBackConflict(t *testing.T) {
 	client := &vaultClient{api: api}
 
 	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
-		IssuerURL: "https://alpha.example.test",
+		IssuerURL: testAlphaIssuer,
 	})
 	var conflict *OIDCIssuerConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("expected OIDCIssuerConflictError from read-back, got %v", err)
 	}
-	if conflict.Existing != "https://winner.example.test" || conflict.Requested != "https://alpha.example.test" {
+	if conflict.Existing != "https://winner.example.test" || conflict.Requested != testAlphaIssuer {
 		t.Errorf("unexpected conflict detail: %+v", conflict)
 	}
 }
@@ -234,7 +240,7 @@ func TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer(t *testing.T) {
 
 	provGets := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+		if r.URL.Path == testProviderPath {
 			switch r.Method {
 			case http.MethodGet:
 				provGets++
@@ -270,7 +276,7 @@ func TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer(t *testing.T) {
 	client := &vaultClient{api: api}
 
 	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
-		IssuerURL: "https://alpha.example.test",
+		IssuerURL: testAlphaIssuer,
 	})
 	if err == nil {
 		t.Fatal("expected an error when read-back returns no issuer")

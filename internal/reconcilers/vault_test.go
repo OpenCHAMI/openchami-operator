@@ -54,6 +54,11 @@ const (
 	// newControlPlane(). Centralised here so test asserts can reference the
 	// same value without tripping goconst.
 	testS3Endpoint = "http://s3.test:9000"
+
+	// testOIDCIssuer and testVaultAddrWithPort are reused across the OIDC
+	// issuer tests; centralised so repeated asserts don't trip goconst.
+	testOIDCIssuer        = "https://vault.example.org"
+	testVaultAddrWithPort = "https://vault.example.test:8200"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -434,7 +439,7 @@ func TestVaultReconciler_OIDCIssuerSeparateFromAddress(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
 	cp.Spec.Platform.Vault.Address = "https://vault.vault.svc.cluster.local:8200"
-	cp.Spec.Platform.Vault.OIDCIssuer = "https://vault.example.org"
+	cp.Spec.Platform.Vault.OIDCIssuer = testOIDCIssuer
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
 
@@ -448,14 +453,14 @@ func TestVaultReconciler_OIDCIssuerSeparateFromAddress(t *testing.T) {
 		t.Errorf("VaultAddress = %q, want the .svc dial address", got)
 	}
 	// Provider issuer comes from oidcIssuer, not address.
-	if v.OIDCProviderIssuer != "https://vault.example.org" {
-		t.Errorf("provider issuer = %q, want https://vault.example.org", v.OIDCProviderIssuer)
+	if v.OIDCProviderIssuer != testOIDCIssuer {
+		t.Errorf("provider issuer = %q, want %q", v.OIDCProviderIssuer, testOIDCIssuer)
 	}
-	if got := VaultOIDCIssuerBase(cp); got != "https://vault.example.org" {
-		t.Errorf("VaultOIDCIssuerBase = %q, want https://vault.example.org", got)
+	if got := VaultOIDCIssuerBase(cp); got != testOIDCIssuer {
+		t.Errorf("VaultOIDCIssuerBase = %q, want %q", got, testOIDCIssuer)
 	}
 	// TokenSmith validates against the oidcIssuer-derived provider URL.
-	wantProvider := "https://vault.example.org/v1/identity/oidc/provider/openchami"
+	wantProvider := testOIDCIssuer + "/v1/identity/oidc/provider/openchami"
 	if got := VaultOIDCProviderURL(cp); got != wantProvider {
 		t.Errorf("VaultOIDCProviderURL = %q, want %q", got, wantProvider)
 	}
@@ -467,7 +472,7 @@ func TestVaultReconciler_OIDCIssuerSeparateFromAddress(t *testing.T) {
 func TestVaultReconciler_OIDCIssuerFallsBackToAddress(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
-	cp.Spec.Platform.Vault.Address = "https://vault.example.test:8200"
+	cp.Spec.Platform.Vault.Address = testVaultAddrWithPort
 	cp.Spec.Platform.Vault.OIDCIssuer = ""
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
 	v := vaultfake.NewClient()
@@ -477,10 +482,10 @@ func TestVaultReconciler_OIDCIssuerFallsBackToAddress(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if v.OIDCProviderIssuer != "https://vault.example.test:8200" {
+	if v.OIDCProviderIssuer != testVaultAddrWithPort {
 		t.Errorf("provider issuer = %q, want the Vault address (fallback)", v.OIDCProviderIssuer)
 	}
-	if got := VaultOIDCIssuerBase(cp); got != "https://vault.example.test:8200" {
+	if got := VaultOIDCIssuerBase(cp); got != testVaultAddrWithPort {
 		t.Errorf("VaultOIDCIssuerBase = %q, want the Vault address (fallback)", got)
 	}
 }
@@ -493,8 +498,8 @@ func TestVaultReconciler_OIDCSharedIssuerAgreement(t *testing.T) {
 	cpB := newControlPlane("beta")
 	// Both advertise the same canonical issuer even though they could dial
 	// Vault differently.
-	cpA.Spec.Platform.Vault.OIDCIssuer = "https://vault.example.org"
-	cpB.Spec.Platform.Vault.OIDCIssuer = "https://vault.example.org"
+	cpA.Spec.Platform.Vault.OIDCIssuer = testOIDCIssuer
+	cpB.Spec.Platform.Vault.OIDCIssuer = testOIDCIssuer
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpA, cpB).Build()
 	v := vaultfake.NewClient()
 
@@ -505,8 +510,8 @@ func TestVaultReconciler_OIDCSharedIssuerAgreement(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), cpB); err != nil {
 		t.Fatalf("reconcile beta: %v", err)
 	}
-	if v.OIDCProviderIssuer != "https://vault.example.org" {
-		t.Errorf("provider issuer = %q, want https://vault.example.org", v.OIDCProviderIssuer)
+	if v.OIDCProviderIssuer != testOIDCIssuer {
+		t.Errorf("provider issuer = %q, want %q", v.OIDCProviderIssuer, testOIDCIssuer)
 	}
 	// Both control planes' clients exist.
 	if _, ok := v.OIDCClients["alpha"]; !ok {
