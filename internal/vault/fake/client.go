@@ -52,13 +52,23 @@ type Client struct {
 	// by EnsureOIDCConfig. The model intentionally has no client-secret field.
 	PublicOIDCClients map[string]vault.PublicOIDCClient
 
-	// ProviderAllowedClientIDs models the default OIDC provider's
-	// allowed_client_ids list. Tests may seed it (e.g. with a pre-existing
-	// admin-authorized client ID, or the ["*"] wildcard) before calling
-	// EnsureOIDCConfig; the fake applies the same read-modify-write /
-	// wildcard-preserving semantics as the real client so preservation and
-	// idempotency can be asserted.
-	ProviderAllowedClientIDs []string
+	// OIDCProviderAllowedClientIDs records the allowed_client_ids written to the
+	// shared named OIDC provider by EnsureOIDCConfig. The operator always writes
+	// the fixed wildcard ["*"] (access is scoped per-client via assignments), so
+	// tests assert this rather than a per-control-plane read-modify-write list.
+	OIDCProviderAllowedClientIDs []string
+	// OIDCProviderIssuer records the issuer written to the shared named OIDC
+	// provider by EnsureOIDCConfig. Tests may seed it before reconciling to
+	// simulate a pre-existing provider whose issuer another control plane (or
+	// an administrator) already set; EnsureOIDCConfig then returns an
+	// OIDCIssuerConflictError if a control plane requests a different issuer.
+	OIDCProviderIssuer string
+	// OIDCProviderScopes records the scopes_supported written to the shared
+	// named OIDC provider by EnsureOIDCConfig.
+	OIDCProviderScopes []string
+	// OIDCProviderWrites counts how many times the shared provider was written.
+	// Used by concurrency tests to assert convergence.
+	OIDCProviderWrites int
 
 	// Errors injects errors keyed by method name.
 	// Set Errors["EnsureSecret"] = errors.New(...) to make every
@@ -190,6 +200,29 @@ func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName string, cfg vau
 		return vault.OIDCClientCredentials{}, err
 	}
 	c.OIDCConfigs[clusterName] = cfg.IssuerURL
+
+	// Mirror the real client's issuer invariant: the shared named provider's
+	// issuer must be agreed on by every control plane. If the provider already
+	// exists with a different issuer, return a conflict and leave it untouched
+	// (issue #58). allowed_client_ids is always the fixed wildcard, never a
+	// per-control-plane read-modify-write, so concurrent calls converge (#57).
+	if c.OIDCProviderIssuer != "" && c.OIDCProviderIssuer != cfg.IssuerURL {
+		return vault.OIDCClientCredentials{}, &vault.OIDCIssuerConflictError{
+			Existing:  c.OIDCProviderIssuer,
+			Requested: cfg.IssuerURL,
+		}
+	}
+	c.OIDCProviderWrites++
+	c.OIDCProviderIssuer = cfg.IssuerURL
+	c.OIDCProviderAllowedClientIDs = []string{"*"}
+	if len(cfg.ScopesSupported) > 0 {
+		c.OIDCProviderScopes = append([]string(nil), cfg.ScopesSupported...)
+	}
+
+	publicClientID := "fake-public-client-id-" + clusterName
+	if existing, ok := c.PublicOIDCClients[clusterName]; ok {
+		publicClientID = existing.ClientID
+	}
 	creds, ok := c.OIDCClients[clusterName]
 	if !ok {
 		// Mimic Vault: generate stable per-cluster credentials on first call
@@ -198,32 +231,16 @@ func (c *Client) EnsureOIDCConfig(_ context.Context, clusterName string, cfg vau
 			ClientID:     "fake-client-id-" + clusterName,
 			ClientSecret: "fake-client-secret-" + clusterName,
 		}
-		c.OIDCClients[clusterName] = creds
 	}
-	publicClientID := "fake-public-client-id-" + clusterName
-	if existing, ok := c.PublicOIDCClients[clusterName]; ok {
-		publicClientID = existing.ClientID
-	}
+	creds.CLIClientID = publicClientID
+	c.OIDCClients[clusterName] = creds
 	c.PublicOIDCClients[clusterName] = vault.PublicOIDCClient{
 		Name:         "openchami-" + clusterName + "-cli",
 		ClientID:     publicClientID,
 		RedirectURIs: append([]string(nil), cfg.CLIRedirectURIs...),
 		Assignments:  append([]string(nil), cfg.CLIAssignments...),
 	}
-	c.authorizeClientOnProvider(publicClientID)
 	return creds, nil
-}
-
-// authorizeClientOnProvider mirrors vaultClient.ensureProviderAllowsClient:
-// preserve a ["*"] wildcard and existing IDs, otherwise append the client ID
-// (deduplicated). Assumes the caller holds c.mu.
-func (c *Client) authorizeClientOnProvider(clientID string) {
-	for _, id := range c.ProviderAllowedClientIDs {
-		if id == "*" || id == clientID {
-			return
-		}
-	}
-	c.ProviderAllowedClientIDs = append(c.ProviderAllowedClientIDs, clientID)
 }
 
 func (c *Client) DeleteClusterPaths(_ context.Context, prefix string) error {

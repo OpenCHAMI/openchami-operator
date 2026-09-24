@@ -37,6 +37,11 @@ type VaultPaths struct {
 	// TokensmithOIDC is the path for the tokensmith OIDC client secret.
 	TokensmithOIDC string
 
+	// CLIOIDC is the path for the public CLI OIDC client_id. The CLI client is
+	// a public (PKCE) client with no secret, so only client_id is stored here.
+	// It is surfaced so CLI tooling can discover the client_id to log in with.
+	CLIOIDC string
+
 	// PolicyServices is the name of the Vault policy granting read access
 	// to this cluster's secrets.
 	PolicyServices string
@@ -62,6 +67,7 @@ func Paths(clusterName string) VaultPaths {
 		S3Credentials:            prefix + "/s3/versitygw",
 		LogCredentials:           prefix + "/s3/logs",
 		TokensmithOIDC:           prefix + "/oidc/tokensmith-client",
+		CLIOIDC:                  prefix + "/oidc/cli-client",
 		PolicyServices:           role,
 		AppRoleServices:          role,
 		K8sRoleServices:          role,

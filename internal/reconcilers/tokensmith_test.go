@@ -108,7 +108,7 @@ func TestTokensmithReconciler_AppliesAllResources(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/default") {
+	if !strings.Contains(oidcIssuer, "/v1/identity/oidc/provider/openchami") {
 		t.Errorf("expected TOKENSMITH_OIDC_PROVIDER to contain vault issuer suffix, got %q", oidcIssuer)
 	}
 	// TOKENSMITH_OIDC_PROVIDER must be derived from the Vault ADDRESS (shared

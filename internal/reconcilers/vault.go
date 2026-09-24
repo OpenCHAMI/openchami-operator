@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
 
@@ -170,17 +171,24 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 	}
 
 	if cp.Spec.Services.Tokensmith.OIDCProvider == tokensmithOIDCProviderVault {
-		// Vault requires the identity/oidc/config issuer to be scheme+host
-		// (+port) with no path; it appends the provider path itself when
-		// minting `iss`. The issuer MUST be derived from the Vault address —
-		// the same source tokensmith uses for TOKENSMITH_OIDC_PROVIDER — so
-		// the minted `iss` exactly matches what tokensmith validates against.
-		// Deriving it from spec.domain instead produced iss=https://<domain>/...
-		// while tokensmith expected the Vault .svc URL, so every token was
-		// rejected. Using the Vault address also avoids fighting over the
-		// Vault-GLOBAL identity/oidc/config when several control planes share
-		// one Vault. The cluster-name partition is carried by the OIDC key
-		// (`openchami-<clusterName>`) inside EnsureOIDCConfig, not the issuer.
+		// EnsureOIDCConfig ensures the shared named "openchami" OIDC provider
+		// and this cluster's confidential + public clients. The provider issuer
+		// MUST be scheme+host(+port) with no path; Vault appends the provider
+		// path itself when minting `iss`. The canonical issuer is
+		// spec.platform.vault.oidcIssuer when set, otherwise
+		// spec.platform.vault.address (see VaultOIDCIssuerBase) — the SAME source
+		// tokensmith uses for TOKENSMITH_OIDC_PROVIDER, so the minted `iss`
+		// exactly matches what tokensmith validates against. It is deliberately
+		// distinct from the Vault dial address: the operator may talk to Vault
+		// over an internal .svc URL (spec.platform.vault.address) while
+		// advertising a different canonical issuer. The provider is shared and
+		// the operator never writes the Vault-GLOBAL identity/oidc/config, so
+		// control planes cannot race on a shared client list (#57); allowed
+		// clients are the fixed wildcard. Control planes sharing this Vault MUST
+		// agree on the canonical issuer — a disagreement is surfaced as a
+		// configuration conflict (below), never silently overwritten (#58). The
+		// cluster-name partition is carried by the per-cluster clients
+		// (`openchami-<clusterName>-*`) and key inside EnsureOIDCConfig.
 		issuer := VaultOIDCIssuerBase(cp)
 		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, vault.OIDCConfig{
 			IssuerURL:       issuer,
@@ -188,21 +196,38 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 			CLIAssignments:  cp.Spec.Services.Tokensmith.CLIOIDC.Assignments,
 		})
 		if err != nil {
+			// An issuer conflict means another control plane sharing this Vault
+			// already pinned the shared "openchami" provider to a different
+			// issuer. This is a configuration error (the two control planes
+			// disagree on spec.platform.vault.oidcIssuer / address), not a
+			// transient failure; surface it verbatim so the operator can
+			// reconcile the specs rather than silently overwriting shared state.
+			if _, ok := errors.AsType[*vault.OIDCIssuerConflictError](err); ok {
+				return r.fail(cp, fmt.Errorf("oidc provider issuer conflict: %w", err))
+			}
 			return r.fail(cp, fmt.Errorf("ensuring oidc config: %w", err))
 		}
 		// EnsureOIDCConfig also created a separate public PKCE CLI client, but
 		// only the confidential TokenSmith client's generated client_id and
-		// client_secret cross this boundary. Persist those credentials into the
-		// TokenSmith OIDC KV path (overwriting the random seed) so VSO
-		// materializes them into the openchami-<cluster>-tokensmith-oidc Secret.
-		// CLI users receive the public client_id directly from Vault and never
-		// receive this client_secret.
+		// client_secret cross this boundary into the tokensmith Secret. Persist
+		// those credentials into the TokenSmith OIDC KV path (overwriting the
+		// random seed) so VSO materializes them into the
+		// openchami-<cluster>-tokensmith-oidc Secret. CLI users receive the
+		// public client_id (never this client_secret).
 		oidcData := map[string]any{
 			tokensmithOIDCClientIDKey:     creds.ClientID,
 			tokensmithOIDCClientSecretKey: creds.ClientSecret,
 		}
 		if err := r.VaultClient.EnsureSecret(ctx, paths.TokensmithOIDC, oidcData, true); err != nil {
 			return r.fail(cp, fmt.Errorf("storing oidc client credentials: %w", err))
+		}
+		// Surface the public CLI client_id so CLI tooling can discover which
+		// client to log in with. It is a public (PKCE) client and has no secret.
+		if creds.CLIClientID != "" {
+			cliData := map[string]any{tokensmithOIDCClientIDKey: creds.CLIClientID}
+			if err := r.VaultClient.EnsureSecret(ctx, paths.CLIOIDC, cliData, true); err != nil {
+				return r.fail(cp, fmt.Errorf("storing cli oidc client_id: %w", err))
+			}
 		}
 	}
 

@@ -41,6 +41,12 @@ const (
 	pinKeyFunicular       = "funicular-collector"
 )
 
+// URL scheme literals reused across address/issuer validation.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // enabledServicesForImagePinning returns the canonical names of every
 // service this control plane has enabled (and therefore needs a Pinned
 // entry for when Stream=pinned). Order is irrelevant for correctness
@@ -270,7 +276,27 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
-	// 2. AppRole auth requires AppRoleSecretRef.
+	// 2. When set, the Vault OIDC issuer must be a valid scheme://host[:port]
+	// with no userinfo, path, query, or fragment. Vault requires the provider
+	// issuer in this form (it appends the provider path itself) and rejects
+	// anything with a path. The issuer is client-facing (used for
+	// discovery/JWKS/token operations), so http:// is permitted only for
+	// provably-internal hosts. Unlike the dial address, bare single-label
+	// hostnames are NOT accepted for the issuer — they are not provably
+	// cluster-local. See isValidOIDCIssuer.
+	if issuer := strings.TrimSpace(obj.Spec.Platform.Vault.OIDCIssuer); issuer != "" {
+		if !isValidOIDCIssuer(issuer) {
+			allErrs = append(allErrs, field.Invalid(
+				specPath.Child("platform", "vault", "oidcIssuer"),
+				obj.Spec.Platform.Vault.OIDCIssuer,
+				"oidcIssuer must be a valid URL of the form scheme://host[:port] with no userinfo, path, query, or fragment; "+
+					"http:// is allowed only for provably-internal hosts (loopback, *.svc/*.svc.cluster.local, "+
+					"RFC1918/link-local IPs), public hosts require https://",
+			))
+		}
+	}
+
+	// 3. AppRole auth requires AppRoleSecretRef.
 	if obj.Spec.Platform.Vault.AuthMethod == VaultAuthMethodAppRole &&
 		obj.Spec.Platform.Vault.AppRoleSecretRef == nil {
 		allErrs = append(allErrs, field.Required(
@@ -279,7 +305,7 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 		))
 	}
 
-	// 3. External OIDC provider requires OIDCIssuerURL.
+	// 4. External OIDC provider requires OIDCIssuerURL.
 	if obj.Spec.Services.Tokensmith.OIDCProvider == "external" &&
 		obj.Spec.Services.Tokensmith.OIDCIssuerURL == "" {
 		allErrs = append(allErrs, field.Required(
@@ -480,13 +506,63 @@ func nodeSelectorHasClusterDiscriminator(selector map[string]string, clusterName
 	return false
 }
 
+// isValidOIDCIssuer reports whether s is a well-formed, policy-compliant OIDC
+// issuer base. It must be a URL of the form scheme://host[:port] with:
+//   - an http or https scheme;
+//   - a real hostname (u.Hostname() non-empty);
+//   - no userinfo, path (a bare "/" is allowed), query, or fragment.
+//
+// Vault stamps `<issuer>/v1/identity/oidc/provider/<name>` as the `iss` claim,
+// so the configured issuer must itself carry no path. Rejecting userinfo and
+// requiring a real hostname guarantees the accepted value survives
+// VaultOIDCIssuerBase() (which reconstructs scheme+host) without any semantic
+// normalization beyond the explicitly-supported trailing "/".
+//
+// The http/https policy is conservative: https is always allowed; http is
+// allowed only for provably-internal hosts (isClusterInternalHost — loopback,
+// *.svc/*.svc.cluster.local, RFC1918/link-local IPs). The canonical issuer is
+// client-facing and used for discovery/JWKS/token operations, so a public
+// issuer must use TLS. Unlike the Vault dial address, bare single-label
+// hostnames are NOT accepted here: whether a single-label name resolves
+// in-cluster or across a site network (via a DNS search domain) depends on
+// resolver config, not syntax, so it cannot be assumed cluster-local for
+// plaintext token traffic.
+func isValidOIDCIssuer(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
+		return false
+	}
+	if u.Hostname() == "" {
+		return false
+	}
+	if u.User != nil {
+		return false
+	}
+	if u.Path != "" && u.Path != "/" {
+		return false
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	// http is only acceptable for cluster-internal hosts; public hosts must
+	// use https, consistent with the Vault dial address policy.
+	if u.Scheme == schemeHTTP && !isClusterInternalHost(u.Hostname()) {
+		return false
+	}
+	return true
+}
+
 // isAllowedVaultAddress reports whether addr satisfies the operator's vault
-// address policy: https:// is always allowed; http:// is allowed only when
-// the host portion is unreachable from outside the cluster
-// (see isClusterInternalHost for the full list). Public hostnames always
-// require https:// — the policy exists to prevent operators from
-// accidentally shipping prod traffic in plaintext, not to block dev
-// clusters whose Vault genuinely runs without TLS.
+// dial-address policy: https:// is always allowed; http:// is allowed for
+// provably-internal hosts (see isClusterInternalHost) and, as a dev
+// convenience, for bare single-label hostnames — the dev loop reaches a sidecar
+// Vault by container hostname (e.g. "openchami-vault-dev"). The single-label
+// allowance is intentionally NOT extended to the canonical OIDC issuer
+// (isValidOIDCIssuer), which is client-facing and carries plaintext token
+// traffic; a single-label name is not provably cluster-local.
 func isAllowedVaultAddress(addr string) bool {
 	if strings.HasPrefix(addr, "https://") {
 		return true
@@ -498,25 +574,26 @@ func isAllowedVaultAddress(addr string) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return isClusterInternalHost(u.Hostname())
+	host := u.Hostname()
+	return isClusterInternalHost(host) || isSingleLabelHost(host)
 }
 
-// isClusterInternalHost returns true for hostnames and IPs that are
-// only resolvable / routable from inside the cluster (or on the
-// host running the operator). Plain HTTP to these is acceptable
-// because traffic never crosses a trust boundary; plain HTTP to a
-// public hostname would.
+// isClusterInternalHost returns true only for hosts that are provably
+// non-public from their syntax alone. Plain HTTP to these never crosses a trust
+// boundary. It deliberately does NOT treat bare single-label hostnames as
+// internal: whether a single-label name (e.g. "vault") resolves in-cluster or
+// across a site network via a DNS search domain (e.g. "vault.hpc.example.org")
+// depends on resolver configuration, not the hostname's syntax, so it cannot be
+// assumed cluster-local. Callers that want to permit single-label names for a
+// specific, lower-risk use (e.g. the Vault dial address in dev) must opt into
+// that separately.
 //
-// Allowed forms:
+// Provably-internal forms:
 //   - explicit loopback: localhost, 127.0.0.1, ::1
 //   - Kubernetes Service DNS: any name ending in `.svc` or
 //     `.svc.cluster.local` (the latter is the canonical form; the
 //     former matches any cluster-DNS suffix the kubelet is
 //     configured with)
-//   - single-label DNS names (no dots) — only resolvable via the
-//     in-cluster search path; reaching one from outside requires
-//     deliberate /etc/hosts manipulation, which is treated as the
-//     operator user's choice
 //   - RFC1918 private IPv4: 10/8, 172.16/12, 192.168/16
 //   - IPv4 link-local: 169.254/16
 //   - IPv6 ULA: fc00::/7
@@ -529,17 +606,21 @@ func isClusterInternalHost(host string) bool {
 	if strings.HasSuffix(host, ".svc") || strings.HasSuffix(host, ".svc.cluster.local") {
 		return true
 	}
-	if !strings.Contains(host, ".") && !strings.Contains(host, ":") {
-		// Single-label DNS — only resolvable in-cluster.
-		// Exclude bracket-less IPv6 (which contains colons).
-		return true
-	}
 	if ip := net.ParseIP(host); ip != nil {
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 			return true
 		}
 	}
 	return false
+}
+
+// isSingleLabelHost reports whether host is a bare single-label DNS name (no
+// dots, and not a bracket-less IPv6 literal, which contains colons). Such names
+// are NOT provably cluster-internal (see isClusterInternalHost), but are a
+// common convenience for local/dev deployments where pods reach a sidecar Vault
+// by container hostname (e.g. "openchami-vault-dev").
+func isSingleLabelHost(host string) bool {
+	return host != "" && !strings.Contains(host, ".") && !strings.Contains(host, ":")
 }
 
 // externalServiceRef captures the per-service flags the webhook needs to
@@ -569,7 +650,7 @@ func isHTTPURL(s string) bool {
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 		return false
 	}
 	return u.Host != ""
@@ -608,10 +689,10 @@ func isSecureOIDCRedirectURI(s string) bool {
 	if err != nil || u.Host == "" || u.Fragment != "" {
 		return false
 	}
-	if u.Scheme == "https" {
+	if u.Scheme == schemeHTTPS {
 		return true
 	}
-	if u.Scheme != "http" {
+	if u.Scheme != schemeHTTP {
 		return false
 	}
 	host := u.Hostname()

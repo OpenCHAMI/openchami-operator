@@ -57,10 +57,24 @@ Steps (all idempotent):
 6. If appRole: `EnsureAppRole`
 7. If kubernetes: `EnsureKubernetesRole`
 8. If tokensmith.oidcProvider=vault: `EnsureOIDCConfig` provisions:
+   - the shared named `identity/oidc/provider/openchami` provider. Its issuer is
+     the **canonical OIDC issuer**: `spec.platform.vault.oidcIssuer` when set,
+     otherwise `spec.platform.vault.address` (the Vault API dial address). This
+     is distinct from the dial address — the operator may reach Vault over an
+     internal `.svc` URL while advertising a different, stable issuer that OIDC
+     clients validate `iss` against. `allowed_client_ids=["*"]`; access is
+     scoped per-client via `assignments`. The Vault-global
+     `identity/oidc/config` is NOT touched. Control planes sharing a Vault must
+     agree on the canonical issuer: the provider is created with a read-before-
+     write and post-write read-back, and a disagreement is surfaced as a
+     configuration conflict rather than silently overwriting shared state (#58).
+     `allowed_client_ids` is never a per-control-plane read-modify-write, so
+     concurrent reconciles cannot race on it (#57).
    - confidential `openchami-<cluster>-tokensmith`; its generated `client_id`
      and `client_secret` continue to the TokenSmith-only KV/Kubernetes Secret
    - public `openchami-<cluster>-cli`; CLI users receive only its `client_id`
-     and authenticate with PKCE, never with the TokenSmith client secret
+     (also stored at `paths.CLIOIDC`) and authenticate with PKCE, never with
+     the TokenSmith client secret
 9. Apply VSO resources in cluster namespace:
    - `VaultConnection` (one per cluster)
    - `VaultAuth` (kubernetes or appRole based on spec)

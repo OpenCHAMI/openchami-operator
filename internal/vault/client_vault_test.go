@@ -7,11 +7,18 @@ package vault
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	vaultapi "github.com/hashicorp/vault/api"
+)
+
+const (
+	// Shared test literals, centralised so repeated uses don't trip goconst.
+	testProviderPath = "/v1/identity/oidc/provider/openchami"
+	testAlphaIssuer  = "https://alpha.example.test"
 )
 
 func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *testing.T) {
@@ -41,9 +48,16 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 			_, _ = w.Write([]byte(`{"data":{"client_id":"cli-id"}}`))
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/v1/identity/oidc/provider/default" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"allowed_client_ids":["admin-client"]}}`))
+		if r.Method == http.MethodGet && r.URL.Path == testProviderPath {
+			// Reflect whatever was last written so the read-before-write and
+			// post-create read-back see a consistent issuer. 404 until created.
+			if prev, ok := writes[testProviderPath]; ok {
+				w.Header().Set("Content-Type", "application/json")
+				resp := map[string]any{"data": prev}
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -59,7 +73,8 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	client := &vaultClient{api: api}
 
 	credentials, err := client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
-		IssuerURL:       "https://alpha.example.test",
+		IssuerURL:       testAlphaIssuer,
+		ScopesSupported: []string{"groups"},
 		CLIRedirectURIs: []string{"http://127.0.0.1:8250/callback"},
 		CLIAssignments:  []string{vaultOIDCDefaultAssignment},
 	})
@@ -68,6 +83,15 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	}
 	if credentials.ClientID != "tokensmith-id" || credentials.ClientSecret != "tokensmith-secret" {
 		t.Fatalf("unexpected TokenSmith credentials: %+v", credentials)
+	}
+	if credentials.CLIClientID != "cli-id" {
+		t.Fatalf("unexpected CLI client_id: %q", credentials.CLIClientID)
+	}
+
+	// The Vault-GLOBAL identity/oidc/config must NOT be written (issue #58):
+	// the operator only writes the named provider's issuer.
+	if _, wrote := writes["/v1/identity/oidc/config"]; wrote {
+		t.Error("operator must not write the global identity/oidc/config")
 	}
 
 	tokensmith := writes["/v1/identity/oidc/client/openchami-alpha-tokensmith"]
@@ -83,8 +107,183 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 	}
 	assertJSONStrings(t, cli["redirect_uris"], []string{"http://127.0.0.1:8250/callback"})
 	assertJSONStrings(t, cli["assignments"], []string{vaultOIDCDefaultAssignment})
-	provider := writes["/v1/identity/oidc/provider/default"]
-	assertJSONStrings(t, provider["allowed_client_ids"], []string{"admin-client", "cli-id"})
+
+	// The shared named provider is written with a fixed wildcard
+	// allowed_client_ids (issue #57): no per-control-plane read-modify-write.
+	provider := writes[testProviderPath]
+	if provider == nil {
+		t.Fatal("expected a write to the named openchami provider")
+	}
+	if provider["issuer"] != testAlphaIssuer {
+		t.Errorf("provider issuer = %v, want https://alpha.example.test", provider["issuer"])
+	}
+	assertJSONStrings(t, provider["allowed_client_ids"], []string{"*"})
+	assertJSONStrings(t, provider["scopes_supported"], []string{"groups"})
+}
+
+// TestVaultClient_EnsureOIDCConfigIssuerConflict asserts that when the shared
+// openchami provider already exists with a different issuer, EnsureOIDCConfig
+// returns an OIDCIssuerConflictError and does NOT overwrite the provider.
+func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
+	t.Parallel()
+
+	providerWrites := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == testProviderPath {
+			// Provider already pinned to a different issuer by another CP.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"issuer":"https://other.example.test","allowed_client_ids":["*"]}}`))
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == testProviderPath {
+			providerWrites++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		if r.Method == http.MethodPut {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
+		IssuerURL: testAlphaIssuer,
+	})
+	var conflict *OIDCIssuerConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected OIDCIssuerConflictError, got %v", err)
+	}
+	if conflict.Existing != "https://other.example.test" || conflict.Requested != testAlphaIssuer {
+		t.Errorf("unexpected conflict detail: %+v", conflict)
+	}
+	if providerWrites != 0 {
+		t.Errorf("provider must not be written on issuer conflict, got %d writes", providerWrites)
+	}
+}
+
+// TestVaultClient_EnsureOIDCConfigReadBackConflict covers the concurrent
+// initial-creation race: the pre-write GET sees no provider (404), the write
+// succeeds, but the post-write read-back observes a DIFFERENT issuer because
+// another control plane won the create race. The read-back must catch this and
+// return an OIDCIssuerConflictError rather than reporting success.
+func TestVaultClient_EnsureOIDCConfigReadBackConflict(t *testing.T) {
+	t.Parallel()
+
+	provGets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == testProviderPath {
+			switch r.Method {
+			case http.MethodGet:
+				provGets++
+				if provGets == 1 {
+					// Pre-write: provider does not exist yet.
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				// Post-write read-back: a concurrent creator won with a
+				// different issuer.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"issuer":"https://winner.example.test","allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		if r.Method == http.MethodPut {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
+		IssuerURL: testAlphaIssuer,
+	})
+	var conflict *OIDCIssuerConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected OIDCIssuerConflictError from read-back, got %v", err)
+	}
+	if conflict.Existing != "https://winner.example.test" || conflict.Requested != testAlphaIssuer {
+		t.Errorf("unexpected conflict detail: %+v", conflict)
+	}
+}
+
+// TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer asserts that a
+// read-back which returns no observable issuer is treated as a verification
+// failure (the write cannot be confirmed), not silent success.
+func TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer(t *testing.T) {
+	t.Parallel()
+
+	provGets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == testProviderPath {
+			switch r.Method {
+			case http.MethodGet:
+				provGets++
+				if provGets == 1 {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				// Post-write read-back returns data but no issuer.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		if r.Method == http.MethodPut {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
+		IssuerURL: testAlphaIssuer,
+	})
+	if err == nil {
+		t.Fatal("expected an error when read-back returns no issuer")
+	}
+	if _, ok := errors.AsType[*OIDCIssuerConflictError](err); ok {
+		t.Fatalf("missing issuer must be a verification error, not a conflict: %v", err)
+	}
 }
 
 func assertJSONStrings(t *testing.T, got any, want []string) {

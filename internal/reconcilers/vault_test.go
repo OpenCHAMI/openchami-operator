@@ -7,8 +7,8 @@ package reconcilers
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -54,6 +54,11 @@ const (
 	// newControlPlane(). Centralised here so test asserts can reference the
 	// same value without tripping goconst.
 	testS3Endpoint = "http://s3.test:9000"
+
+	// testOIDCIssuer and testVaultAddrWithPort are reused across the OIDC
+	// issuer tests; centralised so repeated asserts don't trip goconst.
+	testOIDCIssuer        = "https://vault.example.org"
+	testVaultAddrWithPort = "https://vault.example.test:8200"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -208,8 +213,8 @@ func TestVaultReconciler_OIDCIssuerMatchesTokensmithProvider(t *testing.T) {
 	}
 
 	vaultConfigIssuer := v.OIDCConfigs[cp.Spec.ClusterName]
-	// Vault appends the provider path to the config issuer when minting `iss`.
-	mintedISS := vaultConfigIssuer + "/v1/identity/oidc/provider/default"
+	// Vault appends the named provider path to the provider issuer when minting `iss`.
+	mintedISS := vaultConfigIssuer + "/v1/identity/oidc/provider/openchami"
 
 	// What tokensmith is configured to expect.
 	tokensmithProvider := VaultOIDCProviderURL(cp)
@@ -292,10 +297,13 @@ func TestVaultReconciler_ProvisionsSeparatePublicCLIClient(t *testing.T) {
 	}
 }
 
-// TestVaultReconciler_OIDCProviderAuthorizesCLIClient asserts the public CLI
-// client's client_id is added to the provider's allowed_client_ids, so Vault
-// permits that client to use identity/oidc/provider/default during PKCE login.
-func TestVaultReconciler_OIDCProviderAuthorizesCLIClient(t *testing.T) {
+// TestVaultReconciler_OIDCProviderUsesWildcard asserts the shared named
+// provider is configured with a wildcard allowed_client_ids rather than a
+// per-control-plane client list. This is the fix for the #57 lost-update race:
+// there is no shared mutable list to read-modify-write, so concurrent control
+// planes cannot remove each other's clients. Access is scoped per-client via
+// assignments instead.
+func TestVaultReconciler_OIDCProviderUsesWildcard(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
@@ -306,42 +314,72 @@ func TestVaultReconciler_OIDCProviderAuthorizesCLIClient(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	wantID := v.PublicOIDCClients[cp.Spec.ClusterName].ClientID
-	if wantID == "" {
-		t.Fatal("expected a generated public CLI client_id")
+	if len(v.OIDCProviderAllowedClientIDs) != 1 || v.OIDCProviderAllowedClientIDs[0] != "*" {
+		t.Errorf("expected provider allowed_client_ids=[*], got %v", v.OIDCProviderAllowedClientIDs)
 	}
-	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
-		t.Errorf("expected provider allowed_client_ids to contain %q, got %v",
-			wantID, v.ProviderAllowedClientIDs)
+	if v.OIDCProviderIssuer != VaultOIDCIssuerBase(cp) {
+		t.Errorf("expected provider issuer %q, got %q", VaultOIDCIssuerBase(cp), v.OIDCProviderIssuer)
 	}
 }
 
-// TestVaultReconciler_OIDCProviderPreservesOtherClients asserts that
-// authorizing the CLI client preserves any other client IDs an
-// administrator intentionally authorized on the provider.
-func TestVaultReconciler_OIDCProviderPreservesOtherClients(t *testing.T) {
+// TestVaultReconciler_OIDCConcurrentReconcileConverges is the regression test
+// for issue #57. Two control planes sharing one Vault reconcile concurrently;
+// because the shared provider is written with a fixed wildcard payload (never a
+// read-modify-write on a per-control-plane list), the final provider state is
+// deterministic and neither control plane's clients are lost. Each control
+// plane's own confidential + public clients are still provisioned.
+func TestVaultReconciler_OIDCConcurrentReconcileConverges(t *testing.T) {
 	scheme := newScheme(t)
-	cp := newControlPlane("alpha")
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	cpA := newControlPlane("alpha")
+	cpB := newControlPlane("beta")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpA, cpB).Build()
+	// A single shared fake Vault, as when both control planes point at one Vault.
 	v := vaultfake.NewClient()
-	v.ProviderAllowedClientIDs = []string{"some-other-admin-client"}
 
-	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
-	if _, err := r.Reconcile(context.Background(), cp); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
+	rA := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	rB := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
 
-	wantID := v.PublicOIDCClients[cp.Spec.ClusterName].ClientID
-	if !slices.Contains(v.ProviderAllowedClientIDs, "some-other-admin-client") {
-		t.Errorf("expected pre-existing client to be preserved, got %v", v.ProviderAllowedClientIDs)
+	var wg sync.WaitGroup
+	for range 25 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if _, err := rA.Reconcile(context.Background(), cpA.DeepCopy()); err != nil {
+				t.Errorf("reconcile alpha: %v", err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := rB.Reconcile(context.Background(), cpB.DeepCopy()); err != nil {
+				t.Errorf("reconcile beta: %v", err)
+			}
+		}()
 	}
-	if !slices.Contains(v.ProviderAllowedClientIDs, wantID) {
-		t.Errorf("expected CLI client %q authorized, got %v", wantID, v.ProviderAllowedClientIDs)
+	wg.Wait()
+
+	// Regardless of interleaving, the shared provider is always the fixed
+	// wildcard — no lost update is possible.
+	if len(v.OIDCProviderAllowedClientIDs) != 1 || v.OIDCProviderAllowedClientIDs[0] != "*" {
+		t.Errorf("expected provider allowed_client_ids=[*] after concurrent reconciles, got %v",
+			v.OIDCProviderAllowedClientIDs)
+	}
+	// Both control planes' clients survive: neither was removed by the other.
+	if _, ok := v.PublicOIDCClients["alpha"]; !ok {
+		t.Error("alpha CLI client missing after concurrent reconcile")
+	}
+	if _, ok := v.PublicOIDCClients["beta"]; !ok {
+		t.Error("beta CLI client missing after concurrent reconcile")
+	}
+	if _, ok := v.OIDCClients["alpha"]; !ok {
+		t.Error("alpha tokensmith client missing after concurrent reconcile")
+	}
+	if _, ok := v.OIDCClients["beta"]; !ok {
+		t.Error("beta tokensmith client missing after concurrent reconcile")
 	}
 }
 
-// TestVaultReconciler_OIDCProviderIdempotent asserts repeated reconciles don't
-// duplicate the client ID in the provider's allowed_client_ids.
+// TestVaultReconciler_OIDCProviderIdempotent asserts repeated reconciles keep
+// the shared provider at the fixed wildcard (no drift, no duplication).
 func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
@@ -355,16 +393,189 @@ func TestVaultReconciler_OIDCProviderIdempotent(t *testing.T) {
 		}
 	}
 
-	wantID := v.PublicOIDCClients[cp.Spec.ClusterName].ClientID
-	n := 0
-	for _, id := range v.ProviderAllowedClientIDs {
-		if id == wantID {
-			n++
-		}
+	if len(v.OIDCProviderAllowedClientIDs) != 1 || v.OIDCProviderAllowedClientIDs[0] != "*" {
+		t.Errorf("expected provider allowed_client_ids=[*] after repeated reconciles, got %v",
+			v.OIDCProviderAllowedClientIDs)
 	}
-	if n != 1 {
-		t.Errorf("expected client_id authorized exactly once, got %d occurrences in %v",
-			n, v.ProviderAllowedClientIDs)
+}
+
+// TestVaultReconciler_OIDCCLIClientIDPersisted asserts the public CLI client_id
+// is written to the CLI OIDC KV path so CLI tooling can discover it. The public
+// client has no secret, so only client_id is stored.
+func TestVaultReconciler_OIDCCLIClientIDPersisted(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	paths := vault.Paths("alpha")
+	data, err := v.ReadSecret(context.Background(), paths.CLIOIDC)
+	if err != nil {
+		t.Fatalf("reading cli oidc secret: %v", err)
+	}
+	if data == nil {
+		t.Fatalf("expected cli oidc secret at %q", paths.CLIOIDC)
+	}
+	clientID, _ := data["client_id"].(string)
+	want := v.PublicOIDCClients["alpha"].ClientID
+	if clientID == "" || clientID != want {
+		t.Errorf("cli client_id = %q, want %q", clientID, want)
+	}
+	if _, hasSecret := data["client_secret"]; hasSecret {
+		t.Error("public CLI KV entry must not contain a client_secret")
+	}
+}
+
+// TestVaultReconciler_OIDCIssuerSeparateFromAddress asserts that when
+// spec.platform.vault.oidcIssuer is set, the operator still dials Vault at
+// spec.platform.vault.address, but the OIDC provider issuer and tokensmith's
+// TOKENSMITH_OIDC_PROVIDER are derived from oidcIssuer instead.
+func TestVaultReconciler_OIDCIssuerSeparateFromAddress(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.Address = "https://vault.vault.svc.cluster.local:8200"
+	cp.Spec.Platform.Vault.OIDCIssuer = testOIDCIssuer
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// Operator dial address is unchanged.
+	if got := VaultAddress(cp); got != "https://vault.vault.svc.cluster.local:8200" {
+		t.Errorf("VaultAddress = %q, want the .svc dial address", got)
+	}
+	// Provider issuer comes from oidcIssuer, not address.
+	if v.OIDCProviderIssuer != testOIDCIssuer {
+		t.Errorf("provider issuer = %q, want %q", v.OIDCProviderIssuer, testOIDCIssuer)
+	}
+	if got := VaultOIDCIssuerBase(cp); got != testOIDCIssuer {
+		t.Errorf("VaultOIDCIssuerBase = %q, want %q", got, testOIDCIssuer)
+	}
+	// TokenSmith validates against the oidcIssuer-derived provider URL.
+	wantProvider := testOIDCIssuer + "/v1/identity/oidc/provider/openchami"
+	if got := VaultOIDCProviderURL(cp); got != wantProvider {
+		t.Errorf("VaultOIDCProviderURL = %q, want %q", got, wantProvider)
+	}
+}
+
+// TestVaultReconciler_OIDCIssuerFallsBackToAddress asserts that when oidcIssuer
+// is omitted the issuer falls back to the Vault address, preserving the
+// pre-oidcIssuer behavior.
+func TestVaultReconciler_OIDCIssuerFallsBackToAddress(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.Address = testVaultAddrWithPort
+	cp.Spec.Platform.Vault.OIDCIssuer = ""
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if v.OIDCProviderIssuer != testVaultAddrWithPort {
+		t.Errorf("provider issuer = %q, want the Vault address (fallback)", v.OIDCProviderIssuer)
+	}
+	if got := VaultOIDCIssuerBase(cp); got != testVaultAddrWithPort {
+		t.Errorf("VaultOIDCIssuerBase = %q, want the Vault address (fallback)", got)
+	}
+}
+
+// TestVaultReconciler_OIDCSharedIssuerAgreement asserts two control planes
+// sharing one Vault that agree on the OIDC issuer both reconcile successfully.
+func TestVaultReconciler_OIDCSharedIssuerAgreement(t *testing.T) {
+	scheme := newScheme(t)
+	cpA := newControlPlane("alpha")
+	cpB := newControlPlane("beta")
+	// Both advertise the same canonical issuer even though they could dial
+	// Vault differently.
+	cpA.Spec.Platform.Vault.OIDCIssuer = testOIDCIssuer
+	cpB.Spec.Platform.Vault.OIDCIssuer = testOIDCIssuer
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpA, cpB).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	if _, err := r.Reconcile(context.Background(), cpA); err != nil {
+		t.Fatalf("reconcile alpha: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), cpB); err != nil {
+		t.Fatalf("reconcile beta: %v", err)
+	}
+	if v.OIDCProviderIssuer != testOIDCIssuer {
+		t.Errorf("provider issuer = %q, want %q", v.OIDCProviderIssuer, testOIDCIssuer)
+	}
+	// Both control planes' clients exist.
+	if _, ok := v.OIDCClients["alpha"]; !ok {
+		t.Error("alpha tokensmith client missing")
+	}
+	if _, ok := v.OIDCClients["beta"]; !ok {
+		t.Error("beta tokensmith client missing")
+	}
+}
+
+// TestVaultReconciler_OIDCConflictingIssuerRejected asserts that a second
+// control plane requesting a different issuer than the one already pinned on
+// the shared provider fails with a clear error and does NOT change the issuer.
+func TestVaultReconciler_OIDCConflictingIssuerRejected(t *testing.T) {
+	scheme := newScheme(t)
+	cpA := newControlPlane("alpha")
+	cpB := newControlPlane("beta")
+	cpA.Spec.Platform.Vault.OIDCIssuer = "https://vault-a.example.org"
+	cpB.Spec.Platform.Vault.OIDCIssuer = "https://vault-b.example.org"
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cpA, cpB).Build()
+	v := vaultfake.NewClient()
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	// A wins first and pins the provider issuer.
+	if _, err := r.Reconcile(context.Background(), cpA); err != nil {
+		t.Fatalf("reconcile alpha: %v", err)
+	}
+	// B disagrees: must fail, and must not have changed the pinned issuer.
+	_, err := r.Reconcile(context.Background(), cpB)
+	if err == nil {
+		t.Fatal("expected beta reconcile to fail on issuer conflict")
+	}
+	if v.OIDCProviderIssuer != "https://vault-a.example.org" {
+		t.Errorf("provider issuer changed to %q; must remain the first-pinned issuer", v.OIDCProviderIssuer)
+	}
+	cond := apimeta.FindStatusCondition(cpB.Status.Conditions, conditions.ConditionVaultConfigured)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("expected VaultConfigured=False on conflict, got %+v", cond)
+	}
+	if !strings.Contains(cond.Message, "issuer") {
+		t.Errorf("expected conflict message to mention issuer, got %q", cond.Message)
+	}
+}
+
+// TestVaultReconciler_OIDCPreexistingConflictingProvider asserts that if the
+// shared provider already exists with a conflicting issuer (set by an admin or
+// another control plane before this one reconciled), reconciliation fails and
+// the existing provider is not modified.
+func TestVaultReconciler_OIDCPreexistingConflictingProvider(t *testing.T) {
+	scheme := newScheme(t)
+	cp := newControlPlane("alpha")
+	cp.Spec.Platform.Vault.OIDCIssuer = "https://vault-new.example.org"
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	v := vaultfake.NewClient()
+	// Seed a pre-existing provider with a different issuer.
+	v.OIDCProviderIssuer = "https://vault-existing.example.org"
+
+	r := &VaultReconciler{Client: c, Recorder: record.NewFakeRecorder(10), VaultClient: v}
+	_, err := r.Reconcile(context.Background(), cp)
+	if err == nil {
+		t.Fatal("expected reconcile to fail against a pre-existing conflicting provider")
+	}
+	if v.OIDCProviderIssuer != "https://vault-existing.example.org" {
+		t.Errorf("existing provider issuer was modified to %q", v.OIDCProviderIssuer)
 	}
 }
 
