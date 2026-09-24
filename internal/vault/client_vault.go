@@ -379,16 +379,24 @@ func (c *vaultClient) ensureOIDCProvider(ctx context.Context, cfg OIDCConfig) er
 		return err
 	}
 
-	// Read back after writing so a concurrent creator that won the race with a
-	// different issuer is detected immediately rather than on a later reconcile.
+	// Read back after writing and REQUIRE the desired issuer to be observable.
+	// The read-back is verification, not a best-effort peek: a missing/empty/
+	// wrong-typed issuer means we cannot confirm the write took effect (e.g. a
+	// concurrent creator won the race, or the provider vanished), so we fail
+	// rather than reporting success on unverified shared state.
 	readback, err := c.api.Logical().ReadWithContext(ctx, path)
 	if err != nil {
 		return fmt.Errorf("reading back oidc provider %q: %w", vaultOIDCProviderName, err)
 	}
-	if readback != nil && readback.Data != nil {
-		if current, _ := readback.Data["issuer"].(string); current != "" && current != cfg.IssuerURL {
-			return &OIDCIssuerConflictError{Existing: current, Requested: cfg.IssuerURL}
-		}
+	if readback == nil || readback.Data == nil {
+		return fmt.Errorf("oidc provider %q returned no data after write", vaultOIDCProviderName)
+	}
+	current, ok := readback.Data["issuer"].(string)
+	if !ok || current == "" {
+		return fmt.Errorf("oidc provider %q returned no issuer after write", vaultOIDCProviderName)
+	}
+	if current != cfg.IssuerURL {
+		return &OIDCIssuerConflictError{Existing: current, Requested: cfg.IssuerURL}
 	}
 	return nil
 }

@@ -60,8 +60,11 @@ Key env vars:
 ```
 OIDC_CLIENT_SECRET  = secretKeyRef: openchami-{name}-tokensmith-oidc, key: client_secret
 ```
-When oidcProvider=vault, also inject the Vault OIDC issuer URL derived from
-spec.platform.vault.address + `/v1/identity/oidc/provider/openchami`.
+When oidcProvider=vault, also inject the Vault OIDC provider URL, which is the
+canonical OIDC issuer + `/v1/identity/oidc/provider/openchami`. The canonical
+issuer is `spec.platform.vault.oidcIssuer` when set, otherwise
+`spec.platform.vault.address` — NOT necessarily the Vault API dial address. See
+`VaultOIDCProviderURL`.
 When oidcProvider=external, inject spec.services.tokensmith.oidcIssuerURL.
 When spec.services.tokensmith.oidcIntrospectionEndpoint is set, inject it as
 TOKENSMITH_OIDC_INTROSPECTION_ENDPOINT. Do not derive this value from Vault;

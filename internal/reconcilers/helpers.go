@@ -247,8 +247,12 @@ func VaultAddress(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 // (issue #58), and a disagreement is reported as a conflict rather than
 // silently overwritten (see ensureOIDCProvider).
 //
-// Any path/query/fragment on the configured value is stripped so a value like
-// http://vault:8200/ still yields a valid (path-less) issuer.
+// The admission webhook (isValidOIDCIssuer) already rejects an oidcIssuer that
+// carries a path, query, or fragment, so a validated CR never reaches here with
+// one. The scheme+host reconstruction below is therefore only a defensive
+// normalization — chiefly for the address fallback, whose own validation does
+// not forbid a trailing path — and must never emit a value with a path
+// component (Vault rejects the provider issuer otherwise).
 func VaultOIDCIssuerBase(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 	source := strings.TrimSpace(cp.Spec.Platform.Vault.OIDCIssuer)
 	if source == "" {
@@ -256,8 +260,9 @@ func VaultOIDCIssuerBase(cp *openchamiv1alpha1.OpenCHAMIControlPlane) string {
 	}
 	u, err := url.Parse(source)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		// Fall back to a best-effort trim; a malformed value is surfaced by
-		// validation elsewhere. Never return a value with a path component.
+		// Fall back to a best-effort trim; a malformed value that reached here
+		// (e.g. via the address fallback) was not caught by oidcIssuer
+		// validation. Never return a value with a path component.
 		return strings.TrimRight(strings.TrimSuffix(source, "/"), "/")
 	}
 	return u.Scheme + "://" + u.Host

@@ -174,16 +174,20 @@ func (r *VaultReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.O
 		// EnsureOIDCConfig ensures the shared named "openchami" OIDC provider
 		// and this cluster's confidential + public clients. The provider issuer
 		// MUST be scheme+host(+port) with no path; Vault appends the provider
-		// path itself when minting `iss`. The issuer is derived from the Vault
-		// address — the same source tokensmith uses for TOKENSMITH_OIDC_PROVIDER
-		// — so the minted `iss` exactly matches what tokensmith validates
-		// against. Deriving it from spec.domain instead produced
-		// iss=https://<domain>/... while tokensmith expected the Vault .svc URL,
-		// so every token was rejected. The provider is shared and written with
-		// an identical payload by every control plane, and the operator never
-		// writes the Vault-GLOBAL identity/oidc/config, so control planes cannot
-		// overwrite each other's issuer (#58) or race on a shared client list
-		// (#57). The cluster-name partition is carried by the per-cluster clients
+		// path itself when minting `iss`. The canonical issuer is
+		// spec.platform.vault.oidcIssuer when set, otherwise
+		// spec.platform.vault.address (see VaultOIDCIssuerBase) — the SAME source
+		// tokensmith uses for TOKENSMITH_OIDC_PROVIDER, so the minted `iss`
+		// exactly matches what tokensmith validates against. It is deliberately
+		// distinct from the Vault dial address: the operator may talk to Vault
+		// over an internal .svc URL (spec.platform.vault.address) while
+		// advertising a different canonical issuer. The provider is shared and
+		// the operator never writes the Vault-GLOBAL identity/oidc/config, so
+		// control planes cannot race on a shared client list (#57); allowed
+		// clients are the fixed wildcard. Control planes sharing this Vault MUST
+		// agree on the canonical issuer — a disagreement is surfaced as a
+		// configuration conflict (below), never silently overwritten (#58). The
+		// cluster-name partition is carried by the per-cluster clients
 		// (`openchami-<clusterName>-*`) and key inside EnsureOIDCConfig.
 		issuer := VaultOIDCIssuerBase(cp)
 		creds, err := r.VaultClient.EnsureOIDCConfig(ctx, cp.Spec.ClusterName, vault.OIDCConfig{

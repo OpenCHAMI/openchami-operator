@@ -338,11 +338,13 @@ func TestValidateCreate_VaultAddressRejectsPublicHTTP(t *testing.T) {
 
 // TestValidateCreate_VaultOIDCIssuerAcceptsValid asserts that a well-formed
 // scheme://host[:port] issuer (with no path) is accepted, including private
-// hosts over http — the issuer need not be publicly routable.
+// hosts over http — the issuer need not be publicly routable. A bare trailing
+// slash is treated as "no path" and accepted.
 func TestValidateCreate_VaultOIDCIssuerAcceptsValid(t *testing.T) {
 	for _, issuer := range []string{
 		"https://vault.example.org",
 		"https://vault.example.org:8200",
+		"https://vault.example.org/", // trailing slash == no path
 		"http://vault.vault.svc.cluster.local:8200",
 		"http://vault-internal:8200",
 	} {
@@ -358,13 +360,16 @@ func TestValidateCreate_VaultOIDCIssuerAcceptsValid(t *testing.T) {
 }
 
 // TestValidateCreate_VaultOIDCIssuerRejectsInvalid asserts that issuers with a
-// path/query/fragment or missing scheme/host are rejected, since Vault requires
-// the issuer to be scheme://host[:port] with no path.
+// path/query/fragment or missing scheme/host are rejected rather than silently
+// normalized, since Vault requires the issuer to be scheme://host[:port] with
+// no path and a typo pins shared Vault state for every control plane.
 func TestValidateCreate_VaultOIDCIssuerRejectsInvalid(t *testing.T) {
 	for _, issuer := range []string{
-		"https://vault.example.org/oidc",        // path
+		"https://vault.example.org/foo",         // path
 		"https://vault.example.org/v1/identity", // path
-		"https://vault.example.org?a=b",         // query
+		"https://vault.example.org?foo=bar",     // query
+		"https://vault.example.org#foo",         // fragment
+		"not-a-url",                             // no scheme/host
 		"vault.example.org",                     // no scheme
 		"https://",                              // no host
 		"ftp://vault.example.org",               // bad scheme

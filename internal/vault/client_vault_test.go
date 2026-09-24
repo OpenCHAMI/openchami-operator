@@ -167,6 +167,119 @@ func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
 	}
 }
 
+// TestVaultClient_EnsureOIDCConfigReadBackConflict covers the concurrent
+// initial-creation race: the pre-write GET sees no provider (404), the write
+// succeeds, but the post-write read-back observes a DIFFERENT issuer because
+// another control plane won the create race. The read-back must catch this and
+// return an OIDCIssuerConflictError rather than reporting success.
+func TestVaultClient_EnsureOIDCConfigReadBackConflict(t *testing.T) {
+	t.Parallel()
+
+	provGets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+			switch r.Method {
+			case http.MethodGet:
+				provGets++
+				if provGets == 1 {
+					// Pre-write: provider does not exist yet.
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				// Post-write read-back: a concurrent creator won with a
+				// different issuer.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"issuer":"https://winner.example.test","allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		if r.Method == http.MethodPut {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
+		IssuerURL: "https://alpha.example.test",
+	})
+	var conflict *OIDCIssuerConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected OIDCIssuerConflictError from read-back, got %v", err)
+	}
+	if conflict.Existing != "https://winner.example.test" || conflict.Requested != "https://alpha.example.test" {
+		t.Errorf("unexpected conflict detail: %+v", conflict)
+	}
+}
+
+// TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer asserts that a
+// read-back which returns no observable issuer is treated as a verification
+// failure (the write cannot be confirmed), not silent success.
+func TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer(t *testing.T) {
+	t.Parallel()
+
+	provGets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/identity/oidc/provider/openchami" {
+			switch r.Method {
+			case http.MethodGet:
+				provGets++
+				if provGets == 1 {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				// Post-write read-back returns data but no issuer.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		if r.Method == http.MethodPut {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	_, err = client.EnsureOIDCConfig(context.Background(), "alpha", OIDCConfig{
+		IssuerURL: "https://alpha.example.test",
+	})
+	if err == nil {
+		t.Fatal("expected an error when read-back returns no issuer")
+	}
+	if _, ok := errors.AsType[*OIDCIssuerConflictError](err); ok {
+		t.Fatalf("missing issuer must be a verification error, not a conflict: %v", err)
+	}
+}
+
 func assertJSONStrings(t *testing.T, got any, want []string) {
 	t.Helper()
 	values, ok := got.([]any)
