@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,9 +58,7 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 			if prev, ok := writes[testProviderPath]; ok {
 				w.Header().Set("Content-Type", "application/json")
 				data := map[string]any{}
-				for k, v := range prev {
-					data[k] = v
-				}
+				maps.Copy(data, prev)
 				if base, ok := data["issuer"].(string); ok {
 					data["issuer"] = base + testProviderPath
 				}
@@ -468,7 +467,7 @@ func TestVaultClient_EnsureOIDCProviderCreateReconcileReconcile(t *testing.T) {
 	client := &vaultClient{api: api}
 
 	// Create, then reconcile twice; all three must succeed without a conflict.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := client.ensureOIDCProvider(context.Background(), OIDCConfig{IssuerURL: base}); err != nil {
 			t.Fatalf("ensureOIDCProvider iteration %d must succeed, got: %v", i, err)
 		}
