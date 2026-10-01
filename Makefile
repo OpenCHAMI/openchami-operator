@@ -118,7 +118,7 @@ test-cover: ## Run tests with coverage report
 	@echo "Coverage report: cover.html"
 
 e2e: ## Run end-to-end tests (requires make dev-up first)
-	go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/...
+	KIND_CLUSTER=$${KIND_CLUSTER:-openchami-dev} go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/...
 
 test-e2e: e2e ## Alias for e2e target (used by CI workflow)
 
