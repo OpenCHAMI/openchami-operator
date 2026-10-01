@@ -22,7 +22,8 @@ func TestRBACReconciler_NetworkProbeBinding(t *testing.T) {
 	if err := client.Get(context.Background(), types.NamespacedName{Name: name}, binding); err != nil {
 		t.Fatalf("get probe binding: %v", err)
 	}
-	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != name {
+	if binding.RoleRef.APIGroup != "rbac.authorization.k8s.io" ||
+		binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != name {
 		t.Errorf("unexpected role reference: %+v", binding.RoleRef)
 	}
 	if len(binding.Subjects) != 1 || binding.Subjects[0].Kind != "ServiceAccount" ||

@@ -176,7 +176,7 @@ func (r *RBACReconciler) buildNetworkProbeClusterRoleBinding(cp *openchamiv1alph
 			Namespace: ControlPlaneNamespace(cp),
 		}},
 		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacAPIVersion,
+			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "ClusterRole",
 			Name:     name,
 		},
