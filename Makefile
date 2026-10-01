@@ -25,6 +25,7 @@ IMAGE_REGISTRY ?= ghcr.io/openchami
 IMAGE_NAME     ?= openchami-operator
 IMAGE_TAG      ?= $(VERSION)
 IMG            ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+DOCKER_BUILD_NETWORK ?=
 
 .PHONY: all build generate manifests fmt vet lint lint-config test test-e2e docker-build \
         dev-up dev-down e2e migrate-storage-version \
@@ -54,6 +55,7 @@ docker-build: ## Build operator container image
 	  --build-arg COMMIT=$(COMMIT) \
 	  --build-arg DATE=$(DATE) \
 	  $(if $(GOPROXY),--build-arg GOPROXY="$(GOPROXY)") \
+	  $(if $(DOCKER_BUILD_NETWORK),--network=$(DOCKER_BUILD_NETWORK)) \
 	  -t $(IMG) .
 
 ##@ Code generation
