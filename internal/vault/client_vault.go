@@ -338,13 +338,26 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 	return creds, nil
 }
 
+// expectedOIDCProviderIssuer derives the effective OIDC issuer Vault reports for
+// the shared named provider from the configured base issuer. The operator writes
+// the base (scheme+host, no path) as the provider's `issuer`, and Vault appends
+// `/v1/identity/oidc/provider/<name>` when serving the provider and minting the
+// `iss` claim. Comparisons against Vault's read-back MUST use this effective
+// value, not the base, or a provider the operator just created would be
+// misreported as a conflict (issue #62).
+func expectedOIDCProviderIssuer(base string) string {
+	return strings.TrimRight(base, "/") +
+		"/v1/identity/oidc/provider/" +
+		vaultOIDCProviderName
+}
+
 // ensureOIDCProvider creates or reconciles the shared named OIDC provider,
 // treating its issuer as an invariant that all control planes sharing the Vault
 // must agree on.
 //
-//   - Provider does not exist: create it with the requested issuer, then read it
-//     back and verify the issuer landed (guards against a concurrent creator
-//     having won with a different issuer).
+//   - Provider does not exist: create it with the requested base issuer, then
+//     read it back and verify the effective issuer landed (guards against a
+//     concurrent creator having won with a different issuer).
 //   - Provider exists, issuer matches: reconcile the fields we manage
 //     (allowed_client_ids wildcard + scopes). allowed_client_ids is always the
 //     fixed wildcard ["*"], never a per-control-plane read-modify-write, so
@@ -353,9 +366,13 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 //     NOT modify the provider. Silently overwriting would let two control planes
 //     flip the shared issuer back and forth on every reconcile (issue #58).
 //
-// The issuer is scheme+host(+port) with no path; Vault appends
-// `/v1/identity/oidc/provider/<name>` itself when minting the `iss` claim, and
-// tokensmith validates against that exact URL (see helpers.go).
+// The configured issuer is scheme+host(+port) with no path; Vault appends
+// `/v1/identity/oidc/provider/<name>` itself when serving the provider and
+// minting the `iss` claim, and tokensmith validates against that exact URL (see
+// helpers.go). We therefore write the base issuer but compare Vault's read-back
+// against the effective issuer produced by expectedOIDCProviderIssuer — comparing
+// the raw base directly would misreport a provider the operator just created as a
+// conflict (issue #62).
 //
 // Caveat: read-before-create does not make concurrent initial creation atomic
 // (both callers may GET 404 then POST). Vault exposes only create-or-update
@@ -365,13 +382,17 @@ func (c *vaultClient) EnsureOIDCConfig(ctx context.Context, clusterName string, 
 func (c *vaultClient) ensureOIDCProvider(ctx context.Context, cfg OIDCConfig) error {
 	path := "identity/oidc/provider/" + vaultOIDCProviderName
 
+	// Vault reports the effective provider issuer (base + provider path), so
+	// compare against that rather than the configured base issuer (issue #62).
+	expected := expectedOIDCProviderIssuer(cfg.IssuerURL)
+
 	existing, err := c.api.Logical().ReadWithContext(ctx, path)
 	if err != nil {
 		return fmt.Errorf("reading oidc provider %q: %w", vaultOIDCProviderName, err)
 	}
 	if existing != nil && existing.Data != nil {
-		if current, _ := existing.Data["issuer"].(string); current != "" && current != cfg.IssuerURL {
-			return &OIDCIssuerConflictError{Existing: current, Requested: cfg.IssuerURL}
+		if current, _ := existing.Data["issuer"].(string); current != "" && current != expected {
+			return &OIDCIssuerConflictError{Existing: current, Requested: expected}
 		}
 	}
 
@@ -395,8 +416,8 @@ func (c *vaultClient) ensureOIDCProvider(ctx context.Context, cfg OIDCConfig) er
 	if !ok || current == "" {
 		return fmt.Errorf("oidc provider %q returned no issuer after write", vaultOIDCProviderName)
 	}
-	if current != cfg.IssuerURL {
-		return &OIDCIssuerConflictError{Existing: current, Requested: cfg.IssuerURL}
+	if current != expected {
+		return &OIDCIssuerConflictError{Existing: current, Requested: expected}
 	}
 	return nil
 }

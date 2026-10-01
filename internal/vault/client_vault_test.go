@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,9 +52,17 @@ func TestVaultClient_EnsureOIDCConfigCreatesConfidentialAndPublicClients(t *test
 		if r.Method == http.MethodGet && r.URL.Path == testProviderPath {
 			// Reflect whatever was last written so the read-before-write and
 			// post-create read-back see a consistent issuer. 404 until created.
+			// Real Vault returns the EFFECTIVE provider issuer (base + provider
+			// path), not the base the operator wrote, so mirror that here
+			// (issue #62).
 			if prev, ok := writes[testProviderPath]; ok {
 				w.Header().Set("Content-Type", "application/json")
-				resp := map[string]any{"data": prev}
+				data := map[string]any{}
+				maps.Copy(data, prev)
+				if base, ok := data["issuer"].(string); ok {
+					data["issuer"] = base + testProviderPath
+				}
+				resp := map[string]any{"data": data}
 				_ = json.NewEncoder(w).Encode(resp)
 				return
 			}
@@ -130,9 +139,10 @@ func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
 	providerWrites := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == testProviderPath {
-			// Provider already pinned to a different issuer by another CP.
+			// Provider already pinned to a different issuer by another CP. Vault
+			// reports the EFFECTIVE issuer (base + provider path) (issue #62).
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"data":{"issuer":"https://other.example.test","allowed_client_ids":["*"]}}`))
+			_, _ = w.Write([]byte(`{"data":{"issuer":"https://other.example.test/v1/identity/oidc/provider/openchami","allowed_client_ids":["*"]}}`))
 			return
 		}
 		if r.Method == http.MethodPut && r.URL.Path == testProviderPath {
@@ -165,7 +175,8 @@ func TestVaultClient_EnsureOIDCConfigIssuerConflict(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("expected OIDCIssuerConflictError, got %v", err)
 	}
-	if conflict.Existing != "https://other.example.test" || conflict.Requested != testAlphaIssuer {
+	if conflict.Existing != "https://other.example.test/v1/identity/oidc/provider/openchami" ||
+		conflict.Requested != testAlphaIssuer+testProviderPath {
 		t.Errorf("unexpected conflict detail: %+v", conflict)
 	}
 	if providerWrites != 0 {
@@ -193,9 +204,10 @@ func TestVaultClient_EnsureOIDCConfigReadBackConflict(t *testing.T) {
 					return
 				}
 				// Post-write read-back: a concurrent creator won with a
-				// different issuer.
+				// different issuer. Vault reports the EFFECTIVE issuer
+				// (base + provider path) (issue #62).
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"data":{"issuer":"https://winner.example.test","allowed_client_ids":["*"]}}`))
+				_, _ = w.Write([]byte(`{"data":{"issuer":"https://winner.example.test/v1/identity/oidc/provider/openchami","allowed_client_ids":["*"]}}`))
 				return
 			case http.MethodPut:
 				w.Header().Set("Content-Type", "application/json")
@@ -227,7 +239,8 @@ func TestVaultClient_EnsureOIDCConfigReadBackConflict(t *testing.T) {
 	if !errors.As(err, &conflict) {
 		t.Fatalf("expected OIDCIssuerConflictError from read-back, got %v", err)
 	}
-	if conflict.Existing != "https://winner.example.test" || conflict.Requested != testAlphaIssuer {
+	if conflict.Existing != "https://winner.example.test/v1/identity/oidc/provider/openchami" ||
+		conflict.Requested != testAlphaIssuer+testProviderPath {
 		t.Errorf("unexpected conflict detail: %+v", conflict)
 	}
 }
@@ -283,6 +296,181 @@ func TestVaultClient_EnsureOIDCConfigReadBackMissingIssuer(t *testing.T) {
 	}
 	if _, ok := errors.AsType[*OIDCIssuerConflictError](err); ok {
 		t.Fatalf("missing issuer must be a verification error, not a conflict: %v", err)
+	}
+}
+
+// TestExpectedOIDCProviderIssuer verifies the base issuer is turned into the
+// effective provider issuer Vault reports, tolerating a trailing slash on the
+// configured base.
+func TestExpectedOIDCProviderIssuer(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		base string
+		want string
+	}{
+		{
+			name: "no trailing slash",
+			base: "http://vault.vault.svc.cluster.local:8200",
+			want: "http://vault.vault.svc.cluster.local:8200/v1/identity/oidc/provider/openchami",
+		},
+		{
+			name: "trailing slash trimmed",
+			base: "https://vault.example.com/",
+			want: "https://vault.example.com/v1/identity/oidc/provider/openchami",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := expectedOIDCProviderIssuer(tc.base); got != tc.want {
+				t.Errorf("expectedOIDCProviderIssuer(%q) = %q, want %q", tc.base, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestVaultClient_EnsureOIDCProviderIdempotentOnEffectiveIssuer is the core
+// regression test for issue #62: a provider previously created by the operator
+// with the configured BASE issuer is read back by Vault as the EFFECTIVE issuer
+// (base + provider path). The operator must treat these as equivalent and NOT
+// report a conflict on the next reconcile.
+func TestVaultClient_EnsureOIDCProviderIdempotentOnEffectiveIssuer(t *testing.T) {
+	t.Parallel()
+
+	const base = "https://vault.example.com"
+	providerWrites := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == testProviderPath {
+			switch r.Method {
+			case http.MethodGet:
+				// Provider already exists, created earlier by the operator with
+				// the base issuer; Vault serves the effective issuer.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"issuer":"https://vault.example.com/v1/identity/oidc/provider/openchami","allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				providerWrites++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	if err := client.ensureOIDCProvider(context.Background(), OIDCConfig{IssuerURL: base}); err != nil {
+		t.Fatalf("ensureOIDCProvider on operator-created provider must succeed, got: %v", err)
+	}
+	if providerWrites == 0 {
+		t.Error("expected the provider fields to be reconciled (at least one write)")
+	}
+}
+
+// TestVaultClient_EnsureOIDCProviderRealConflict asserts a genuine cross-Vault
+// conflict is still detected: the effective issuer served by Vault has a
+// DIFFERENT host than the configured base, so it must be an
+// OIDCIssuerConflictError.
+func TestVaultClient_EnsureOIDCProviderRealConflict(t *testing.T) {
+	t.Parallel()
+
+	const base = "https://vault-a.example.com"
+	providerWrites := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == testProviderPath {
+			switch r.Method {
+			case http.MethodGet:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"issuer":"https://vault-b.example.com/v1/identity/oidc/provider/openchami","allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				providerWrites++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	err = client.ensureOIDCProvider(context.Background(), OIDCConfig{IssuerURL: base})
+	var conflict *OIDCIssuerConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("expected OIDCIssuerConflictError, got %v", err)
+	}
+	if conflict.Existing != "https://vault-b.example.com/v1/identity/oidc/provider/openchami" ||
+		conflict.Requested != base+testProviderPath {
+		t.Errorf("unexpected conflict detail: %+v", conflict)
+	}
+	if providerWrites != 0 {
+		t.Errorf("provider must not be written on issuer conflict, got %d writes", providerWrites)
+	}
+}
+
+// TestVaultClient_EnsureOIDCProviderCreateReconcileReconcile exercises the
+// full lifecycle from issue #62: the provider does not exist, is created by the
+// operator, and two subsequent reconciles must both accept the provider Vault
+// now serves under its effective issuer.
+func TestVaultClient_EnsureOIDCProviderCreateReconcileReconcile(t *testing.T) {
+	t.Parallel()
+
+	const base = "http://vault.vault.svc.cluster.local:8200"
+	created := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == testProviderPath {
+			switch r.Method {
+			case http.MethodGet:
+				if !created {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				// Once created, Vault serves the effective issuer.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"issuer":"http://vault.vault.svc.cluster.local:8200/v1/identity/oidc/provider/openchami","allowed_client_ids":["*"]}}`))
+				return
+			case http.MethodPut:
+				created = true
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{}}`))
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	apiConfig := vaultapi.DefaultConfig()
+	apiConfig.Address = server.URL
+	api, err := vaultapi.NewClient(apiConfig)
+	if err != nil {
+		t.Fatalf("new Vault API client: %v", err)
+	}
+	client := &vaultClient{api: api}
+
+	// Create, then reconcile twice; all three must succeed without a conflict.
+	for i := range 3 {
+		if err := client.ensureOIDCProvider(context.Background(), OIDCConfig{IssuerURL: base}); err != nil {
+			t.Fatalf("ensureOIDCProvider iteration %d must succeed, got: %v", i, err)
+		}
 	}
 }
 
