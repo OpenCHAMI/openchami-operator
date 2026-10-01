@@ -53,6 +53,7 @@ docker-build: ## Build operator container image
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) \
 	  --build-arg DATE=$(DATE) \
+	  $(if $(GOPROXY),--build-arg GOPROXY="$(GOPROXY)") \
 	  -t $(IMG) .
 
 ##@ Code generation

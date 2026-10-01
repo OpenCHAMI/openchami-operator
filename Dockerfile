@@ -1,6 +1,7 @@
 FROM golang:1.27.1 AS builder
 ARG TARGETOS
 ARG TARGETARCH
+ARG GOPROXY
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
