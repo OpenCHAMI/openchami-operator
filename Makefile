@@ -55,6 +55,7 @@ docker-build: ## Build operator container image
 	  --build-arg COMMIT=$(COMMIT) \
 	  --build-arg DATE=$(DATE) \
 	  $(if $(GOPROXY),--build-arg GOPROXY="$(GOPROXY)") \
+	  $(if $(HTTPS_PROXY),--build-arg HTTPS_PROXY="$(HTTPS_PROXY)") \
 	  $(if $(DOCKER_BUILD_NETWORK),--network=$(DOCKER_BUILD_NETWORK)) \
 	  -t $(IMG) .
 
