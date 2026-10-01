@@ -76,13 +76,18 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.Op
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling network-probe clusterrole: %w", err)
 	}
+	crb := r.buildNetworkProbeClusterRoleBinding(cp)
+	if err := r.Client.Patch(ctx, crb, client.Apply, //nolint:staticcheck // SSA via Patch is the supported pattern
+		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling network-probe clusterrolebinding: %w", err)
+	}
 
 	return ctrl.Result{}, nil
 }
 
 func (r *RBACReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	ns := ControlPlaneNamespace(cp)
-	objs := make([]client.Object, 0, len(serviceAccountNames)+3)
+	objs := make([]client.Object, 0, len(serviceAccountNames)+4)
 	for _, name := range serviceAccountNames {
 		objs = append(objs, r.buildServiceAccount(ns, name))
 	}
@@ -90,6 +95,7 @@ func (r *RBACReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (
 		r.buildConfigReaderRole(cp),
 		r.buildConfigReaderRoleBinding(cp),
 		r.buildNetworkProbeClusterRole(cp),
+		r.buildNetworkProbeClusterRoleBinding(cp),
 	)
 	return objs, nil
 }
@@ -156,5 +162,23 @@ func (r *RBACReconciler) buildNetworkProbeClusterRole(cp *openchamiv1alpha1.Open
 			Resources: []string{"nodes"},
 			Verbs:     []string{"get", "patch"},
 		}},
+	}
+}
+
+func (r *RBACReconciler) buildNetworkProbeClusterRoleBinding(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *rbacv1.ClusterRoleBinding {
+	name := "openchami-" + cp.Spec.ClusterName + "-network-probe"
+	return &rbacv1.ClusterRoleBinding{
+		TypeMeta:   metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "ClusterRoleBinding"},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      ServiceNetworkProbe,
+			Namespace: ControlPlaneNamespace(cp),
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacAPIVersion,
+			Kind:     "ClusterRole",
+			Name:     name,
+		},
 	}
 }

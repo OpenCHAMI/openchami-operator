@@ -94,6 +94,9 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 	if ds.Spec.Template.Spec.ServiceAccountName != ServiceNetworkProbe {
 		t.Errorf("expected SA=%q, got %q", ServiceNetworkProbe, ds.Spec.Template.Spec.ServiceAccountName)
 	}
+	if ds.Spec.Template.Spec.AutomountServiceAccountToken == nil || !*ds.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Error("expected probe pod to mount its service account token")
+	}
 	if ds.Spec.Template.Spec.PriorityClassName != testPriorityClass {
 		t.Errorf("expected priority=system-node-critical, got %q", ds.Spec.Template.Spec.PriorityClassName)
 	}
