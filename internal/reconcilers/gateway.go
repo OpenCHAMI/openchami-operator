@@ -922,6 +922,7 @@ func (r *GatewayReconciler) buildJWKSBackendTLSPolicy(cp *openchamiv1alpha1.Open
 func (r *GatewayReconciler) buildSMDRateLimit(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *egv1alpha1.BackendTrafficPolicy {
 	target := httpRouteTargetRef(routeSMD)
 	headerType := egv1alpha1.HeaderMatchDistinct
+	rateLimitType := egv1alpha1.GlobalRateLimitType
 	return &egv1alpha1.BackendTrafficPolicy{
 		TypeMeta: metav1.TypeMeta{APIVersion: envoyGatewayAPIVersion, Kind: kindBackendTrafficPolicy},
 		ObjectMeta: metav1.ObjectMeta{
@@ -934,6 +935,7 @@ func (r *GatewayReconciler) buildSMDRateLimit(cp *openchamiv1alpha1.OpenCHAMICon
 				TargetRefs: []gwapiv1.LocalPolicyTargetReferenceWithSectionName{target},
 			},
 			RateLimit: &egv1alpha1.RateLimitSpec{
+				Type: &rateLimitType,
 				Global: &egv1alpha1.GlobalRateLimit{
 					Rules: []egv1alpha1.RateLimitRule{{
 						ClientSelectors: []egv1alpha1.RateLimitSelectCondition{{
