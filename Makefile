@@ -25,6 +25,7 @@ IMAGE_REGISTRY ?= ghcr.io/openchami
 IMAGE_NAME     ?= openchami-operator
 IMAGE_TAG      ?= $(VERSION)
 IMG            ?= $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+DOCKER_BUILD_NETWORK ?=
 
 .PHONY: all build generate manifests fmt vet lint lint-config test test-e2e docker-build \
         dev-up dev-down e2e migrate-storage-version \
@@ -53,6 +54,9 @@ docker-build: ## Build operator container image
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) \
 	  --build-arg DATE=$(DATE) \
+	  $(if $(GOPROXY),--build-arg GOPROXY="$(GOPROXY)") \
+	  $(if $(HTTPS_PROXY),--build-arg HTTPS_PROXY="$(HTTPS_PROXY)") \
+	  $(if $(DOCKER_BUILD_NETWORK),--network=$(DOCKER_BUILD_NETWORK)) \
 	  -t $(IMG) .
 
 ##@ Code generation
@@ -114,7 +118,7 @@ test-cover: ## Run tests with coverage report
 	@echo "Coverage report: cover.html"
 
 e2e: ## Run end-to-end tests (requires make dev-up first)
-	go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/...
+	KIND_CLUSTER=$${KIND_CLUSTER:-openchami-dev} go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/...
 
 test-e2e: e2e ## Alias for e2e target (used by CI workflow)
 

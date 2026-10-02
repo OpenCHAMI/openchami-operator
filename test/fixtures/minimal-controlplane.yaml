@@ -1,15 +1,15 @@
 apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMIControlPlane
 metadata:
-  name: frodo
+  name: testcluster
   namespace: default
   annotations:
     # Safety: don't clean up Vault or S3 when this test cluster is deleted
     # openchami.org/cleanup-vault: "true"
     # openchami.org/cleanup-s3: "true"
 spec:
-  clusterName: frodo
-  domain: frodo.local
+  clusterName: testcluster
+  domain: testcluster.local
 
   platform:
     vault:

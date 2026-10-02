@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -282,11 +283,12 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIC
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: ServiceNetworkProbe,
-					EnableServiceLinks: DisableServiceLinks(),
-					PriorityClassName:  priorityClassSystemNodeCritical,
-					HostNetwork:        hostNetwork,
-					SecurityContext:    CommonPodSecurityContext(),
+					ServiceAccountName:           ServiceNetworkProbe,
+					AutomountServiceAccountToken: ptr.To(true),
+					EnableServiceLinks:           DisableServiceLinks(),
+					PriorityClassName:            priorityClassSystemNodeCritical,
+					HostNetwork:                  hostNetwork,
+					SecurityContext:              CommonPodSecurityContext(),
 					// Probe must run on every node, including control-plane.
 					Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					Containers:  []corev1.Container{container},

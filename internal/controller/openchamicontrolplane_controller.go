@@ -308,6 +308,10 @@ func (r *OpenCHAMIControlPlaneReconciler) reconcileDelete(ctx context.Context, c
 	cr := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
 		Name: "openchami-" + cp.Spec.ClusterName + "-network-probe",
 	}}
+	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: cr.Name}}
+	if err := r.Delete(ctx, crb); client.IgnoreNotFound(err) != nil {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting clusterrolebinding: %w", err)
+	}
 	if err := r.Delete(ctx, cr); client.IgnoreNotFound(err) != nil {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, fmt.Errorf("deleting clusterrole: %w", err)
 	}
