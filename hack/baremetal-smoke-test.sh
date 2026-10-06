@@ -36,7 +36,10 @@ as_root() {
   fi
 }
 
-[[ $(uname -s) == Linux ]] || die "Run this script on a Linux Kubernetes node, not on macOS."
+if [[ $(uname -s) == Darwin ]]; then
+  exec bash "${ROOT_DIR}/hack/local-mac-smoke-test.sh" "$@"
+fi
+[[ $(uname -s) == Linux ]] || die "This smoke test requires Linux or macOS."
 [[ -f "${ROOT_DIR}/config/default/kustomization.yaml" ]] || die "Run from a checkout of openchami-operator."
 command -v curl >/dev/null || die "curl is required on this node."
 command -v sudo >/dev/null || [[ $(id -u) -eq 0 ]] || die "sudo or a root shell is required."
@@ -61,6 +64,10 @@ if [[ -z "$KUBECONFIG" && -f /etc/rancher/k3s/k3s.yaml ]] && as_root systemctl i
 fi
 if kubectl get nodes >/dev/null 2>&1; then
   context=$(kubectl config current-context 2>/dev/null || printf unknown)
+  if [[ "$context" == kind-openchami-dev ]]; then
+    say "Using the local kind smoke-test setup; no remote machines will be changed"
+    exec bash "${ROOT_DIR}/hack/local-mac-smoke-test.sh" "$@"
+  fi
   [[ "$context" != kind-* ]] || die "Context ${context} is a local kind cluster, not the bare-metal target. Use hack/local-mac-smoke-test.sh on your Mac, or run this script on the first Linux bare-metal node with its kubeconfig."
   use_existing=true
   say "Found reachable Kubernetes context: ${context}"

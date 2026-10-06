@@ -26,11 +26,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ $(uname -s) == Darwin ]] || die "This script is for your Mac. Use hack/baremetal-smoke-test.sh on the Linux bare-metal host."
+case $(uname -s) in
+  Darwin|Linux) ;;
+  *) die "The local kind smoke test requires Linux or macOS." ;;
+esac
 for tool in docker kind kubectl helm make go curl lsof; do
   command -v "$tool" >/dev/null 2>&1 || die "Required command not found: $tool"
 done
-[[ -f "${ROOT_DIR}/test/fixtures/local-smd-smoke.yaml" ]] || die "Run from the openchami-operator checkout."
+[[ -f "${ROOT_DIR}/hack/local-dev/smd-smoke.yaml" ]] || die "Run from the openchami-operator checkout."
 docker info >/dev/null 2>&1 || die "Docker Desktop must be running."
 
 port_in_use() {
@@ -87,7 +90,7 @@ done
 [[ "$ready" == true ]] || die "The local operator did not start. Inspect ${operator_log}."
 
 say "Applying or updating the local SMD smoke-test resource"
-kubectl --context "$CONTEXT" apply -f "${ROOT_DIR}/test/fixtures/local-smd-smoke.yaml"
+kubectl --context "$CONTEXT" apply -f "${ROOT_DIR}/hack/local-dev/smd-smoke.yaml"
 kubectl --context "$CONTEXT" rollout status --timeout=15m -n "$NAMESPACE" deployment/tokensmith
 kubectl --context "$CONTEXT" rollout status --timeout=15m -n "$NAMESPACE" deployment/smd
 
