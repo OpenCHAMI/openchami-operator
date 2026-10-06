@@ -54,13 +54,21 @@ if [[ -n "$KUBECONFIG" ]]; then
 fi
 
 use_existing=false
+local_k3s=false
+if [[ -z "$KUBECONFIG" && -f /etc/rancher/k3s/k3s.yaml ]] && as_root systemctl is-active --quiet k3s; then
+  export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+  local_k3s=true
+fi
 if kubectl get nodes >/dev/null 2>&1; then
+  context=$(kubectl config current-context 2>/dev/null || printf unknown)
+  [[ "$context" != kind-* ]] || die "Context ${context} is a local kind cluster, not the bare-metal target. Use hack/local-mac-smoke-test.sh on your Mac, or run this script on the first Linux bare-metal node with its kubeconfig."
   use_existing=true
-  say "Found reachable Kubernetes context: $(kubectl config current-context 2>/dev/null || printf unknown)"
+  say "Found reachable Kubernetes context: ${context}"
 else
   if [[ -f /etc/rancher/k3s/k3s.yaml ]] && as_root systemctl is-active --quiet k3s; then
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
     use_existing=true
+    local_k3s=true
     say "Using the local K3s cluster."
   fi
 fi
@@ -68,7 +76,9 @@ fi
 if [[ "$use_existing" != true ]]; then
   if ! command -v k3s >/dev/null 2>&1; then
     command -v ssh >/dev/null || die "ssh is required to join the two worker nodes."
-    read -r -p "Two SSH targets for the worker nodes (user@host user@host): " WORKER_NODES
+    if [[ -z "$WORKER_NODES" ]]; then
+      read -r -p "Two SSH targets for the worker nodes (user@host user@host): " WORKER_NODES
+    fi
     read -r -a workers <<< "$WORKER_NODES"
     [[ ${#workers[@]} -eq 2 ]] || die "Enter exactly two SSH targets, for example root@192.0.2.12 root@192.0.2.13."
 
@@ -81,6 +91,22 @@ if [[ "$use_existing" != true ]]; then
       kubectl() { as_root k3s kubectl "$@"; }
     fi
 
+  else
+    export KUBECONFIG=${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}
+    as_root systemctl is-active --quiet k3s || die "K3s is installed but its server is not running. Check systemctl status k3s; no other cluster will be installed over it."
+  fi
+  local_k3s=true
+fi
+
+if [[ "$local_k3s" == true ]]; then
+  ready_nodes=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 == "Ready" {count++} END {print count+0}')
+  if [[ "$ready_nodes" -lt 3 ]]; then
+    command -v ssh >/dev/null || die "ssh is required to join worker nodes."
+    if [[ -z "$WORKER_NODES" ]]; then
+      read -r -p "Two SSH targets for the worker nodes (user@host user@host): " WORKER_NODES
+    fi
+    read -r -a workers <<< "$WORKER_NODES"
+    [[ ${#workers[@]} -eq 2 ]] || die "Enter exactly two SSH targets for the workers."
     server_ip=${K3S_SERVER_IP:-}
     if [[ -z "$server_ip" ]]; then
       read -r -p "IP address the worker nodes use to reach this server: " server_ip
@@ -91,13 +117,15 @@ if [[ "$use_existing" != true ]]; then
     for worker in "${workers[@]}"; do
       say "Joining worker ${worker}"
       ssh -o BatchMode=yes "$worker" 'test "$(id -u)" -eq 0 || sudo -n true' || die "SSH to ${worker} must work without a password prompt, with root access or passwordless sudo."
+      if ssh -o BatchMode=yes "$worker" 'if [ "$(id -u)" -eq 0 ]; then systemctl is-active --quiet k3s-agent; else sudo -n systemctl is-active --quiet k3s-agent; fi'; then
+        say "Worker ${worker} already runs k3s-agent; leaving it unchanged"
+        continue
+      fi
       printf -v remote_install 'if [ "$(id -u)" -eq 0 ]; then env K3S_URL=%q K3S_TOKEN=%q INSTALL_K3S_CHANNEL=%q sh -s - agent; else sudo env K3S_URL=%q K3S_TOKEN=%q INSTALL_K3S_CHANNEL=%q sh -s - agent; fi' \
         "https://${server_ip}:6443" "$token" "$K3S_CHANNEL" \
         "https://${server_ip}:6443" "$token" "$K3S_CHANNEL"
       ssh -o BatchMode=yes "$worker" "curl -sfL https://get.k3s.io | ${remote_install}"
     done
-  else
-    export KUBECONFIG=${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}
   fi
 fi
 
@@ -114,18 +142,16 @@ printf 'It creates temporary, non-durable Vault and LocalStack services.\n'
 read -r -p "Continue? [y/N] " answer
 [[ "$answer" == [yY] || "$answer" == [yY][eE][sS] ]] || die "Cancelled without applying the OpenCHAMI test stack."
 
-if [[ "$use_existing" == true ]]; then
-  ready_nodes=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 == "Ready" {count++} END {print count+0}')
-  [[ "$ready_nodes" -ge 3 ]] || die "This smoke test expects at least three Ready nodes; found ${ready_nodes}."
-else
-  say "Waiting for three K3s nodes to become Ready"
+say "Waiting for Kubernetes nodes to become Ready"
+if [[ "$local_k3s" == true ]]; then
   for _ in $(seq 1 90); do
-    ready_nodes=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 == "Ready" {count++} END {print count+0}')
-    [[ "$ready_nodes" -ge 3 ]] && break
+    node_count=$(kubectl get nodes --no-headers | awk 'END {print NR}')
+    [[ "$node_count" -ge 3 ]] && break
     sleep 5
   done
-  [[ "${ready_nodes:-0}" -ge 3 ]] || die "Three Ready nodes did not appear. Check node SSH, firewall ports 6443/8472/10250, and K3s logs."
+  [[ "$node_count" -ge 3 ]] || die "Workers have not registered with K3s. Check SSH targets, worker service logs, and connectivity to ${K3S_SERVER_IP:-the server} on port 6443. Rerun this script to resume without teardown."
 fi
+kubectl wait --for=condition=Ready nodes --all --timeout=450s
 
 say "Installing gateway-api and cert-manager"
 kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
