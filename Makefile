@@ -120,6 +120,8 @@ test-e2e: e2e ## Alias for e2e target (used by CI workflow)
 
 ##@ Local development
 
+KIND_CONFIG ?= hack/local-dev/kind-config.yaml
+
 dev-up: ## Start local development environment
 	@echo "Starting Vault dev + localstack..."
 	docker compose -f hack/local-dev/docker-compose.yaml up -d
@@ -128,7 +130,7 @@ dev-up: ## Start local development environment
 	  echo "Cluster openchami-dev already exists; ensuring kubeconfig is exported."; \
 	  kind export kubeconfig --name openchami-dev; \
 	else \
-	  kind create cluster --config hack/local-dev/kind-config.yaml --name openchami-dev; \
+	  kind create cluster --config $(KIND_CONFIG) --name openchami-dev; \
 	fi
 	@echo "Waiting for control-plane API to become reachable..."
 	@for i in $$(seq 1 30); do \

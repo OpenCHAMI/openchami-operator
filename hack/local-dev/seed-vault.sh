@@ -9,6 +9,17 @@ CLUSTER=${1:-testcluster}
 
 export VAULT_ADDR VAULT_TOKEN
 
+if ! command -v vault >/dev/null 2>&1; then
+  command -v docker >/dev/null 2>&1 || {
+    echo "vault CLI or Docker is required to seed the dev Vault" >&2
+    exit 1
+  }
+  vault() {
+    docker exec -i -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_TOKEN="$VAULT_TOKEN" \
+      openchami-vault-dev vault "$@"
+  }
+fi
+
 echo "Seeding Vault at $VAULT_ADDR for cluster: $CLUSTER"
 
 # Enable KV v2 (idempotent)
