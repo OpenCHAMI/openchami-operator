@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CLUSTER_NAME=${CLUSTER_NAME:-smoke}
 TOOLS_NAMESPACE=${TOOLS_NAMESPACE:-openchami-smoke-system}
-OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
+OPERATOR_IMAGE=${OPERATOR_IMAGE:-ghcr.io/openchami/openchami-operator:v0.0.8}
 K3S_CHANNEL=${K3S_CHANNEL:-stable}
 KUBECONFIG=${KUBECONFIG:-}
 WORKER_NODES=${WORKER_NODES:-}
@@ -41,10 +41,7 @@ as_root() {
 command -v curl >/dev/null || die "curl is required on this node."
 command -v sudo >/dev/null || [[ $(id -u) -eq 0 ]] || die "sudo or a root shell is required."
 
-if [[ -z "$OPERATOR_IMAGE" ]]; then
-  read -r -p "Operator image (for example ghcr.io/openchami/openchami-operator:v1.0.0): " OPERATOR_IMAGE
-fi
-[[ -n "$OPERATOR_IMAGE" ]] || die "Set OPERATOR_IMAGE or enter a published release image."
+say "Using operator image: ${OPERATOR_IMAGE}"
 
 if ! command -v kubectl >/dev/null 2>&1; then
   if command -v k3s >/dev/null 2>&1; then
