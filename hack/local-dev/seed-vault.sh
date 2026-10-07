@@ -3,7 +3,7 @@
 # Idempotent — safe to run multiple times.
 set -euo pipefail
 
-VAULT_ADDR=${VAULT_ADDR:-http://localhost:8200}
+VAULT_ADDR=${VAULT_ADDR:-http://127.0.0.1:8200}
 VAULT_TOKEN=${VAULT_TOKEN:-dev-root-token}
 CLUSTER=${1:-testcluster}
 
