@@ -124,7 +124,7 @@ KIND_CONFIG ?= hack/local-dev/kind-config.yaml
 
 dev-up: ## Start local development environment
 	@echo "Starting Vault dev + localstack..."
-	docker compose -f hack/local-dev/docker-compose.yaml up -d
+	docker compose -f hack/local-dev/docker-compose.yaml up -d --wait --wait-timeout 180
 	@echo "Creating kind cluster..."
 	@if kind get clusters 2>/dev/null | grep -qx openchami-dev; then \
 	  echo "Cluster openchami-dev already exists; ensuring kubeconfig is exported."; \
