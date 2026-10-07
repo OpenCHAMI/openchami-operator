@@ -301,6 +301,20 @@ spec:
       port: 10000
       targetPort: 10000
 YAML
+
+say "Waiting for the operator to create the control plane namespace..."
+while ! kubectl get namespace "$CP_NAMESPACE" >/dev/null 2>&1; do
+  sleep 2
+done
+
+say "Waiting for the deployments to be provisioned by the operator..."
+while ! kubectl get deployment tokensmith -n "$CP_NAMESPACE" >/dev/null 2>&1; do
+  sleep 2
+done
+while ! kubectl get deployment smd -n "$CP_NAMESPACE" >/dev/null 2>&1; do
+  sleep 2
+done
+
 kubectl rollout status --timeout=180s -n "$TOOLS_NAMESPACE" deployment/openchami-smoke-vault
 kubectl rollout status --timeout=300s -n "$TOOLS_NAMESPACE" deployment/openchami-smoke-s3
 
