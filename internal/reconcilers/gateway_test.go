@@ -132,8 +132,8 @@ func TestGatewayReconciler_AppliesAllHTTPRoutes(t *testing.T) {
 	cp := newControlPlane("alpha")
 	c := reconcileWithCertsValid(t, cp)
 	for _, name := range []string{
-		routeHTTPRedirect, routeSMD, routeTokensmith,
-		routeBootService, routeBootAdmin,
+		routeHTTPRedirect, routeSMD, routeSMDPublic, routeTokensmith,
+		routeBootService, routeBootPublic, routeBootAdmin,
 		routeMetadataPublic, routeMetadataAdmin,
 	} {
 		hr := &gwapiv1.HTTPRoute{}
@@ -423,6 +423,8 @@ func TestGatewayReconciler_DefersJWTRoutesWhenTokensmithNotReady(t *testing.T) {
 	mustExist("HTTPRoute", routeHTTPRedirect, &gwapiv1.HTTPRoute{})
 	mustExist("HTTPRoute", routeTokensmith, &gwapiv1.HTTPRoute{})
 	mustExist("HTTPRoute", routeMetadataPublic, &gwapiv1.HTTPRoute{})
+	mustExist("HTTPRoute", routeSMDPublic, &gwapiv1.HTTPRoute{})
+	mustExist("HTTPRoute", routeBootPublic, &gwapiv1.HTTPRoute{})
 
 	// JWT-gated set is absent.
 	for _, name := range []string{routeSMD, routeBootService, routeBootAdmin, routeMetadataAdmin} {

@@ -7,6 +7,8 @@ package reconcilers
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	egv1alpha1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -56,8 +58,10 @@ const (
 	// resources reference the same names.
 	routeHTTPRedirect   = "http-redirect"
 	routeSMD            = "smd"
+	routeSMDPublic      = "smd-public"
 	routeTokensmith     = "tokensmith"
 	routeBootService    = "boot-service"
+	routeBootPublic     = "boot-service-public"
 	routeBootAdmin      = "boot-admin"
 	routeMetadataPublic = "metadata-public"
 	routeMetadataAdmin  = "metadata-admin"
@@ -114,6 +118,91 @@ const (
 	pathTokensmithExchange = "/oauth/exchange"
 	pathTokensmithHealth   = "/health"
 )
+
+// defaultSMDPublicPaths mirrors SMD's own public route set — the
+// endpoints SMD registers outside its JWT middleware group even when
+// authentication is enabled (smd cmd/smd/routers.go generatePublicRoutes,
+// v2.20.3). Every one is GET-only upstream; POST/DELETE on the same
+// paths are protected, and the gateway keeps them protected too because
+// public routes only ever match GET.
+//
+// Callers that depend on these without a token today: ochami
+// (`smd status`, `smd component get`, `smd iface get`) and coresmd
+// (component + ethernet-interface cache refresh).
+var defaultSMDPublicPaths = []string{
+	"/hsm/v2/service/ready",
+	"/hsm/v2/service/liveness",
+	"/hsm/v2/service/values",
+	"/hsm/v2/service/values/arch",
+	"/hsm/v2/service/values/class",
+	"/hsm/v2/service/values/flag",
+	"/hsm/v2/service/values/nettype",
+	"/hsm/v2/service/values/role",
+	"/hsm/v2/service/values/subrole",
+	"/hsm/v2/service/values/state",
+	"/hsm/v2/service/values/type",
+	"/hsm/v2/State/Components",
+	"/hsm/v2/Inventory/EthernetInterfaces",
+}
+
+// defaultBootPublicPaths are the read-only boot-service endpoints that
+// must work without a JWT: nodes fetch their iPXE boot script before
+// they hold any credential, and ochami's `bss boot script get` /
+// `bss status` / `bss service version` send no token. boot-service
+// itself performs no inbound authentication, so the gateway is the only
+// gate — keep this list to read-only, non-sensitive endpoints.
+// /boot/v1/bootscript is always registered by boot-service; the
+// /service/* pair only exists when its legacy BSS API is enabled and
+// 404s harmlessly otherwise.
+var defaultBootPublicPaths = []string{
+	"/boot/v1/bootscript",
+	"/boot/v1/service/status",
+	"/boot/v1/service/version",
+}
+
+// resolvePublicPaths returns the exact paths to publish without a JWT
+// for one service, or nil when the public route is disabled. A non-empty
+// spec list replaces the defaults. Entries outside the service's gateway
+// prefix are dropped defensively (the CRD's CEL rule already rejects
+// them at admission) so a public route can never shadow another
+// service's prefix. The result is sorted and de-duplicated so the
+// rendered HTTPRoute is stable across reconciles.
+func resolvePublicPaths(spec openchamiv1alpha1.PublicRoutesSpec, prefix string, defaults []string) []string {
+	if !spec.IsEnabled() {
+		return nil
+	}
+	src := defaults
+	if len(spec.Paths) > 0 {
+		src = spec.Paths
+	}
+	seen := make(map[string]struct{}, len(src))
+	out := make([]string, 0, len(src))
+	for _, p := range src {
+		if !strings.HasPrefix(p, prefix+"/") {
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// smdPublicPaths / bootPublicPaths resolve the effective public path
+// list for each service, honouring spec overrides.
+func smdPublicPaths(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
+	return resolvePublicPaths(cp.Spec.Services.SMD.PublicRoutes, pathSMDPrefix, defaultSMDPublicPaths)
+}
+
+func bootPublicPaths(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
+	return resolvePublicPaths(cp.Spec.Services.BootService.PublicRoutes, pathBootPrefix, defaultBootPublicPaths)
+}
 
 // gatewayStatusRoutes returns the canonical route-name → URL-path map
 // the operator publishes in .status.gateway.routes. Single source of
@@ -218,6 +307,9 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1
 			return ctrl.Result{}, fmt.Errorf("applying %s/%s: %w",
 				obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
 		}
+	}
+	if err := r.deleteStalePublicRoutes(ctx, cp, log); err != nil {
+		return ctrl.Result{}, err
 	}
 	switch {
 	case !tokensmithReady:
@@ -348,7 +440,54 @@ func (r *GatewayReconciler) objectsAlways(cp *openchamiv1alpha1.OpenCHAMIControl
 	if ServiceDeployedInCluster(cp, ServiceMetadataService) {
 		objs = append(objs, r.buildMetadataPublicRoute(cp))
 	}
+	// SMD / boot-service public read-only routes carry no SecurityPolicy,
+	// so — like the metadata public route — they're safe to publish
+	// before tokensmith can serve JWKS.
+	if paths := smdPublicPaths(cp); ServiceDeployedInCluster(cp, ServiceSMD) && paths != nil {
+		objs = append(objs, buildPublicReadOnlyRoute(cp, routeSMDPublic, ServiceSMD, smdPort, paths))
+	}
+	if paths := bootPublicPaths(cp); ServiceDeployedInCluster(cp, ServiceBootService) && paths != nil {
+		objs = append(objs, buildPublicReadOnlyRoute(cp, routeBootPublic, ServiceBootService, bootServicePort, paths))
+	}
 	return objs
+}
+
+// stalePublicRoutes returns the names of public read-only HTTPRoutes
+// that must NOT exist for the current spec — the service is no longer
+// deployed in-cluster, or its public route was disabled / emptied.
+// Server-side apply never removes an object we stop rendering, and a
+// lingering unauthenticated route is exactly the failure mode an admin
+// flipping `publicRoutes.enabled=false` is trying to prevent, so these
+// are deleted explicitly every reconcile.
+func stalePublicRoutes(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
+	var stale []string
+	if !ServiceDeployedInCluster(cp, ServiceSMD) || smdPublicPaths(cp) == nil {
+		stale = append(stale, routeSMDPublic)
+	}
+	if !ServiceDeployedInCluster(cp, ServiceBootService) || bootPublicPaths(cp) == nil {
+		stale = append(stale, routeBootPublic)
+	}
+	return stale
+}
+
+// deleteStalePublicRoutes removes public routes the spec no longer asks
+// for. NotFound is the steady state and is not an error.
+func (r *GatewayReconciler) deleteStalePublicRoutes(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, log logr.Logger) error {
+	for _, name := range stalePublicRoutes(cp) {
+		hr := &gwapiv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ControlPlaneNamespace(cp),
+		}}
+		err := r.Client.Delete(ctx, hr)
+		switch {
+		case err == nil:
+			logging.EnrichWithResource(log, kindHTTPRoute, name).
+				Info("deleted public read-only route no longer requested by spec")
+		case apierrors.IsNotFound(err):
+		default:
+			return fmt.Errorf("deleting stale HTTPRoute %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // objectsRequiringTokensmith returns the gateway resources whose JWT
@@ -683,6 +822,60 @@ func (r *GatewayReconciler) buildSMDRoute(cp *openchamiv1alpha1.OpenCHAMIControl
 			},
 			Hostnames: []gwapiv1.Hostname{hostname},
 			Rules:     []gwapiv1.HTTPRouteRule{pathPrefixRule(pathSMDPrefix, ServiceSMD, smdPort)},
+		},
+	}
+}
+
+// buildPublicReadOnlyRoute builds an HTTPRoute that forwards a fixed set
+// of exact paths to a backend *without* any SecurityPolicy, restricted to
+// GET. It coexists with the service's JWT-gated prefix route (e.g. `smd`
+// on /hsm): Gateway API resolves overlapping routes on the same listener
+// by match precedence — an Exact path match beats a PathPrefix match,
+// and a method match beats none — so:
+//
+//	GET    /hsm/v2/State/Components        → smd-public (no JWT)
+//	POST   /hsm/v2/State/Components        → smd        (JWT)
+//	GET    /hsm/v2/State/Components/x1000… → smd        (JWT)
+//
+// The method is hard-coded to GET, never taken from the spec, so this
+// route can only ever expose reads. Anything that doesn't match falls
+// through to the protected route — fail closed.
+func buildPublicReadOnlyRoute(cp *openchamiv1alpha1.OpenCHAMIControlPlane, name, backend string, port int32, paths []string) *gwapiv1.HTTPRoute {
+	hostname := gwapiv1.Hostname(cp.Spec.Domain)
+	matchType := gwapiv1.PathMatchExact
+	method := gwapiv1.HTTPMethodGet
+	matches := make([]gwapiv1.HTTPRouteMatch, 0, len(paths))
+	for _, p := range paths {
+		val := p
+		matches = append(matches, gwapiv1.HTTPRouteMatch{
+			Path:   &gwapiv1.HTTPPathMatch{Type: &matchType, Value: &val},
+			Method: &method,
+		})
+	}
+	portNum := port
+	return &gwapiv1.HTTPRoute{
+		TypeMeta: metav1.TypeMeta{APIVersion: gatewayAPIVersion, Kind: kindHTTPRoute},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ControlPlaneNamespace(cp),
+			Labels:    gatewayLabels(cp),
+		},
+		Spec: gwapiv1.HTTPRouteSpec{
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{httpsParentRef(cp)},
+			},
+			Hostnames: []gwapiv1.Hostname{hostname},
+			Rules: []gwapiv1.HTTPRouteRule{{
+				Matches: matches,
+				BackendRefs: []gwapiv1.HTTPBackendRef{{
+					BackendRef: gwapiv1.BackendRef{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Name: gwapiv1.ObjectName(backend),
+							Port: &portNum,
+						},
+					},
+				}},
+			}},
 		},
 	}
 }

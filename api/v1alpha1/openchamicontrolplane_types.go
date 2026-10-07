@@ -253,9 +253,56 @@ type PlatformSpec struct {
 	ObjectStorage ObjectStorageSpec `json:"objectStorage"`
 }
 
+// PublicRoutesSpec controls which of a service's endpoints the operator's
+// Envoy Gateway serves *without* a JWT. Every public endpoint is published
+// as an exact-path, GET-only HTTPRoute match; the HTTP method is not
+// configurable, so this can only ever open read access. Any other method,
+// any path not listed, and any sub-path of a listed path keeps falling
+// through to the service's JWT-gated route.
+//
+// The gateway is not the only line of defence for every service: SMD
+// enforces its own authentication, so listing an SMD path that SMD itself
+// protects just moves the 401 from Envoy to SMD. boot-service performs no
+// inbound authentication, so for it the gateway is the only gate.
+type PublicRoutesSpec struct {
+	// Enabled toggles the unauthenticated route entirely. When false, every
+	// request through the gateway requires a JWT.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Paths replaces the operator's built-in public path list for this
+	// service. Each entry is an exact URL path (no wildcards, no query
+	// string) and must live under the service's gateway prefix ("/hsm/" for
+	// SMD, "/boot/" for boot-service). Empty means "use the built-in list",
+	// which mirrors the endpoints the upstream service itself treats as
+	// unauthenticated.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:items:Pattern=`^/[A-Za-z0-9._~/-]+$`
+	// +kubebuilder:validation:XValidation:rule="self.all(p, !p.contains('//') && !p.contains('/./') && !p.contains('/../') && !p.endsWith('/.') && !p.endsWith('/..'))",message="paths must be normalized (no empty, '.' or '..' segments)"
+	// +listType=set
+	// +optional
+	Paths []string `json:"paths,omitempty"`
+}
+
+// IsEnabled reports whether the public route should be published. A nil
+// Enabled (field omitted, CRD defaulting skipped) means enabled.
+func (p PublicRoutesSpec) IsEnabled() bool {
+	return p.Enabled == nil || *p.Enabled
+}
+
 // SMDSpec configures the SMD (State Management Database) service.
 type SMDSpec struct {
 	ServiceDefaults `json:",inline"`
+
+	// PublicRoutes controls which SMD endpoints the gateway serves without
+	// a JWT. Defaults to the endpoints SMD registers as public (read-only
+	// service status/values, GET /hsm/v2/State/Components, and
+	// GET /hsm/v2/Inventory/EthernetInterfaces).
+	// +kubebuilder:validation:XValidation:rule="!has(self.paths) || self.paths.all(p, p.startsWith('/hsm/'))",message="smd publicRoutes.paths must start with /hsm/"
+	// +optional
+	PublicRoutes PublicRoutesSpec `json:"publicRoutes,omitempty"`
 }
 
 // CLIOIDCConfig configures the public Vault OIDC client used by native CLI
@@ -309,6 +356,13 @@ type TokensmithSpec struct {
 // BootServiceSpec configures the boot-service.
 type BootServiceSpec struct {
 	ServiceDefaults `json:",inline"`
+
+	// PublicRoutes controls which boot-service endpoints the gateway serves
+	// without a JWT. Defaults to the node-facing boot script and the
+	// service status/version endpoints under /boot/v1.
+	// +kubebuilder:validation:XValidation:rule="!has(self.paths) || self.paths.all(p, p.startsWith('/boot/'))",message="bootService publicRoutes.paths must start with /boot/"
+	// +optional
+	PublicRoutes PublicRoutesSpec `json:"publicRoutes,omitempty"`
 }
 
 // MetadataServiceSpec configures the metadata (cloud-init) service.

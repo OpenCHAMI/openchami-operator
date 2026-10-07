@@ -531,6 +531,43 @@ spec:
                           tag:
                             type: string
                         type: object
+                      publicRoutes:
+                        description: |-
+                          PublicRoutes controls which boot-service endpoints the gateway serves
+                          without a JWT. Defaults to the node-facing boot script and the
+                          service status/version endpoints under /boot/v1.
+                        properties:
+                          enabled:
+                            default: true
+                            description: |-
+                              Enabled toggles the unauthenticated route entirely. When false, every
+                              request through the gateway requires a JWT.
+                            type: boolean
+                          paths:
+                            description: |-
+                              Paths replaces the operator's built-in public path list for this
+                              service. Each entry is an exact URL path (no wildcards, no query
+                              string) and must live under the service's gateway prefix ("/hsm/" for
+                              SMD, "/boot/" for boot-service). Empty means "use the built-in list",
+                              which mirrors the endpoints the upstream service itself treats as
+                              unauthenticated.
+                            items:
+                              maxLength: 256
+                              pattern: ^/[A-Za-z0-9._~/-]+$
+                              type: string
+                            maxItems: 32
+                            type: array
+                            x-kubernetes-list-type: set
+                            x-kubernetes-validations:
+                            - message: paths must be normalized (no empty, '.' or
+                                '..' segments)
+                              rule: self.all(p, !p.contains('//') && !p.contains('/./')
+                                && !p.contains('/../') && !p.endsWith('/.') && !p.endsWith('/..'))
+                        type: object
+                        x-kubernetes-validations:
+                        - message: bootService publicRoutes.paths must start with
+                            /boot/
+                          rule: '!has(self.paths) || self.paths.all(p, p.startsWith(''/boot/''))'
                       replicas:
                         default: 2
                         description: Replicas is ignored for DaemonSet and CronJob
@@ -1065,6 +1102,43 @@ spec:
                           tag:
                             type: string
                         type: object
+                      publicRoutes:
+                        description: |-
+                          PublicRoutes controls which SMD endpoints the gateway serves without
+                          a JWT. Defaults to the endpoints SMD registers as public (read-only
+                          service status/values, GET /hsm/v2/State/Components, and
+                          GET /hsm/v2/Inventory/EthernetInterfaces).
+                        properties:
+                          enabled:
+                            default: true
+                            description: |-
+                              Enabled toggles the unauthenticated route entirely. When false, every
+                              request through the gateway requires a JWT.
+                            type: boolean
+                          paths:
+                            description: |-
+                              Paths replaces the operator's built-in public path list for this
+                              service. Each entry is an exact URL path (no wildcards, no query
+                              string) and must live under the service's gateway prefix ("/hsm/" for
+                              SMD, "/boot/" for boot-service). Empty means "use the built-in list",
+                              which mirrors the endpoints the upstream service itself treats as
+                              unauthenticated.
+                            items:
+                              maxLength: 256
+                              pattern: ^/[A-Za-z0-9._~/-]+$
+                              type: string
+                            maxItems: 32
+                            type: array
+                            x-kubernetes-list-type: set
+                            x-kubernetes-validations:
+                            - message: paths must be normalized (no empty, '.' or
+                                '..' segments)
+                              rule: self.all(p, !p.contains('//') && !p.contains('/./')
+                                && !p.contains('/../') && !p.endsWith('/.') && !p.endsWith('/..'))
+                        type: object
+                        x-kubernetes-validations:
+                        - message: smd publicRoutes.paths must start with /hsm/
+                          rule: '!has(self.paths) || self.paths.all(p, p.startsWith(''/hsm/''))'
                       replicas:
                         default: 2
                         description: Replicas is ignored for DaemonSet and CronJob

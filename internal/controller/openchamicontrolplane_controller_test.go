@@ -50,10 +50,10 @@ var _ = Describe("OpenCHAMIControlPlane Controller", func() {
 						Domain:      "test.local",
 						Platform: openchamiv1alpha1.PlatformSpec{
 							Vault: openchamiv1alpha1.VaultSpec{
-								Address: "http://vault.test:8200",
+								Address: testVaultAddr,
 							},
 							ObjectStorage: openchamiv1alpha1.ObjectStorageSpec{
-								Endpoint: "http://s3.test:9000",
+								Endpoint: testS3Endpoint,
 							},
 						},
 					},
@@ -104,9 +104,9 @@ var _ = Describe("OpenCHAMIControlPlane Controller", func() {
 					OperatorChannel: "pinned",
 					PinnedVersion:   "0.0.0-mismatch",
 					Platform: openchamiv1alpha1.PlatformSpec{
-						Vault: openchamiv1alpha1.VaultSpec{Address: "http://vault.test:8200"},
+						Vault: openchamiv1alpha1.VaultSpec{Address: testVaultAddr},
 						ObjectStorage: openchamiv1alpha1.ObjectStorageSpec{
-							Endpoint: "http://s3.test:9000",
+							Endpoint: testS3Endpoint,
 						},
 					},
 				},
