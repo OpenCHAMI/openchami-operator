@@ -3,11 +3,22 @@
 # Idempotent — safe to run multiple times.
 set -euo pipefail
 
-VAULT_ADDR=${VAULT_ADDR:-http://localhost:8200}
+VAULT_ADDR=${VAULT_ADDR:-http://127.0.0.1:8200}
 VAULT_TOKEN=${VAULT_TOKEN:-dev-root-token}
 CLUSTER=${1:-testcluster}
 
 export VAULT_ADDR VAULT_TOKEN
+
+if ! command -v vault >/dev/null 2>&1; then
+  command -v docker >/dev/null 2>&1 || {
+    echo "vault CLI or Docker is required to seed the dev Vault" >&2
+    exit 1
+  }
+  vault() {
+    docker exec -i -e VAULT_ADDR="$VAULT_ADDR" -e VAULT_TOKEN="$VAULT_TOKEN" \
+      openchami-vault-dev vault "$@"
+  }
+fi
 
 echo "Seeding Vault at $VAULT_ADDR for cluster: $CLUSTER"
 
