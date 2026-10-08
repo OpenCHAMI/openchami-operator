@@ -9,6 +9,12 @@
 - Removed the CRD-level defaults on `spec.services.coreDHCP.unknownLeaseDuration`
   / `knownLeaseDuration`. The mutating webhook still defaults them (`5m` / `1h`)
   when `configMapRef` is unset, so existing objects are unaffected.
+- Added `spec.services.bootService.httpBootScript` (default `true`) (issue #69).
+  When enabled, the gateway's HTTP listener serves `GET /boot/v1/bootscript`
+  directly (new HTTPRoute `boot-service-public-http`) so the bundled iPXE
+  binaries can fetch the boot script without trusting a private gateway CA.
+  Every other HTTP request still 301s to HTTPS. The route exists only while
+  `/boot/v1/bootscript` is also on boot-service's HTTPS `publicRoutes` list.
 
 ## Service image updates
 - CoreDHCP: `ghcr.io/openchami/coredhcp:v0.3.1` → `ghcr.io/openchami/coresmd:v0.7.1`
@@ -22,6 +28,11 @@
   and `KNOWN_LEASE_DURATION` env vars were removed from the coredhcp container.
 - The webhook rejects `configMapRef` combined with `leaseRanges` or either
   lease duration.
+- After upgrade, port 80 on the gateway is no longer redirect-only: it serves
+  the unauthenticated iPXE boot script in plaintext. Sites whose iPXE trusts
+  the gateway certificate, or that don't want any plaintext endpoint, should
+  set `spec.services.bootService.httpBootScript: false` before upgrading.
+  coresmd configs can switch `ipxe_uri` to `http://<spec.domain>/boot/v1/bootscript`.
 - Production note: the operator-generated CoreDHCP config is dev/test only
   (no coresmd, so no SMD-backed leases or iPXE boot). Production clusters
   should move to `configMapRef`; see `docs/install-production.md` §9.
