@@ -32,9 +32,11 @@ All resources in `openchami-{clusterName}` namespace.
 |---|---|
 | `Gateway` | HTTPS/443 + HTTP/80, hostname=spec.domain |
 | `HTTPRoute` `http-redirect` | HTTP → HTTPS 301 |
-| `HTTPRoute` `smd` | `/hsm/*` |
+| `HTTPRoute` `smd` | `/hsm/*` (JWT) |
+| `HTTPRoute` `smd-public` | Exact-path, GET-only allowlist (no JWT); see below |
 | `HTTPRoute` `tokensmith` | `/.well-known/jwks.json`, `/oauth/token`, `/health` |
-| `HTTPRoute` `boot-service` | `/boot/*` |
+| `HTTPRoute` `boot-service` | `/boot/*` (JWT) |
+| `HTTPRoute` `boot-service-public` | Exact-path, GET-only allowlist (no JWT); see below |
 | `HTTPRoute` `metadata-public` | `/cloud-init/*` (no JWT) |
 | `HTTPRoute` `metadata-admin` | `/cloud-init/admin/*` (JWT) |
 | `SecurityPolicy` `jwt-smd` | JWKS: `http://tokensmith.openchami-{name}.svc.cluster.local:8080/.well-known/jwks.json` |
@@ -44,6 +46,53 @@ All resources in `openchami-{clusterName}` namespace.
 
 All SecurityPolicy resources reference the in-cluster tokensmith JWKS URL,
 not the external gateway URL. This avoids a routing loop.
+
+### Public read-only routes (`smd-public`, `boot-service-public`)
+
+Some endpoints must be reachable without a JWT (issue #65): SMD registers
+a set of GET routes outside its own auth middleware, and clients such as
+`ochami` and coresmd call them tokenless; nodes fetch their iPXE boot
+script before holding any credential. The operator publishes these as a
+separate HTTPRoute per service with **no** SecurityPolicy attached.
+
+- Every match is `Exact` path + `method: GET`. The method is hard-coded;
+  the spec can only choose paths, so a public route can never expose a write.
+- Gateway API precedence (Exact beats PathPrefix, method match beats
+  none) routes `GET <listed path>` to the public route; every other
+  method, sub-path, or unlisted path falls through to the JWT-gated
+  prefix route (fail closed).
+- Applied in the always-safe set (before tokensmith is Ready), since no
+  JWKS fetch is involved.
+- Deleted explicitly when disabled or when the service stops being
+  deployed in-cluster. SSA alone would leave a stale unauthenticated route.
+
+Defaults (configurable via `spec.services.{smd,bootService}.publicRoutes`):
+
+| Service | Default public GET paths |
+|---|---|
+| SMD | `/hsm/v2/service/{ready,liveness,values}`, `/hsm/v2/service/values/{arch,class,flag,nettype,role,subrole,state,type}`, `/hsm/v2/State/Components`, `/hsm/v2/Inventory/EthernetInterfaces` (mirrors SMD `generatePublicRoutes`) |
+| boot-service | `/boot/v1/bootscript`, `/boot/v1/service/status`, `/boot/v1/service/version` |
+
+```yaml
+spec:
+  services:
+    smd:
+      publicRoutes:
+        enabled: true            # default; false = everything needs a JWT
+        paths:                   # optional; replaces the defaults
+          - /hsm/v2/State/Components
+    bootService:
+      publicRoutes:
+        enabled: false
+```
+
+CRD validation (CEL) rejects paths outside the service's prefix (`/hsm/`,
+`/boot/`), paths with wildcard or query characters, and paths that aren't
+normalized (`//`, `.`, `..` segments).
+
+SMD still enforces its own auth, so listing a path SMD protects only moves
+the 401 from Envoy to SMD. boot-service has **no** inbound auth, so for it
+the gateway is the only gate. Keep its public list to non-sensitive reads.
 
 Each `remoteJWKS` also carries an explicit `backendRefs` entry pointing at
 the in-cluster `tokensmith` Service (port 8080). Newer Envoy Gateway
