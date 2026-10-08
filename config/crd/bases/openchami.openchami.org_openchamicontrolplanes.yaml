@@ -514,6 +514,15 @@ spec:
                           Not all services support an external endpoint — DHCP is a layer-2/3
                           concern and Magellan is a CronJob; both reject this field.
                         type: string
+                      httpBootScript:
+                        default: true
+                        description: |-
+                          HTTPBootScript serves GET /boot/v1/bootscript on the gateway's
+                          plain-HTTP listener in addition to HTTPS, so iPXE builds that don't
+                          trust the gateway CA can fetch their boot script. Every other HTTP
+                          request is still redirected to HTTPS. Only takes effect while
+                          /boot/v1/bootscript is a public route (publicRoutes).
+                        type: boolean
                       image:
                         description: ImageSpec overrides the default container image
                           for a service.
