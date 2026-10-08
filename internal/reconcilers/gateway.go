@@ -7,6 +7,7 @@ package reconcilers
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -62,6 +63,7 @@ const (
 	routeTokensmith     = "tokensmith"
 	routeBootService    = "boot-service"
 	routeBootPublic     = "boot-service-public"
+	routeBootPublicHTTP = "boot-service-public-http"
 	routeBootAdmin      = "boot-admin"
 	routeMetadataPublic = "metadata-public"
 	routeMetadataAdmin  = "metadata-admin"
@@ -76,7 +78,9 @@ const (
 	// gatewayURLScheme is the canonical scheme for the operator's
 	// public ingress URL. The HTTP listener 301-redirects to HTTPS, so
 	// publishing http:// in .status.gateway.url would always cost an
-	// extra round-trip on every smoke-test / client invocation.
+	// extra round-trip on every smoke-test / client invocation. (The
+	// single plaintext exception, GET /boot/v1/bootscript for iPXE, is
+	// node-facing and not a client API — see boot-service-public-http.)
 	gatewayURLScheme = "https"
 
 	// Status-route keys reported in .status.gateway.routes. These are
@@ -110,6 +114,7 @@ const (
 	// moves, update it here and every consumer follows.
 	pathSMDPrefix          = "/hsm"
 	pathBootPrefix         = "/boot"
+	pathBootScript         = pathBootPrefix + "/v1/bootscript"
 	pathBootAdmin          = "/admin/boot"
 	pathMetadataPrefix     = "/cloud-init"
 	pathMetadataAdmin      = pathMetadataPrefix + "/admin"
@@ -155,7 +160,7 @@ var defaultSMDPublicPaths = []string{
 // /service/* pair only exists when its legacy BSS API is enabled and
 // 404s harmlessly otherwise.
 var defaultBootPublicPaths = []string{
-	"/boot/v1/bootscript",
+	pathBootScript,
 	"/boot/v1/service/status",
 	"/boot/v1/service/version",
 }
@@ -202,6 +207,30 @@ func smdPublicPaths(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
 
 func bootPublicPaths(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
 	return resolvePublicPaths(cp.Spec.Services.BootService.PublicRoutes, pathBootPrefix, defaultBootPublicPaths)
+}
+
+// bootHTTPPublicPaths returns the paths to serve on the plain-HTTP
+// listener (boot-service-public-http), or nil when that route must not
+// exist. It is only ever the iPXE boot script — the issue-#69 bootstrap
+// exception for iPXE builds that don't trust the gateway's private CA —
+// and only while all of these hold:
+//
+//   - boot-service is deployed in-cluster;
+//   - spec.services.bootService.httpBootScript is enabled (default);
+//   - /boot/v1/bootscript is still in the resolved HTTPS public path set.
+//
+// The last rule means an admin who made the boot script JWT-only on
+// HTTPS (publicRoutes.enabled=false, or a paths override that omits it)
+// never gets an unauthenticated plaintext bypass for it.
+func bootHTTPPublicPaths(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
+	if !ServiceDeployedInCluster(cp, ServiceBootService) ||
+		!cp.Spec.Services.BootService.HTTPBootScriptEnabled() {
+		return nil
+	}
+	if !slices.Contains(bootPublicPaths(cp), pathBootScript) {
+		return nil
+	}
+	return []string{pathBootScript}
 }
 
 // gatewayStatusRoutes returns the canonical route-name → URL-path map
@@ -421,7 +450,8 @@ func (r *GatewayReconciler) objectsToApply(cp *openchamiv1alpha1.OpenCHAMIContro
 }
 
 // objectsAlways returns the gateway resources that are safe to apply
-// before tokensmith is Ready — listeners, HTTP→HTTPS redirect, and the
+// before tokensmith is Ready — listeners, HTTP→HTTPS redirect (plus the
+// plain-HTTP boot-script exception, boot-service-public-http), and the
 // tokensmith route itself (which has no JWT SecurityPolicy attached;
 // it serves OIDC discovery / JWKS / token-exchange paths that MUST be
 // reachable before any other service can authenticate).
@@ -444,10 +474,20 @@ func (r *GatewayReconciler) objectsAlways(cp *openchamiv1alpha1.OpenCHAMIControl
 	// so — like the metadata public route — they're safe to publish
 	// before tokensmith can serve JWKS.
 	if paths := smdPublicPaths(cp); ServiceDeployedInCluster(cp, ServiceSMD) && paths != nil {
-		objs = append(objs, buildPublicReadOnlyRoute(cp, routeSMDPublic, ServiceSMD, smdPort, paths))
+		objs = append(objs, buildPublicReadOnlyRoute(cp, routeSMDPublic, httpsParentRef(cp),
+			ServiceSMD, smdPort, paths))
 	}
 	if paths := bootPublicPaths(cp); ServiceDeployedInCluster(cp, ServiceBootService) && paths != nil {
-		objs = append(objs, buildPublicReadOnlyRoute(cp, routeBootPublic, ServiceBootService, bootServicePort, paths))
+		objs = append(objs, buildPublicReadOnlyRoute(cp, routeBootPublic, httpsParentRef(cp),
+			ServiceBootService, bootServicePort, paths))
+	}
+	// The iPXE boot script is additionally served on the plain-HTTP
+	// listener so nodes whose iPXE build doesn't trust the gateway CA
+	// can bootstrap. It's a separate route on purpose: only the boot
+	// script goes plaintext, never the other boot public paths.
+	if paths := bootHTTPPublicPaths(cp); paths != nil {
+		objs = append(objs, buildPublicReadOnlyRoute(cp, routeBootPublicHTTP, httpParentRef(cp),
+			ServiceBootService, bootServicePort, paths))
 	}
 	return objs
 }
@@ -466,6 +506,9 @@ func stalePublicRoutes(cp *openchamiv1alpha1.OpenCHAMIControlPlane) []string {
 	}
 	if !ServiceDeployedInCluster(cp, ServiceBootService) || bootPublicPaths(cp) == nil {
 		stale = append(stale, routeBootPublic)
+	}
+	if bootHTTPPublicPaths(cp) == nil {
+		stale = append(stale, routeBootPublicHTTP)
 	}
 	return stale
 }
@@ -684,6 +727,10 @@ func httpsParentRef(cp *openchamiv1alpha1.OpenCHAMIControlPlane) gwapiv1.ParentR
 	}
 }
 
+// buildHTTPRedirectRoute is the catch-all on the plain-HTTP listener: no
+// matches means an implicit PathPrefix "/", so every request is 301'd to
+// HTTPS. The only route that out-ranks it on that listener is
+// boot-service-public-http (Exact path + GET method beats a bare prefix).
 func (r *GatewayReconciler) buildHTTPRedirectRoute(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cp.Spec.Domain)
 	scheme := "https"
@@ -840,7 +887,17 @@ func (r *GatewayReconciler) buildSMDRoute(cp *openchamiv1alpha1.OpenCHAMIControl
 // The method is hard-coded to GET, never taken from the spec, so this
 // route can only ever expose reads. Anything that doesn't match falls
 // through to the protected route — fail closed.
-func buildPublicReadOnlyRoute(cp *openchamiv1alpha1.OpenCHAMIControlPlane, name, backend string, port int32, paths []string) *gwapiv1.HTTPRoute {
+//
+// parent selects the listener. Every public route attaches to HTTPS
+// except boot-service-public-http, which attaches to the plain-HTTP
+// listener and out-ranks the catch-all http-redirect there by the same
+// precedence rules:
+//
+//	GET  http://…/boot/v1/bootscript   → boot-service-public-http
+//	POST http://…/boot/v1/bootscript   → http-redirect (301 → https)
+//	GET  http://…/boot/v1/service/…    → http-redirect (301 → https)
+func buildPublicReadOnlyRoute(cp *openchamiv1alpha1.OpenCHAMIControlPlane, name string, parent gwapiv1.ParentReference,
+	backend string, port int32, paths []string) *gwapiv1.HTTPRoute {
 	hostname := gwapiv1.Hostname(cp.Spec.Domain)
 	matchType := gwapiv1.PathMatchExact
 	method := gwapiv1.HTTPMethodGet
@@ -862,7 +919,7 @@ func buildPublicReadOnlyRoute(cp *openchamiv1alpha1.OpenCHAMIControlPlane, name,
 		},
 		Spec: gwapiv1.HTTPRouteSpec{
 			CommonRouteSpec: gwapiv1.CommonRouteSpec{
-				ParentRefs: []gwapiv1.ParentReference{httpsParentRef(cp)},
+				ParentRefs: []gwapiv1.ParentReference{parent},
 			},
 			Hostnames: []gwapiv1.Hostname{hostname},
 			Rules: []gwapiv1.HTTPRouteRule{{

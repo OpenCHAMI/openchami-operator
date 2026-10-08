@@ -233,7 +233,7 @@ spec:
       cliOIDC:
         redirectURIs: ["http://127.0.0.1:8250/callback"]
         assignments: ["allow_all"]
-    bootService:       { enabled: true,  replicas: 2, image: {...}, resources: {} }
+    bootService:       { enabled: true,  replicas: 2, image: {...}, resources: {}, httpBootScript: true }
     metadataService:   { enabled: true,  replicas: 2, image: {...}, resources: {} }
     coreDHCP:
       enabled: true
@@ -361,7 +361,7 @@ data:
         - netmask: 255.255.255.0
         - coresmd: |
             svc_base_uri=https://demo.openchami.example
-            ipxe_uri=https://demo.openchami.example/boot/v1/bootscript
+            ipxe_uri=http://demo.openchami.example/boot/v1/bootscript
             ca_cert=/root_ca/root_ca.crt
             cache_valid=30s
             lease_time=1h
@@ -428,9 +428,9 @@ instead:
   both on SMD's default unauthenticated public route list
   (`spec.services.smd.publicRoutes`, enabled by default). If you replace
   `publicRoutes.paths`, keep both.
-- `ipxe_uri=https://<spec.domain>/boot/v1/bootscript` — on boot-service's
-  default public route list (`spec.services.bootService.publicRoutes`). See
-  the iPXE TLS caveat below.
+- `ipxe_uri=http://<spec.domain>/boot/v1/bootscript` — on boot-service's
+  default public route list (`spec.services.bootService.publicRoutes`) and,
+  by default, served over plain HTTP. See iPXE and TLS below.
 - `<spec.domain>` must resolve, from the DHCP node via cluster DNS, to the
   Envoy Gateway's address.
 
@@ -452,11 +452,20 @@ store. So:
   `spec.services.coreDHCP.image`.
 
 **iPXE and TLS.** The iPXE binaries bundled in the coresmd image do not trust
-a private CA, and the gateway's HTTP listener redirects every request to
-HTTPS. So `ipxe_uri` only works out of the box when the gateway certificate
-chains to a CA iPXE already trusts. Sites with a private CA need an
-iPXE-reachable plain-HTTP path to the boot script (not provided by the
-operator today) or custom iPXE builds that embed the CA.
+a private CA. The gateway's HTTP listener redirects every request to HTTPS
+**except** `GET /boot/v1/bootscript`, which it serves directly over HTTP
+(`spec.services.bootService.httpBootScript`, default `true`). Use an
+`http://` `ipxe_uri` and iPXE never needs to validate the gateway
+certificate. The plaintext route exists only while `/boot/v1/bootscript` is
+also on the HTTPS public list (`publicRoutes`). No other boot-service path,
+including `/admin/boot`, is reachable over HTTP.
+
+If the gateway certificate chains to a CA iPXE already trusts (or you build
+iPXE with your CA embedded), you can use
+`ipxe_uri=https://<spec.domain>/boot/v1/bootscript` and set
+`httpBootScript: false` to keep the HTTP listener redirect-only. Kernel,
+initrd, and rootfs URLs come from the boot configuration and are not
+affected.
 
 ### NetworkingSpec
 
