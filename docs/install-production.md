@@ -515,12 +515,72 @@ with a freshly minted SecretID.
 
 ---
 
-## 9. Apply the OpenCHAMIControlPlane
+## 9. Prepare the CoreDHCP configuration
+
+> **The operator's default CoreDHCP config is not a production config.**
+> Without `spec.services.coreDHCP.configMapRef`, the operator generates a
+> minimal stock-CoreDHCP config from `leaseRanges` (`range` plugin, gateway
+> assumed at the subnet's `.1`, public DNS resolvers). It hands out
+> addresses but does **not** run the `coresmd` plugin, so nodes do not get
+> SMD-backed leases, an iPXE boot script, or TFTP — they will not PXE-boot
+> from OpenCHAMI.
+
+For production, write the full CoreDHCP config (normally `coresmd` +
+`bootloop`) into a ConfigMap in the **same namespace as the
+`OpenCHAMIControlPlane`** and reference it with
+`spec.services.coreDHCP.configMapRef`. The production example fixture
+includes both. The full reference, including what the DaemonSet mounts and
+which ports it opens, is in
+[crd-reference.md § CoreDHCP configuration](crd-reference.md#coredhcp-configuration).
+
+Checklist before applying:
+
+1. **`listen:`** names the provision-network interface on the DHCP node(s)
+   (the pod uses host networking).
+2. **SMD and boot-service through the gateway.** Set
+   `svc_base_uri=https://<spec.domain>` and
+   `ipxe_uri=https://<spec.domain>/boot/v1/bootscript`. coresmd's SMD reads
+   (`/hsm/v2/Inventory/EthernetInterfaces`, `/hsm/v2/State/Components`) and
+   the boot script are on the default unauthenticated, GET-only public
+   routes (`spec.services.{smd,bootService}.publicRoutes`). Keep them enabled.
+3. **DNS.** `<spec.domain>` must resolve from the DHCP node, through
+   cluster DNS (`dnsPolicy: ClusterFirstWithHostNet`), to the Envoy
+   Gateway's address.
+4. **CA trust.** The operator mounts the gateway TLS Secret's `ca.crt` at
+   `/root_ca/root_ca.crt`; use `ca_cert=/root_ca/root_ca.crt`. cert-manager
+   only writes `ca.crt` for CA/Vault-style issuers. coresmd needs `ca_cert`
+   to point at a file that exists, so with an ACME issuer point it at the
+   image's system bundle instead. Check:
+
+   ```sh
+   kubectl -n openchami-<name> get secret <tls-secret> -o jsonpath='{.data.ca\.crt}' | base64 -d | head -1
+   ```
+
+5. **Writable state under `/tmp` only.** The root filesystem is read-only;
+   `bootloop`'s `lease_file` must be under `/tmp` (for example
+   `/tmp/coredhcp.db`). `/tmp` is a memory-backed emptyDir, so bootloop
+   leases are lost when the pod restarts.
+6. **TFTP.** coresmd serves the bundled iPXE binaries over TFTP on UDP 69
+   (declared as a hostPort). Set `single_port=true` if a host or
+   network firewall only permits port 69.
+7. **iPXE and TLS.** The bundled iPXE binaries do not trust private CAs,
+   and the gateway redirects HTTP to HTTPS. With a private CA, `ipxe_uri`
+   over the gateway will fail TLS in iPXE. Plan for a gateway certificate
+   iPXE trusts, or a custom iPXE build.
+
+Edits to the ConfigMap are picked up automatically and roll the
+`coredhcp` DaemonSet. If the ConfigMap or key is missing,
+`DHCPReady=False/ConfigMapNotFound`.
+
+---
+
+## 10. Apply the OpenCHAMIControlPlane
 
 Copy
 [`test/fixtures/production-controlplane.yaml.example`](../test/fixtures/production-controlplane.yaml.example),
 edit the `CHANGEME` markers (cluster name, domain, Vault address, S3
-endpoint, network CIDRs, issuer name, AppRole Secret name), then:
+endpoint, network CIDRs, issuer name, AppRole Secret name, CoreDHCP
+config), then:
 
 ```sh
 kubectl apply -f my-cluster.yaml
@@ -531,7 +591,7 @@ Within a few minutes the phase walks `Provisioning → Ready`.
 
 ---
 
-## 10. Verify readiness
+## 11. Verify readiness
 
 ```sh
 kubectl get openchamicontrolplane <name> -o jsonpath='{range .status.conditions[*]}{.type}={.status} [{.reason}] {.message}{"\n"}{end}'
@@ -557,7 +617,7 @@ for compute nodes to PXE / iPXE / cloud-init against.
 
 ---
 
-## 11. What's next
+## 12. What's next
 
 - **Logging.** Flip `spec.logging.enabled: true` and set
   `spec.logging.image` to a working collector image (fluent-bit, vector,

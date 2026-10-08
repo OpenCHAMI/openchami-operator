@@ -36,9 +36,10 @@ const imageTagLatest = "latest"
 //
 //   - smd, boot-service, metadata-service, tokensmith, magellan: curated
 //     tag points at the most recent GitHub Release tag.
-//   - coredhcp: no GitHub Releases yet but `:latest` exists on GHCR —
-//     ReleaseTag empty means "fall back to :latest in the release
-//     stream too" (see resolveStreamTag).
+//   - coredhcp: runs the ghcr.io/openchami/coresmd image, which is
+//     CoreDHCP built with the coresmd + bootloop plugins (alongside the
+//     stock coredhcp plugins the generated config uses) and ships the
+//     iPXE binaries coresmd's TFTP server serves from /tftpboot.
 //   - legendary-funicular, openchami-operator (probe): no public image
 //     published yet. ReleaseTag empty so we don't claim a curated tag;
 //     the funicular reconciler already refuses to schedule without an
@@ -52,7 +53,7 @@ var builtInImages = map[string]imageDefaults{
 	ServiceTokensmith:      {Repository: "ghcr.io/openchami/tokensmith", ReleaseTag: "v0.4.1"},
 	ServiceBootService:     {Repository: "ghcr.io/openchami/boot-service", ReleaseTag: "v0.1.6"},
 	ServiceMetadataService: {Repository: "ghcr.io/openchami/metadata-service", ReleaseTag: "v0.1.0"},
-	ServiceCoreDHCP:        {Repository: "ghcr.io/openchami/coredhcp", ReleaseTag: "v0.3.1"},
+	ServiceCoreDHCP:        {Repository: "ghcr.io/openchami/coresmd", ReleaseTag: "v0.7.1"},
 	ServiceMagellan:        {Repository: "ghcr.io/openchami/magellan", ReleaseTag: "v0.5.1"},
 	// network-probe runs the operator's own binary with `probe`
 	// subcommand, so its default repository is the operator image.
@@ -152,9 +153,9 @@ func perServiceImageOverride(cp *openchamiv1alpha1.OpenCHAMIControlPlane, servic
 //
 // An empty releaseDefault means the upstream hasn't cut a versioned
 // release yet — fall back to `latest` so the release stream still
-// produces a pullable image (currently true for coredhcp; for
-// funicular and the probe the result is still an invalid reference,
-// but those services are gated elsewhere so we never get there).
+// produces a pullable image (for funicular and the probe the result is
+// still an invalid reference, but those services are gated elsewhere so
+// we never get there).
 func resolveStreamTag(cp *openchamiv1alpha1.OpenCHAMIControlPlane, service, releaseDefault string) string {
 	stream := cp.Spec.Images.Stream
 	if stream == "" {

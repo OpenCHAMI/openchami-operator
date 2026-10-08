@@ -111,6 +111,16 @@ Bootstrap token Job: after tokensmith ready, mint token into Secret
 
 Condition: `DHCPReady=True` when NumberReady>0. Populate `status.coreDHCPNodes`.
 
+Config source (issue #66): the operator mirrors either a config rendered
+from `leaseRanges` (dev/test only) or the user ConfigMap named by
+`spec.services.coreDHCP.configMapRef` (CR namespace, watched) into
+`openchami-{name}/coredhcp-config`, mounted at `/etc/coredhcp/config.yml`.
+Pod template annotation `openchami.org/coredhcp-config-hash` rolls the DS
+on config change. Missing ref → `DHCPReady=False, Reason=ConfigMapNotFound`.
+Image `ghcr.io/openchami/coresmd`; ports UDP 67 + 69 (TFTP) as hostPorts;
+gateway TLS Secret `ca.crt` mounted (optional) at `/root_ca/root_ca.crt`.
+coresmd reaches SMD/boot-service through the gateway's public GET routes.
+
 ## 6.3 Magellan CronJob — `internal/reconcilers/magellan.go`
 
 If probing enabled AND `NetworkProbeReady=False`:

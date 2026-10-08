@@ -83,9 +83,12 @@ The order is fixed in `internal/controller/openchamicontrolplane_controller.go::
 
 ## CoreDHCP
 - **File:** `internal/reconcilers/coredhcp.go`
-- **Owns:** CoreDHCP DaemonSet.
-- **Default image constant:** `defaultCoreDHCPImage` (`ghcr.io/openchami/coredhcp:latest`).
-- **Condition:** `DHCPReady`.
+- **Owns:** CoreDHCP DaemonSet and the `coredhcp-config` ConfigMap in `openchami-<cluster>`.
+- **Default image:** `ghcr.io/openchami/coresmd:v0.7.1` (`builtInImages` in `internal/reconcilers/images.go`) — CoreDHCP with the coresmd + bootloop plugins.
+- **Config source:** rendered from `leaseRanges` (minimal, dev/test only) or copied verbatim from `spec.services.coreDHCP.configMapRef` (a ConfigMap in the CR's namespace, watched for changes). The pod template carries `openchami.org/coredhcp-config-hash` so config edits roll the pods.
+- **Mounts:** `/etc/coredhcp/config.yml` (config), `/tmp` (writable emptyDir; lease DBs go here), `/root_ca/root_ca.crt` (optional; the gateway TLS Secret's `ca.crt`).
+- **Ports:** UDP 67 (DHCP) and UDP 69 (coresmd TFTP), both hostPorts.
+- **Condition:** `DHCPReady`. `False/ConfigMapNotFound` when the referenced ConfigMap or key is missing; `False/InvalidConfig` when no config can be generated. In both cases the existing DaemonSet (if any) is left untouched.
 - **Skipped when:** `spec.services.coreDHCP.enabled=false`.
 - **Depends on:** NetworkProbe (waits for `NetworkProbeReady` if probes enabled), SMD (auth token for SMD lookups; minted by tokensmith — TODO referenced in source as `phase06b`).
 

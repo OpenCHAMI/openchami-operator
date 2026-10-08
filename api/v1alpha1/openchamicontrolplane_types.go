@@ -398,15 +398,35 @@ type CoreDHCPSpec struct {
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
-	// LeaseRanges defines DHCP subnet ranges to serve.
-	// At least one range is required when Enabled=true (validated by admission webhook).
+	// ConfigMapRef points at a user-managed ConfigMap holding the complete
+	// CoreDHCP configuration file. When set, the operator does not generate
+	// a config from LeaseRanges / lease durations; it copies the referenced
+	// key verbatim into the operator-managed `coredhcp-config` ConfigMap in
+	// the control-plane namespace and mounts it at
+	// /etc/coredhcp/config.yml. The operator continues to manage the
+	// DaemonSet itself (image, resources, scheduling, mounts).
+	//
+	// The ConfigMap must live in the same namespace as this
+	// OpenCHAMIControlPlane. Mutually exclusive with LeaseRanges,
+	// UnknownLeaseDuration and KnownLeaseDuration.
+	// +optional
+	ConfigMapRef *CoreDHCPConfigMapRef `json:"configMapRef,omitempty"`
+
+	// LeaseRanges defines DHCP subnet ranges to serve with the
+	// operator-generated config. Ignored (and rejected by the webhook)
+	// when ConfigMapRef is set.
 	// +optional
 	LeaseRanges []DHCPLeaseRange `json:"leaseRanges,omitempty"`
 
-	// +kubebuilder:default="5m"
+	// UnknownLeaseDuration is the lease time for addresses served from
+	// LeaseRanges by the generated config. Defaults to "5m" when
+	// ConfigMapRef is unset.
+	// +optional
 	UnknownLeaseDuration string `json:"unknownLeaseDuration,omitempty"`
 
-	// +kubebuilder:default="1h"
+	// KnownLeaseDuration is the lease_time plugin value in the generated
+	// config. Defaults to "1h" when ConfigMapRef is unset.
+	// +optional
 	KnownLeaseDuration string `json:"knownLeaseDuration,omitempty"`
 
 	// +optional
@@ -417,6 +437,36 @@ type CoreDHCPSpec struct {
 
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+// CoreDHCPConfigMapRef references a key in a user-managed ConfigMap that
+// holds a complete CoreDHCP configuration file.
+type CoreDHCPConfigMapRef struct {
+	// Name of the ConfigMap, in the same namespace as the
+	// OpenCHAMIControlPlane.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Key within the ConfigMap's data holding the CoreDHCP YAML.
+	// +kubebuilder:default="config.yml"
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	// +optional
+	Key string `json:"key,omitempty"`
+}
+
+// DefaultCoreDHCPConfigMapKey is the key read from a CoreDHCPConfigMapRef
+// when none is specified.
+const DefaultCoreDHCPConfigMapKey = "config.yml"
+
+// EffectiveKey returns Key, or DefaultCoreDHCPConfigMapKey when empty.
+func (r CoreDHCPConfigMapRef) EffectiveKey() string {
+	if r.Key == "" {
+		return DefaultCoreDHCPConfigMapKey
+	}
+	return r.Key
 }
 
 // MagellanSpec configures the Magellan BMC discovery CronJob.

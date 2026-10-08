@@ -20,7 +20,7 @@ func TestResolveImage_ReleaseStreamUsesBuiltInTags(t *testing.T) {
 		image, pull := ResolveImage(cp, service)
 
 		// An empty ReleaseTag in builtInImages means "no curated tag
-		// yet — fall back to :latest" (current state for coredhcp,
+		// yet — fall back to :latest" (current state for
 		// funicular, network-probe). The resolver follows the
 		// kubelet-style tag-aware pull-policy default, so :latest
 		// pairs with PullAlways.

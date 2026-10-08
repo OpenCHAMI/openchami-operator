@@ -312,6 +312,62 @@ The two pods usually fail in **different ways** — one for the old reason (now 
 
 **Recovery:** if the symptom appears anyway, something downstream of the operator is overriding the namespace labels. Re-applying the CR triggers the operator to reconcile the labels back to `privileged`. For per-pod hardening inside a privileged namespace, layer Kyverno or OPA Gatekeeper.
 
+### `DHCPReady=False/ConfigMapNotFound`
+
+**Symptom:** `DHCPReady=False` with reason `ConfigMapNotFound`, plus a Warning Event `ConfigMapNotFound` on the `OpenCHAMIControlPlane`.
+
+**Cause:** `spec.services.coreDHCP.configMapRef` names a ConfigMap that does not exist in the **CR's namespace**, or the ConfigMap has no non-empty `configMapRef.key` (default `config.yml`). A common mistake is creating it in `openchami-<cluster>`. That namespace holds the operator's mirrored copy (`coredhcp-config`), not the source.
+
+**Recovery:** create or fix the ConfigMap next to the CR. The operator watches it and reconciles at once. A DaemonSet that was already running keeps serving its last config until then.
+
+```sh
+kubectl -n <cr-namespace> get configmap <name> -o jsonpath='{.data}' | head
+```
+
+### `DHCPReady=False/InvalidConfig`
+
+**Symptom:** `DHCPReady=False` with reason `InvalidConfig`, and no `coredhcp` DaemonSet.
+
+**Cause:** CoreDHCP is enabled but has no config source: neither `configMapRef` nor `leaseRanges` is set, or `leaseRanges[0]` is unusable (bad CIDR, IPv6). The webhook warns about the first case on apply.
+
+**Recovery:** set `configMapRef` (production) or `leaseRanges` (dev/test). See [crd-reference.md § CoreDHCP configuration](crd-reference.md#coredhcp-configuration).
+
+### `coredhcp` pod crash-loops after a `configMapRef` change
+
+The operator copies your config verbatim and does not validate it, so a bad config shows up in the pod log:
+
+```sh
+kubectl -n openchami-<cluster> logs ds/coredhcp --previous
+```
+
+Common causes with coresmd:
+
+| Log message | Cause / fix |
+|---|---|
+| `failed to set CA certificate: ... no such file or directory` | `ca_cert=` points at a missing file. `/root_ca/root_ca.crt` exists only when the gateway TLS Secret has a `ca.crt` key (CA/Vault issuers, not ACME). Point `ca_cert` at the image's system bundle, or fix the issuer. |
+| `svc_base_uri is required` / `ipxe_uri is required` | Missing coresmd keys. |
+| `unknown plugin` | The image lacks the plugin. Confirm `spec.services.coreDHCP.image` is `ghcr.io/openchami/coresmd`. |
+| `read-only file system` | A lease or state file is outside `/tmp`. Only `/tmp` is writable. |
+| `address already in use` on 67 or 69 | Another DHCP/TFTP server runs on the node, or a second cluster targets the same node (invariant 4). |
+
+To confirm what the pod is running, check the mirrored copy and its source annotation:
+
+```sh
+kubectl -n openchami-<cluster> get configmap coredhcp-config \
+  -o jsonpath='{.metadata.annotations.openchami\.org/coredhcp-config-source}{"\n"}{.data.config\.yml}'
+```
+
+### coresmd runs but serves no SMD-backed leases
+
+**Symptom:** pod is Ready, but known nodes get `bootloop` addresses (or none), and the log shows repeated cache-refresh errors.
+
+**Check, in order:**
+
+1. **DNS:** `<spec.domain>` must resolve from the DHCP node through cluster DNS to the gateway: `kubectl -n openchami-<cluster> exec ds/coredhcp -- getent hosts <domain>`.
+2. **TLS:** a `x509: certificate signed by unknown authority` error means `ca_cert` doesn't match the gateway certificate's CA. See the CA trust notes in [crd-reference.md](crd-reference.md#reaching-smd-and-boot-service-from-coresmd).
+3. **Public routes:** `401` / `403` from `/hsm/v2/...` means the SMD public route is disabled or `publicRoutes.paths` no longer lists `/hsm/v2/State/Components` and `/hsm/v2/Inventory/EthernetInterfaces`.
+4. **Data:** SMD must hold `EthernetInterfaces` with `IPAddresses` for the nodes' MACs.
+
 ### `NamespaceReady=False` — Rancher / RKE2 admission denies the namespace SSA
 
 **Symptom:** on a Rancher-managed cluster (RKE2/k3s), `NamespaceReady` never goes `True`:

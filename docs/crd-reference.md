@@ -95,7 +95,7 @@ spec:
       tokensmith: v0.4.1
       bootService: v0.1.5
       metadataService: v0.1.0
-      coredhcp: latest
+      coredhcp: v0.7.1
       magellan: v0.5.1
       funicular: latest
       networkProbe: v1.0.0
@@ -141,7 +141,7 @@ spec:
       tokensmith: v0.4.1
       bootService: v0.1.5
       metadataService: v0.1.0
-      coredhcp: latest
+      coredhcp: v0.7.1
       magellan: v0.5.1
   services:
     smd:
@@ -242,8 +242,11 @@ spec:
         - subnet: 10.10.0.0/16
           start: 10.10.0.50
           end: 10.10.0.250
-      unknownLeaseDuration: 5m
-      knownLeaseDuration: 24h
+      unknownLeaseDuration: 5m       # generated config only
+      knownLeaseDuration: 1h         # generated config only
+      # configMapRef:                # alternative to leaseRanges/*LeaseDuration — see below
+      #   name: site-coredhcp-config
+      #   key: config.yml
       image: {...}
       resources: {}
       tolerations: []
@@ -313,6 +316,147 @@ spec:
 ```
 
 When `externalEndpoint` is set, the operator also skips the corresponding `HTTPRoute` and `SecurityPolicy` so the in-cluster gateway doesn't try to back-end onto a Service that doesn't exist. Sites running an external instance are responsible for terminating and routing to it themselves.
+
+#### CoreDHCP configuration
+
+The CoreDHCP DaemonSet (image `ghcr.io/openchami/coresmd`, which is CoreDHCP
+built with the `coresmd` and `bootloop` plugins) reads a single config file
+at `/etc/coredhcp/config.yml`. The operator fills it from one of two sources:
+
+| Mode | Set | Who owns the config | Suitable for |
+|---|---|---|---|
+| Generated (default) | `leaseRanges` (+ optional lease durations) | operator | dev / test only |
+| User-provided | `configMapRef` | you | production |
+
+> **Warning: the generated config does not PXE-boot nodes from OpenCHAMI.**
+> It is a minimal stock-CoreDHCP config — `range` plugin over the first
+> `leaseRanges` entry, `server_id`/`router` assumed to be the subnet's
+> `.1`, DNS hard-coded to `1.1.1.1 8.8.8.8`, listening on every interface.
+> It does **not** enable `coresmd` (SMD-backed leases, iPXE boot script,
+> TFTP) or `bootloop`. Production deployments must supply a config with
+> `configMapRef`.
+
+`configMapRef` and the generated-config fields (`leaseRanges`,
+`unknownLeaseDuration`, `knownLeaseDuration`) are **mutually exclusive**; the
+validating webhook rejects a spec that sets both rather than silently
+ignoring one.
+
+##### Using `configMapRef`
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: site-coredhcp-config
+  namespace: default            # same namespace as the OpenCHAMIControlPlane
+data:
+  config.yml: |
+    server4:
+      listen:
+        - "%eno1"               # provision-network interface on the DHCP node
+      plugins:
+        - server_id: 172.16.0.254
+        - dns: 172.16.0.254
+        - router: 172.16.0.1
+        - netmask: 255.255.255.0
+        - coresmd: |
+            svc_base_uri=https://demo.openchami.example
+            ipxe_uri=https://demo.openchami.example/boot/v1/bootscript
+            ca_cert=/root_ca/root_ca.crt
+            cache_valid=30s
+            lease_time=1h
+            single_port=true
+        - bootloop: |
+            lease_file=/tmp/coredhcp.db
+            script_path=default
+            lease_time=5m
+            ipv4_start=172.16.0.200
+            ipv4_end=172.16.0.250
+---
+apiVersion: openchami.openchami.org/v1alpha1
+kind: OpenCHAMIControlPlane
+metadata:
+  name: demo
+  namespace: default
+spec:
+  domain: demo.openchami.example
+  services:
+    coreDHCP:
+      enabled: true
+      configMapRef:
+        name: site-coredhcp-config
+        key: config.yml         # optional, default config.yml
+```
+
+How it behaves:
+
+- The referenced ConfigMap must live in the **same namespace as the
+  `OpenCHAMIControlPlane`** (not `openchami-<cluster>`, which the operator
+  creates). The operator copies the key verbatim into its own
+  `openchami-<cluster>/coredhcp-config` ConfigMap (annotated
+  `openchami.org/coredhcp-config-source: <ns>/<name>:<key>`) and mounts that.
+  The operator never writes to your ConfigMap.
+- The operator watches the referenced ConfigMap. An edit is mirrored and
+  rolls the DaemonSet automatically: the pod template carries
+  `openchami.org/coredhcp-config-hash`, and coredhcp only reads its config at
+  startup.
+- If the ConfigMap or key is missing or empty, `DHCPReady=False` with reason
+  `ConfigMapNotFound` and a Warning Event; an already-running DaemonSet keeps
+  serving its last config. The operator does not validate the contents —
+  a bad config shows up as a crash-looping `coredhcp` pod.
+- The operator still owns the DaemonSet: image, resources, tolerations,
+  node selection, security context, mounts, and ports.
+
+##### What the DaemonSet provides to your config
+
+| Item | Value | Use in config |
+|---|---|---|
+| Networking | `hostNetwork: true`, `dnsPolicy: ClusterFirstWithHostNet` | `listen:` refers to the **node's** interfaces |
+| Ports | UDP 67 (DHCP), UDP 69 (TFTP) as hostPorts | coresmd's built-in TFTP server defaults to 69 (`tftp_port`) |
+| Writable path | `/tmp` (memory-backed emptyDir; root filesystem is read-only) | lease databases, e.g. `bootloop` `lease_file=/tmp/coredhcp.db`. **Lost on pod restart** |
+| CA bundle | `/root_ca/root_ca.crt` — the `ca.crt` key of the gateway TLS Secret (`spec.networking.tls.secretName`) | coresmd `ca_cert=/root_ca/root_ca.crt` |
+| TFTP root | `/tftpboot` (iPXE binaries bundled in the coresmd image) | coresmd `tftp_dir` default |
+
+##### Reaching SMD and boot-service from coresmd
+
+coresmd runs on the host network, so in-cluster pod-selector
+NetworkPolicies do not admit it to SMD directly. Point it at the gateway
+instead:
+
+- `svc_base_uri=https://<spec.domain>` — coresmd only issues
+  `GET /hsm/v2/Inventory/EthernetInterfaces` and `GET /hsm/v2/State/Components`,
+  both on SMD's default unauthenticated public route list
+  (`spec.services.smd.publicRoutes`, enabled by default). If you replace
+  `publicRoutes.paths`, keep both.
+- `ipxe_uri=https://<spec.domain>/boot/v1/bootscript` — on boot-service's
+  default public route list (`spec.services.bootService.publicRoutes`). See
+  the iPXE TLS caveat below.
+- `<spec.domain>` must resolve, from the DHCP node via cluster DNS, to the
+  Envoy Gateway's address.
+
+**CA trust.** `/root_ca/root_ca.crt` is the gateway TLS Secret's `ca.crt`.
+cert-manager populates that key for CA and Vault issuers, but **not** for
+ACME (Let's Encrypt) issuers. The volume is optional, so a missing key does
+not block the pod from starting, but the file will not exist.
+
+coresmd (v0.7.1) treats `ca_cert` as effectively required: it reads the
+file unconditionally at startup (an unset or missing path makes the plugin
+fail to load), and when set it trusts **only** that file, not the system
+store. So:
+
+- CA / Vault issuer: use `ca_cert=/root_ca/root_ca.crt`.
+- ACME or other publicly trusted issuer: point `ca_cert` at the image's
+  system bundle instead (for the wolfi-based coresmd image,
+  `/etc/ssl/certs/ca-certificates.crt` — verify against the image you run).
+- Anything else: bake the CA into a derived image and override
+  `spec.services.coreDHCP.image`.
+
+**iPXE and TLS.** The iPXE binaries bundled in the coresmd image do not trust
+a private CA, and the gateway's HTTP listener redirects every request to
+HTTPS. So `ipxe_uri` only works out of the box when the gateway certificate
+chains to a CA iPXE already trusts. Sites with a private CA need an
+iPXE-reachable plain-HTTP path to the boot script (not provided by the
+operator today) or custom iPXE builds that embed the CA.
 
 ### NetworkingSpec
 

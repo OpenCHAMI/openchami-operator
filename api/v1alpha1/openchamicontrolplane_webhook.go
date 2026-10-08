@@ -181,12 +181,19 @@ func (w *OpenCHAMIControlPlaneWebhook) Default(_ context.Context, obj *OpenCHAMI
 		obj.Spec.Services.MetadataService.Replicas = 2
 	}
 
-	// CoreDHCP / Magellan literals.
-	if obj.Spec.Services.CoreDHCP.UnknownLeaseDuration == "" {
-		obj.Spec.Services.CoreDHCP.UnknownLeaseDuration = "5m"
-	}
-	if obj.Spec.Services.CoreDHCP.KnownLeaseDuration == "" {
-		obj.Spec.Services.CoreDHCP.KnownLeaseDuration = "1h"
+	// CoreDHCP / Magellan literals. Lease durations only apply to the
+	// operator-generated config; with a user-provided configMapRef they
+	// stay empty so the mutual-exclusion validation below can tell a
+	// user-set value from a defaulted one.
+	if obj.Spec.Services.CoreDHCP.ConfigMapRef == nil {
+		if obj.Spec.Services.CoreDHCP.UnknownLeaseDuration == "" {
+			obj.Spec.Services.CoreDHCP.UnknownLeaseDuration = "5m"
+		}
+		if obj.Spec.Services.CoreDHCP.KnownLeaseDuration == "" {
+			obj.Spec.Services.CoreDHCP.KnownLeaseDuration = "1h"
+		}
+	} else if obj.Spec.Services.CoreDHCP.ConfigMapRef.Key == "" {
+		obj.Spec.Services.CoreDHCP.ConfigMapRef.Key = DefaultCoreDHCPConfigMapKey
 	}
 	if obj.Spec.Services.Magellan.Schedule == "" {
 		obj.Spec.Services.Magellan.Schedule = "*/30 * * * *"
@@ -374,6 +381,14 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 	dhcpPath := specPath.Child("services", "coreDHCP")
 	probePath := specPath.Child("networkProbe")
 
+	// 4b. CoreDHCP config source: a user-provided configMapRef and the
+	// fields that drive the operator-generated config are mutually
+	// exclusive. Rejected rather than silently ignored so the user never
+	// believes a leaseRange is in effect when it is not.
+	dhcpErrs, dhcpWarnings := validateCoreDHCPConfigSource(obj.Spec.Services.CoreDHCP, dhcpPath)
+	allErrs = append(allErrs, dhcpErrs...)
+	warnings = append(warnings, dhcpWarnings...)
+
 	if !obj.Spec.NetworkProbe.Enabled {
 		// 5. nodeSelector required when probing is off.
 		if len(obj.Spec.Services.CoreDHCP.NodeSelector) == 0 {
@@ -504,6 +519,41 @@ func nodeSelectorHasClusterDiscriminator(selector map[string]string, clusterName
 		}
 	}
 	return false
+}
+
+// validateCoreDHCPConfigSource enforces that a user-provided configMapRef
+// is not combined with the fields that drive the operator-generated
+// CoreDHCP config. Checked regardless of coreDHCP.enabled so a stale
+// combination is caught before the service is switched on. Warns (does
+// not reject) when an enabled CoreDHCP has no config source at all, so
+// existing objects created before leaseRanges was enforced stay
+// updatable; the reconciler reports DHCPReady=False/InvalidConfig.
+func validateCoreDHCPConfigSource(dhcp CoreDHCPSpec, dhcpPath *field.Path) (field.ErrorList, admission.Warnings) {
+	if dhcp.ConfigMapRef == nil {
+		if dhcp.Enabled && len(dhcp.LeaseRanges) == 0 {
+			return nil, admission.Warnings{
+				"spec.services.coreDHCP has neither configMapRef nor leaseRanges; the CoreDHCP DaemonSet will not be deployed until one is set",
+			}
+		}
+		return nil, nil
+	}
+	var errs field.ErrorList
+	refPath := dhcpPath.Child("configMapRef")
+	if dhcp.ConfigMapRef.Name == "" {
+		errs = append(errs, field.Required(refPath.Child("name"), "configMapRef.name is required"))
+	}
+	const msg = "mutually exclusive with spec.services.coreDHCP.configMapRef; " +
+		"configure this in the referenced CoreDHCP config instead"
+	if len(dhcp.LeaseRanges) > 0 {
+		errs = append(errs, field.Forbidden(dhcpPath.Child("leaseRanges"), msg))
+	}
+	if dhcp.UnknownLeaseDuration != "" {
+		errs = append(errs, field.Forbidden(dhcpPath.Child("unknownLeaseDuration"), msg))
+	}
+	if dhcp.KnownLeaseDuration != "" {
+		errs = append(errs, field.Forbidden(dhcpPath.Child("knownLeaseDuration"), msg))
+	}
+	return errs, nil
 }
 
 // isValidOIDCIssuer reports whether s is a well-formed, policy-compliant OIDC

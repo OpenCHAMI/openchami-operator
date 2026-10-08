@@ -209,14 +209,22 @@ type CoreDHCPSpec struct {
     // +optional
     NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
-    // LeaseRanges defines DHCP subnet ranges to serve.
-    // +kubebuilder:validation:MinItems=1
-    LeaseRanges []DHCPLeaseRange `json:"leaseRanges"`
+    // ConfigMapRef references a user-managed ConfigMap (in the CR's
+    // namespace) holding the complete CoreDHCP config. Mutually exclusive
+    // with LeaseRanges / UnknownLeaseDuration / KnownLeaseDuration.
+    // +optional
+    ConfigMapRef *CoreDHCPConfigMapRef `json:"configMapRef,omitempty"`
 
-    // +kubebuilder:default="5m"
+    // LeaseRanges drives the operator-generated (dev/test) config.
+    // +optional
+    LeaseRanges []DHCPLeaseRange `json:"leaseRanges,omitempty"`
+
+    // Defaulted to "5m" by the webhook only when ConfigMapRef is unset.
+    // +optional
     UnknownLeaseDuration string `json:"unknownLeaseDuration,omitempty"`
 
-    // +kubebuilder:default="1h"
+    // Defaulted to "1h" by the webhook only when ConfigMapRef is unset.
+    // +optional
     KnownLeaseDuration string `json:"knownLeaseDuration,omitempty"`
 
     // +optional
@@ -227,6 +235,12 @@ type CoreDHCPSpec struct {
 
     // +optional
     Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+}
+
+type CoreDHCPConfigMapRef struct {
+    Name string `json:"name"`
+    // +kubebuilder:default="config.yml"
+    Key  string `json:"key,omitempty"`
 }
 
 type DHCPLeaseRange struct {

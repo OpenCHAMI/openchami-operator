@@ -659,6 +659,37 @@ spec:
                   coreDHCP:
                     description: CoreDHCPSpec configures the CoreDHCP DaemonSet.
                     properties:
+                      configMapRef:
+                        description: |-
+                          ConfigMapRef points at a user-managed ConfigMap holding the complete
+                          CoreDHCP configuration file. When set, the operator does not generate
+                          a config from LeaseRanges / lease durations; it copies the referenced
+                          key verbatim into the operator-managed `coredhcp-config` ConfigMap in
+                          the control-plane namespace and mounts it at
+                          /etc/coredhcp/config.yml. The operator continues to manage the
+                          DaemonSet itself (image, resources, scheduling, mounts).
+
+                          The ConfigMap must live in the same namespace as this
+                          OpenCHAMIControlPlane. Mutually exclusive with LeaseRanges,
+                          UnknownLeaseDuration and KnownLeaseDuration.
+                        properties:
+                          key:
+                            default: config.yml
+                            description: Key within the ConfigMap's data holding the
+                              CoreDHCP YAML.
+                            maxLength: 253
+                            pattern: ^[-._a-zA-Z0-9]+$
+                            type: string
+                          name:
+                            description: |-
+                              Name of the ConfigMap, in the same namespace as the
+                              OpenCHAMIControlPlane.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        type: object
                       enabled:
                         default: true
                         type: boolean
@@ -680,12 +711,15 @@ spec:
                             type: string
                         type: object
                       knownLeaseDuration:
-                        default: 1h
+                        description: |-
+                          KnownLeaseDuration is the lease_time plugin value in the generated
+                          config. Defaults to "1h" when ConfigMapRef is unset.
                         type: string
                       leaseRanges:
                         description: |-
-                          LeaseRanges defines DHCP subnet ranges to serve.
-                          At least one range is required when Enabled=true (validated by admission webhook).
+                          LeaseRanges defines DHCP subnet ranges to serve with the
+                          operator-generated config. Ignored (and rejected by the webhook)
+                          when ConfigMapRef is set.
                         items:
                           description: DHCPLeaseRange defines a DHCP subnet range
                             to serve.
@@ -811,7 +845,10 @@ spec:
                           type: object
                         type: array
                       unknownLeaseDuration:
-                        default: 5m
+                        description: |-
+                          UnknownLeaseDuration is the lease time for addresses served from
+                          LeaseRanges by the generated config. Defaults to "5m" when
+                          ConfigMapRef is unset.
                         type: string
                     type: object
                   magellan:
