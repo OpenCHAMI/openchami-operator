@@ -14,7 +14,7 @@ This file documents the default container images baked into the operator binary 
 | Tokensmith | `ghcr.io/openchami/tokensmith` | `v0.4.1` | `internal/reconcilers/images.go` |
 | Boot service | `ghcr.io/openchami/boot-service` | `v0.1.5` | `internal/reconcilers/images.go` |
 | Metadata service | `ghcr.io/openchami/metadata-service` | `v0.1.0` | `internal/reconcilers/images.go` |
-| CoreDHCP | `ghcr.io/openchami/coredhcp` | `latest` | `internal/reconcilers/images.go` |
+| CoreDHCP | `ghcr.io/openchami/coresmd` | `v0.7.1` | `internal/reconcilers/images.go` |
 | Magellan | `ghcr.io/openchami/magellan` | `v0.5.1` | `internal/reconcilers/images.go` |
 | Funicular collector | `ghcr.io/openchami/legendary-funicular` | `latest` | `internal/reconcilers/images.go` |
 | Logq compactor | `ghcr.io/openchami/openchami-logq-compactor` | `pr-1` | `internal/reconcilers/images.go` |
@@ -22,6 +22,8 @@ This file documents the default container images baked into the operator binary 
 | Network probe | `ghcr.io/openchami/openchami-operator` | `latest` | `internal/reconcilers/images.go` |
 
 **Note:** Services showing `latest` as the release tag have not yet cut a versioned upstream release. The operator falls back to `:latest` for these services in the `release` stream.
+
+**CoreDHCP image:** the `coredhcp` service runs `ghcr.io/openchami/coresmd`, which is CoreDHCP built with the OpenCHAMI `coresmd` and `bootloop` plugins (plus the stock CoreDHCP plugins) and bundles the iPXE binaries served by coresmd's TFTP server. A user-provided `spec.services.coreDHCP.configMapRef` config can use those plugins directly; see [CRD reference](docs/crd-reference.md#coredhcp-configuration).
 
 ---
 
@@ -97,7 +99,7 @@ spec:
       tokensmith: v0.4.0
       bootService: v0.1.4
       metadataService: v0.1.0
-      coredhcp: latest
+      coredhcp: v0.7.1
       magellan: v0.5.0
       funicular: latest
       networkProbe: v1.0.0

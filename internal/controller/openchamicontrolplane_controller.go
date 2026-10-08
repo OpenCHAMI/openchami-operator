@@ -354,6 +354,37 @@ func (r *OpenCHAMIControlPlaneReconciler) secretToCluster(ctx context.Context, o
 	return requests
 }
 
+// configMapToCluster maps changes to a user-managed ConfigMap back to every
+// control plane whose spec.services.coreDHCP.configMapRef names it, so
+// edits to a site CoreDHCP config are mirrored and rolled out without
+// waiting for the periodic requeue. The referenced ConfigMap lives in the
+// control plane's own namespace (not openchami-<cluster>) and carries no
+// ownerReference, so Owns() cannot see it.
+func (r *OpenCHAMIControlPlaneReconciler) configMapToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return nil
+	}
+
+	clusterList := &openchamiv1alpha1.OpenCHAMIControlPlaneList{}
+	if err := r.List(ctx, clusterList, client.InNamespace(cm.Namespace)); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range clusterList.Items {
+		c := &clusterList.Items[i]
+		ref := c.Spec.Services.CoreDHCP.ConfigMapRef
+		if ref == nil || ref.Name != cm.Name {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
+		})
+	}
+	return requests
+}
+
 func (r *OpenCHAMIControlPlaneReconciler) nodeToCluster(ctx context.Context, obj client.Object) []reconcile.Request {
 	node, ok := obj.(*corev1.Node)
 	if !ok {
@@ -400,6 +431,7 @@ func (r *OpenCHAMIControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) err
 		Owns(&corev1.ConfigMap{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.nodeToCluster)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToCluster)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.configMapToCluster)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 5}).
 		Named("openchamicontrolplane").
 		Complete(r)

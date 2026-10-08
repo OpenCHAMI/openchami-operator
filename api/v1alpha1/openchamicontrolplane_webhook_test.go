@@ -66,8 +66,13 @@ func newFixtureCluster(name string) *OpenCHAMIControlPlane {
 			},
 			Services: ServicesSpec{
 				Tokensmith: TokensmithSpec{OIDCProvider: "vault"},
-				CoreDHCP:   CoreDHCPSpec{Enabled: true},
-				Magellan:   MagellanSpec{Enabled: true},
+				CoreDHCP: CoreDHCPSpec{
+					Enabled: true,
+					LeaseRanges: []DHCPLeaseRange{{
+						Subnet: wTestProvision, Start: "10.0.0.100", End: "10.0.0.200",
+					}},
+				},
+				Magellan: MagellanSpec{Enabled: true},
 			},
 			NetworkProbe: NetworkProbeSpec{
 				Enabled:          true,
@@ -815,5 +820,79 @@ func TestValidateCreate_ExternalEndpointAcceptedForAllFourServices(t *testing.T)
 				t.Errorf("%s: ValidateCreate should accept Enabled=false + valid externalEndpoint, got %v", svc, err)
 			}
 		})
+	}
+}
+
+// ---------- CoreDHCP configMapRef ------------------------------------------
+
+func withConfigMapRef(c *OpenCHAMIControlPlane) *OpenCHAMIControlPlane {
+	c.Spec.Services.CoreDHCP.LeaseRanges = nil
+	c.Spec.Services.CoreDHCP.ConfigMapRef = &CoreDHCPConfigMapRef{Name: "site-coredhcp-config"}
+	return c
+}
+
+func TestDefault_ConfigMapRefSkipsLeaseDefaults(t *testing.T) {
+	w := &OpenCHAMIControlPlaneWebhook{}
+	c := withConfigMapRef(newFixtureCluster("alpha"))
+	if err := w.Default(context.Background(), c); err != nil {
+		t.Fatalf("Default: %v", err)
+	}
+	dhcp := c.Spec.Services.CoreDHCP
+	if dhcp.UnknownLeaseDuration != "" || dhcp.KnownLeaseDuration != "" {
+		t.Errorf("lease durations must stay empty with configMapRef, got unknown=%q known=%q",
+			dhcp.UnknownLeaseDuration, dhcp.KnownLeaseDuration)
+	}
+	if dhcp.ConfigMapRef.Key != DefaultCoreDHCPConfigMapKey {
+		t.Errorf("configMapRef.key = %q, want %q", dhcp.ConfigMapRef.Key, DefaultCoreDHCPConfigMapKey)
+	}
+
+	// Defaulting followed by validation must succeed — the defaulter must
+	// not inject fields the validator then rejects as conflicting.
+	warnings, err := newWebhook(t).ValidateCreate(context.Background(), c)
+	if err != nil {
+		t.Fatalf("defaulted configMapRef spec rejected: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings, got %v", warnings)
+	}
+}
+
+func TestValidateCreate_ConfigMapRefMutuallyExclusive(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*CoreDHCPSpec)
+		field  string
+	}{
+		"leaseRanges": {func(d *CoreDHCPSpec) {
+			d.LeaseRanges = []DHCPLeaseRange{{Subnet: wTestProvision, Start: "10.0.0.100", End: "10.0.0.200"}}
+		}, "coreDHCP.leaseRanges"},
+		"unknownLeaseDuration": {func(d *CoreDHCPSpec) { d.UnknownLeaseDuration = "5m" }, "coreDHCP.unknownLeaseDuration"},
+		"knownLeaseDuration":   {func(d *CoreDHCPSpec) { d.KnownLeaseDuration = "1h" }, "coreDHCP.knownLeaseDuration"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := withConfigMapRef(newFixtureCluster("alpha"))
+			tc.mutate(&c.Spec.Services.CoreDHCP)
+			_, err := newWebhook(t).ValidateCreate(context.Background(), c)
+			expectInvalid(t, err, tc.field)
+		})
+	}
+}
+
+func TestValidateCreate_ConfigMapRefRequiresName(t *testing.T) {
+	c := withConfigMapRef(newFixtureCluster("alpha"))
+	c.Spec.Services.CoreDHCP.ConfigMapRef.Name = ""
+	_, err := newWebhook(t).ValidateCreate(context.Background(), c)
+	expectInvalid(t, err, "configMapRef.name")
+}
+
+func TestValidateCreate_CoreDHCPWithoutConfigSourceWarns(t *testing.T) {
+	c := newFixtureCluster("alpha")
+	c.Spec.Services.CoreDHCP.LeaseRanges = nil
+	warnings, err := newWebhook(t).ValidateCreate(context.Background(), c)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "neither configMapRef nor leaseRanges") {
+		t.Errorf("expected missing-config warning, got %v", warnings)
 	}
 }

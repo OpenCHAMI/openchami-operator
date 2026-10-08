@@ -142,12 +142,16 @@ spec:
       # populates labels matching openchami.org/venado-provision-network-ready=true.
       # If networkProbe is disabled, set this explicitly per invariant 4
       # (no two clusters target the same node).
-      leaseRanges:
-        - subnet: 10.42.0.0/16
-          start:  10.42.10.1
-          end:    10.42.250.254
-      unknownLeaseDuration: 5m
-      knownLeaseDuration:   24h
+      #
+      # Production: supply the full CoreDHCP config (coresmd + bootloop) in
+      # a ConfigMap in THIS namespace. The operator copies it into
+      # openchami-<cluster>/coredhcp-config and rolls the DaemonSet on edit.
+      # The leaseRanges/*LeaseDuration fields generate a minimal dev-only
+      # config that does NOT PXE-boot from SMD, and are mutually exclusive
+      # with configMapRef. See docs/crd-reference.md#coredhcp-configuration.
+      configMapRef:
+        name: venado-coredhcp-config      # CHANGEME — see example below
+        key: config.yml
 
     magellan:
       enabled: true
@@ -199,3 +203,39 @@ spec:
   #     upgrade window or when the cluster must not change while you
   #     audit operator releases.
   operatorChannel: stable
+
+---
+# CoreDHCP config referenced by spec.services.coreDHCP.configMapRef above.
+# Must live in the same namespace as the OpenCHAMIControlPlane.
+# coresmd reaches SMD/boot-service through the gateway (public, GET-only
+# routes); ca_cert is the gateway TLS Secret's ca.crt, mounted by the
+# operator. See docs/crd-reference.md#coredhcp-configuration for the
+# CA-trust and iPXE-TLS caveats.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: venado-coredhcp-config
+  namespace: default                    # must match the OpenCHAMIControlPlane namespace
+data:
+  config.yml: |
+    server4:
+      listen:
+        - "%eno1"                       # CHANGEME — provision NIC on the DHCP node
+      plugins:
+        - server_id: 10.42.0.1          # CHANGEME
+        - dns: 10.42.0.1                # CHANGEME
+        - router: 10.42.0.1             # CHANGEME
+        - netmask: 255.255.0.0
+        - coresmd: |
+            svc_base_uri=https://venado.hpc.example.com
+            ipxe_uri=https://venado.hpc.example.com/boot/v1/bootscript
+            ca_cert=/root_ca/root_ca.crt
+            cache_valid=30s
+            lease_time=24h
+            single_port=true
+        - bootloop: |
+            lease_file=/tmp/coredhcp.db
+            script_path=default
+            lease_time=5m
+            ipv4_start=10.42.10.1
+            ipv4_end=10.42.250.254

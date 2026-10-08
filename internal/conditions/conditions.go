@@ -124,4 +124,15 @@ const (
 	// install the missing CRD before envoy can validate the
 	// in-namespace CA on the JWKS fetch.
 	ReasonMissingCRD = "MissingCRD"
+
+	// ReasonConfigMapNotFound is set on ConditionDHCPReady when
+	// spec.services.coreDHCP.configMapRef names a ConfigMap that does not
+	// exist in the OpenCHAMIControlPlane's namespace, or that lacks the
+	// referenced key. The DaemonSet is not (re)applied until it appears.
+	ReasonConfigMapNotFound = "ConfigMapNotFound"
+
+	// ReasonInvalidConfig is set on ConditionDHCPReady when the
+	// operator cannot render a CoreDHCP config from the spec (e.g. no
+	// leaseRanges and no configMapRef).
+	ReasonInvalidConfig = "InvalidConfig"
 )

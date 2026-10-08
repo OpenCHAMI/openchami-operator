@@ -215,7 +215,7 @@ needing a live session.
 | HPC concept | Maps to in OpenCHAMI |
 |---|---|
 | Site / system | One `OpenCHAMIControlPlane` resource |
-| Provision network | `spec.services.coreDHCP.leaseRanges` + `provisionNetwork` |
+| Provision network / DHCP config | `spec.services.coreDHCP.configMapRef` (site `coredhcp.yaml`, production) or `leaseRanges` (dev only) + `provisionNetwork` |
 | BMC network | `spec.services.magellan.bmcSubnet` |
 | Service catalog | `spec.services.*` (each microservice toggleable) |
 | Quadlet/systemd unit per service | The Kubernetes Deployment/DaemonSet behind the service |

@@ -6,7 +6,8 @@ package reconcilers
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -30,6 +31,38 @@ const (
 
 	coreDHCPPort     int32 = 67
 	coreDHCPPortName       = "dhcp-server"
+
+	// coreDHCPTFTPPort is the coresmd plugin's built-in TFTP server
+	// (tftp_port, default 69) that serves the iPXE binaries bundled in
+	// the coresmd image. Declared so a hostPort conflict is visible to
+	// the scheduler; with single_port=false coresmd still answers from
+	// ephemeral high ports, which hostNetwork permits.
+	coreDHCPTFTPPort     int32 = 69
+	coreDHCPTFTPPortName       = "tftp"
+
+	// coreDHCPConfigMapName is the operator-managed ConfigMap mounted
+	// into the DaemonSet. Its content is either rendered from the spec
+	// or copied from spec.services.coreDHCP.configMapRef.
+	coreDHCPConfigMapName = ServiceCoreDHCP + "-config"
+
+	// coreDHCPConfigSourceAnnotation records where the mirrored config
+	// came from ("generated" or "<namespace>/<name>:<key>").
+	coreDHCPConfigSourceAnnotation = "openchami.org/coredhcp-config-source"
+	coreDHCPConfigSourceGenerated  = "generated"
+
+	// coreDHCPConfigHashAnnotation is stamped on the pod template so a
+	// config change triggers a DaemonSet rollout.
+	coreDHCPConfigHashAnnotation = "openchami.org/coredhcp-config-hash"
+
+	// coreDHCPCAMountPath / coreDHCPCAFile are where the gateway TLS
+	// Secret's ca.crt is mounted, matching the path the upstream coresmd
+	// examples use for `ca_cert=`. Point coresmd at it with
+	// `ca_cert=/root_ca/root_ca.crt` so it can validate the gateway's
+	// certificate when svc_base_uri is https://<spec.domain>.
+	coreDHCPCAMountPath = "/root_ca"
+	coreDHCPCAFile      = "root_ca.crt"
+	coreDHCPCAVolume    = "gateway-ca"
+	gatewayTLSCAKey     = "ca.crt"
 
 	// coreDHCPConfigMountPath is where coredhcp's config-search loop looks
 	// for `config.{yml,yaml}`. The upstream binary searches `/`, `/coredhcp`,
@@ -82,22 +115,43 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 	//      JWT to receive a scoped SMD-write token.
 	//   3. Server-side apply the resulting token into the Secret above.
 
-	// Apply the rendered config ConfigMap before the DaemonSet so the
-	// pods schedule with the volume already populated. SSA is idempotent
+	// Resolve the CoreDHCP config: either rendered from the spec or read
+	// from the user-provided ConfigMap. Either way it is mirrored into
+	// the operator-managed coredhcp-config ConfigMap in the control-plane
+	// namespace, so the DaemonSet's volume never changes shape between
+	// modes. When the source is unavailable we leave any existing
+	// DaemonSet untouched (it keeps serving the last-good config) rather
+	// than tearing DHCP down.
+	data, source, reason, msg, err := r.resolveConfig(ctx, cp)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if reason != "" {
+		log.Info("coredhcp config unavailable, not applying DaemonSet", "reason", reason, "detail", msg)
+		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+			Type:               conditions.ConditionDHCPReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             reason,
+			Message:            msg,
+			ObservedGeneration: cp.Generation,
+		})
+		RecordConditionEvent(r.Recorder, cp, corev1.EventTypeWarning, reason, msg)
+		return ctrl.Result{RequeueAfter: coreDHCPRequeueAfter}, nil
+	}
+
+	// Apply the config ConfigMap before the DaemonSet so the pods
+	// schedule with the volume already populated. SSA is idempotent
 	// either way, but ordering this first avoids one self-correcting
 	// requeue on the first reconcile.
-	cm, err := r.buildConfigMap(cp)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("rendering coredhcp config: %w", err)
-	}
+	cm := r.buildConfigMap(cp, data, source)
 	cmLog := logging.EnrichWithResource(log, kindConfigMap, cm.Name)
-	cmLog.Info("applying coredhcp ConfigMap")
+	cmLog.Info("applying coredhcp ConfigMap", "source", source)
 	if err := r.Client.Patch(ctx, cm, client.Apply, //nolint:staticcheck // SSA via Patch
 		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("applying coredhcp ConfigMap: %w", err)
 	}
 
-	ds := r.buildDaemonSet(cp)
+	ds := r.buildDaemonSet(cp, coreDHCPConfigHash(data))
 	dsLog := logging.EnrichWithResource(log, kindDaemonSet, ds.Name)
 	dsLog.Info("applying coredhcp DaemonSet")
 	if err := r.Client.Patch(ctx, ds, client.Apply, //nolint:staticcheck // SSA via Patch
@@ -140,33 +194,95 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 
 // Describe returns the Kubernetes objects this reconciler would apply.
 // Returns an empty (but non-nil) slice when CoreDHCP is disabled.
+//
+// Describe has no API client, so with a configMapRef the mirrored
+// ConfigMap carries a placeholder noting the source instead of the
+// user's content, and the DaemonSet's config-hash annotation is computed
+// from that placeholder.
 func (r *CoreDHCPReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	if !cp.Spec.Services.CoreDHCP.Enabled {
 		return []client.Object{}, nil
 	}
-	cm, err := r.buildConfigMap(cp)
-	if err != nil {
-		return nil, err
+	var data, source string
+	if ref := cp.Spec.Services.CoreDHCP.ConfigMapRef; ref != nil {
+		source = coreDHCPConfigSourceRef(cp, ref)
+		data = "# CoreDHCP config is copied at reconcile time from " + source + "\n"
+	} else {
+		rendered, err := renderCoreDHCPConfig(cp)
+		if err != nil {
+			return nil, err
+		}
+		data, source = rendered, coreDHCPConfigSourceGenerated
 	}
-	return []client.Object{cm, r.buildDaemonSet(cp)}, nil
+	return []client.Object{
+		r.buildConfigMap(cp, data, source),
+		r.buildDaemonSet(cp, coreDHCPConfigHash(data)),
+	}, nil
 }
 
-// buildConfigMap wraps the rendered coredhcp YAML in a ConfigMap suitable
-// for SSA. Lives in the cluster namespace and is mounted into the DS.
-func (r *CoreDHCPReconciler) buildConfigMap(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (*corev1.ConfigMap, error) {
-	yaml, err := renderCoreDHCPConfig(cp)
-	if err != nil {
-		return nil, err
+// resolveConfig returns the CoreDHCP config file contents and a short
+// description of where they came from. When the config cannot be
+// produced for a user-correctable reason, data is empty and reason/msg
+// describe the problem for ConditionDHCPReady; err is reserved for
+// transient API failures that should be retried with backoff.
+func (r *CoreDHCPReconciler) resolveConfig(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (data, source, reason, msg string, err error) {
+	ref := cp.Spec.Services.CoreDHCP.ConfigMapRef
+	if ref == nil {
+		rendered, renderErr := renderCoreDHCPConfig(cp)
+		if renderErr != nil {
+			return "", "", conditions.ReasonInvalidConfig,
+				fmt.Sprintf("cannot generate coredhcp config: %v; set spec.services.coreDHCP.leaseRanges or configMapRef", renderErr), nil
+		}
+		return rendered, coreDHCPConfigSourceGenerated, "", "", nil
 	}
+
+	source = coreDHCPConfigSourceRef(cp, ref)
+	user := &corev1.ConfigMap{}
+	getErr := r.Client.Get(ctx, types.NamespacedName{Namespace: cp.Namespace, Name: ref.Name}, user)
+	switch {
+	case apierrors.IsNotFound(getErr):
+		return "", source, conditions.ReasonConfigMapNotFound,
+			fmt.Sprintf("coredhcp configMapRef %s not found", source), nil
+	case getErr != nil:
+		return "", source, "", "", fmt.Errorf("reading coredhcp configMapRef %s: %w", source, getErr)
+	}
+	content, ok := user.Data[ref.EffectiveKey()]
+	if !ok || content == "" {
+		return "", source, conditions.ReasonConfigMapNotFound,
+			fmt.Sprintf("coredhcp configMapRef %s has no data key %q (or it is empty)", source, ref.EffectiveKey()), nil
+	}
+	return content, source, "", "", nil
+}
+
+// coreDHCPConfigSourceRef formats a configMapRef as namespace/name:key for
+// logs, conditions and the mirrored ConfigMap's source annotation.
+func coreDHCPConfigSourceRef(cp *openchamiv1alpha1.OpenCHAMIControlPlane, ref *openchamiv1alpha1.CoreDHCPConfigMapRef) string {
+	return fmt.Sprintf("%s/%s:%s", cp.Namespace, ref.Name, ref.EffectiveKey())
+}
+
+// coreDHCPConfigHash returns a stable digest of the config contents. It
+// is stamped on the DaemonSet pod template so a config change rolls the
+// pods: coredhcp reads its config once at startup and never reloads it.
+func coreDHCPConfigHash(data string) string {
+	sum := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(sum[:])
+}
+
+// buildConfigMap wraps the coredhcp YAML in a ConfigMap suitable for SSA.
+// Lives in the cluster namespace and is mounted into the DS. source is
+// recorded as an annotation so an admin inspecting the mirrored copy can
+// tell whether it was generated or copied from a user ConfigMap.
+func (r *CoreDHCPReconciler) buildConfigMap(cp *openchamiv1alpha1.OpenCHAMIControlPlane, data, source string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{APIVersion: coreAPIVersion, Kind: kindConfigMap},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      ServiceCoreDHCP + "-config",
-			Namespace: ControlPlaneNamespace(cp),
-			Labels:    coreDHCPPodLabels(cp),
+			Name:        coreDHCPConfigMapName,
+			Namespace:   ControlPlaneNamespace(cp),
+			Labels:      coreDHCPPodLabels(cp),
+			Annotations: map[string]string{coreDHCPConfigSourceAnnotation: source},
 		},
-		Data: map[string]string{coreDHCPConfigKey: yaml},
-	}, nil
+		Data: map[string]string{coreDHCPConfigKey: data},
+	}
 }
 
 // coreDHCPPodLabels returns the canonical label set for coredhcp pods.
@@ -225,24 +341,12 @@ func dhcpPodSecurityContext() *corev1.PodSecurityContext {
 	return psc
 }
 
-func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *appsv1.DaemonSet {
+func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIControlPlane, configHash string) *appsv1.DaemonSet {
 	labels := coreDHCPPodLabels(cp)
 	tmpVol, tmpMount := TmpVolume()
 	dhcp := cp.Spec.Services.CoreDHCP
 
-	// LeaseRanges as JSON for the container to consume. Marshal failures fall
-	// back to "[]" — they cannot occur for the well-typed input but we guard
-	// to keep the binary's contract simple.
-	leaseRangesJSON := "[]"
-	if buf, err := json.Marshal(dhcp.LeaseRanges); err == nil {
-		leaseRangesJSON = string(buf)
-	}
-
 	env := []corev1.EnvVar{
-		{Name: "CLUSTER_NAME", Value: cp.Spec.ClusterName},
-		{Name: "LEASE_RANGES_JSON", Value: leaseRangesJSON},
-		{Name: "UNKNOWN_LEASE_DURATION", Value: dhcp.UnknownLeaseDuration},
-		{Name: "KNOWN_LEASE_DURATION", Value: dhcp.KnownLeaseDuration},
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
 	}
 
@@ -263,6 +367,19 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIContr
 		MountPath: coreDHCPConfigMountPath,
 		ReadOnly:  true,
 	}
+	// The gateway TLS Secret's ca.crt, for coresmd's ca_cert= when it
+	// reaches SMD / boot-service through https://<spec.domain>. Mounted
+	// as a single file so /root_ca contains only root_ca.crt. Optional:
+	// cert-manager does not populate ca.crt for every issuer type (ACME
+	// in particular), and a missing key must not block DHCP. Sites
+	// without ca.crt point coresmd's ca_cert= at the image's system
+	// bundle or bake their CA into a derived image (docs/crd-reference.md).
+	caMount := corev1.VolumeMount{
+		Name:      coreDHCPCAVolume,
+		MountPath: coreDHCPCAMountPath,
+		ReadOnly:  true,
+	}
+	optional := true
 
 	image, pullPolicy := ResolveImage(cp, ServiceCoreDHCP)
 	container := corev1.Container{
@@ -276,14 +393,22 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIContr
 		// is already on the binary's built-in search path
 		// (`/`, `/coredhcp`, `/.coredhcp`, `/etc/coredhcp`), so
 		// auto-discovery picks up our config.yml without needing a flag.
-		Ports: []corev1.ContainerPort{{
-			Name:          coreDHCPPortName,
-			ContainerPort: coreDHCPPort,
-			HostPort:      coreDHCPPort,
-			Protocol:      corev1.ProtocolUDP,
-		}},
+		Ports: []corev1.ContainerPort{
+			{
+				Name:          coreDHCPPortName,
+				ContainerPort: coreDHCPPort,
+				HostPort:      coreDHCPPort,
+				Protocol:      corev1.ProtocolUDP,
+			},
+			{
+				Name:          coreDHCPTFTPPortName,
+				ContainerPort: coreDHCPTFTPPort,
+				HostPort:      coreDHCPTFTPPort,
+				Protocol:      corev1.ProtocolUDP,
+			},
+		},
 		Env:          env,
-		VolumeMounts: []corev1.VolumeMount{tmpMount, configMount},
+		VolumeMounts: []corev1.VolumeMount{tmpMount, configMount, caMount},
 		Lifecycle:    preStop,
 	}
 	if dhcp.Resources != nil {
@@ -300,7 +425,10 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIContr
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{coreDHCPConfigHashAnnotation: configHash},
+				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: ServiceCoreDHCP,
 					EnableServiceLinks: DisableServiceLinks(),
@@ -318,8 +446,21 @@ func (r *CoreDHCPReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIContr
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: ServiceCoreDHCP + "-config",
+										Name: coreDHCPConfigMapName,
 									},
+								},
+							},
+						},
+						{
+							Name: coreDHCPCAVolume,
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: GatewayTLSSecretName(cp),
+									Items: []corev1.KeyToPath{{
+										Key:  gatewayTLSCAKey,
+										Path: coreDHCPCAFile,
+									}},
+									Optional: &optional,
 								},
 							},
 						},

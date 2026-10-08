@@ -14,7 +14,7 @@ Runs on `CREATE` and `UPDATE` before validation.
 - Sets `database.instances = 1` if zero.
 - Sets `database.storageSize = 10Gi` if zero.
 - Sets `networkProbe.intervalSeconds = 30` if zero AND probes are enabled.
-- Sets `services.coreDHCP.unknownLeaseDuration = "5m"` and `knownLeaseDuration = "24h"` if empty.
+- Sets `services.coreDHCP.unknownLeaseDuration = "5m"` and `knownLeaseDuration = "1h"` if empty **and** `services.coreDHCP.configMapRef` is unset. With a `configMapRef` the lease durations are left empty (they would otherwise conflict with the ref) and `configMapRef.key` defaults to `config.yml`.
 
 Defaulting is **never** a substitute for validation. It only fills gaps.
 
@@ -47,6 +47,8 @@ Runs on `CREATE` and `UPDATE` after defaulting. Rejects requests that would viol
 | `networkProbe.bmcNetwork.subnet` | parseable CIDR if probes enabled. |
 | `services.coreDHCP.leaseRanges[].subnet/start/end` | parseable, in-range when probes disabled. |
 | `services.coreDHCP.nodeSelector` | required when probes disabled. |
+| `services.coreDHCP.configMapRef` | mutually exclusive with `leaseRanges`, `unknownLeaseDuration`, `knownLeaseDuration` (rejected, not ignored). `name` required. |
+| `services.coreDHCP` (enabled) | **warning** when neither `configMapRef` nor `leaseRanges` is set; the reconciler reports `DHCPReady=False/InvalidConfig` and does not deploy the DaemonSet. |
 | `services.magellan.nodeSelector` | required when probes disabled. |
 | `operatorChannel` | enum `stable` or `pinned`. |
 | `pinnedVersion` | required when `operatorChannel=pinned`, valid semver. |
