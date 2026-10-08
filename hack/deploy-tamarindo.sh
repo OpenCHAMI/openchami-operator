@@ -14,6 +14,12 @@ make dev-up
 echo "Building and deploying the operator into the kind cluster (Path B)..."
 make dev-deploy
 
+echo "Waiting up to 120 seconds for the Operator webhook Pod to be Ready..."
+kubectl wait --namespace openchami-operator-system \
+  --for=condition=ready pod \
+  --selector=control-plane=controller-manager \
+  --timeout=120s
+
 echo "Applying the test cluster configuration..."
 kubectl apply -f test/fixtures/minimal-controlplane.yaml
 
