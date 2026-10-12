@@ -31,7 +31,8 @@ All resources in `openchami-{clusterName}` namespace.
 | Resource | Key details |
 |---|---|
 | `Gateway` | HTTPS/443 + HTTP/80, hostname=spec.domain |
-| `HTTPRoute` `http-redirect` | HTTP → HTTPS 301 |
+| `HTTPRoute` `http-redirect` | HTTP → HTTPS 301 (catch-all on the HTTP listener) |
+| `HTTPRoute` `boot-service-public-http` | HTTP listener: Exact `GET /boot/v1/bootscript` only (no JWT, no redirect); see below |
 | `HTTPRoute` `smd` | `/hsm/*` (JWT) |
 | `HTTPRoute` `smd-public` | Exact-path, GET-only allowlist (no JWT); see below |
 | `HTTPRoute` `tokensmith` | `/.well-known/jwks.json`, `/oauth/token`, `/health` |
@@ -89,6 +90,47 @@ spec:
 CRD validation (CEL) rejects paths outside the service's prefix (`/hsm/`,
 `/boot/`), paths with wildcard or query characters, and paths that aren't
 normalized (`//`, `.`, `..` segments).
+
+### Plain-HTTP boot script (`boot-service-public-http`, issue #69)
+
+The iPXE binaries bundled with coresmd don't trust a private gateway CA,
+so a node following `http-redirect` to HTTPS fails TLS before it can fetch
+its boot script. The operator therefore also serves the boot script on the
+**HTTP** listener:
+
+```
+HTTP :80
+  ├─ GET /boot/v1/bootscript   → boot-service   (boot-service-public-http)
+  └─ everything else           → 301 https://…  (http-redirect)
+```
+
+- Attached only to the `http` listener, hostname = `spec.domain`.
+- One match: `Exact /boot/v1/bootscript` + `method: GET`. Query strings
+  (`?mac=…`) aren't part of path matching, so they still match. Sub-paths,
+  other methods, and the other boot public paths (`/boot/v1/service/*`)
+  still redirect. Nothing JWT-gated or admin-facing is ever on `:80`.
+- Out-ranks `http-redirect` by standard precedence: the redirect has no
+  matches (implicit `PathPrefix /`), and Exact + method beats that.
+- No SecurityPolicy. Published in the always-safe set.
+- Exists only while boot-service is deployed in-cluster,
+  `spec.services.bootService.httpBootScript` is true (the default), **and**
+  `/boot/v1/bootscript` is in the resolved HTTPS public path list. So
+  `publicRoutes.enabled: false`, or a `publicRoutes.paths` override that
+  omits the boot script, also removes the plaintext route — making the boot
+  script JWT-only on HTTPS never leaves an unauthenticated HTTP bypass.
+  Otherwise the route is deleted explicitly on reconcile.
+- The HTTPS `boot-service-public` route is unchanged, and
+  `.status.gateway.url` stays `https://`.
+
+Sites whose gateway certificate iPXE already trusts can keep `:80`
+redirect-only:
+
+```yaml
+spec:
+  services:
+    bootService:
+      httpBootScript: false
+```
 
 SMD still enforces its own auth, so listing a path SMD protects only moves
 the 401 from Envoy to SMD. boot-service has **no** inbound auth, so for it

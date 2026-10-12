@@ -539,7 +539,8 @@ Checklist before applying:
    (the pod uses host networking).
 2. **SMD and boot-service through the gateway.** Set
    `svc_base_uri=https://<spec.domain>` and
-   `ipxe_uri=https://<spec.domain>/boot/v1/bootscript`. coresmd's SMD reads
+   `ipxe_uri=http://<spec.domain>/boot/v1/bootscript` (plain HTTP; see
+   item 7). coresmd's SMD reads
    (`/hsm/v2/Inventory/EthernetInterfaces`, `/hsm/v2/State/Components`) and
    the boot script are on the default unauthenticated, GET-only public
    routes (`spec.services.{smd,bootService}.publicRoutes`). Keep them enabled.
@@ -563,10 +564,19 @@ Checklist before applying:
 6. **TFTP.** coresmd serves the bundled iPXE binaries over TFTP on UDP 69
    (declared as a hostPort). Set `single_port=true` if a host or
    network firewall only permits port 69.
-7. **iPXE and TLS.** The bundled iPXE binaries do not trust private CAs,
-   and the gateway redirects HTTP to HTTPS. With a private CA, `ipxe_uri`
-   over the gateway will fail TLS in iPXE. Plan for a gateway certificate
-   iPXE trusts, or a custom iPXE build.
+7. **iPXE and TLS.** The bundled iPXE binaries do not trust private CAs.
+   The gateway redirects HTTP to HTTPS except for
+   `GET /boot/v1/bootscript`, which it serves over plain HTTP by default
+   (`spec.services.bootService.httpBootScript: true`), so an `http://`
+   `ipxe_uri` works with a private CA. Only the boot script is plaintext;
+   every other path, including `/admin/boot`, still redirects. If iPXE
+   trusts your gateway certificate, you can use an `https://` `ipxe_uri`
+   and set `httpBootScript: false`. Check:
+
+   ```sh
+   curl -sS -o /dev/null -w '%{http_code}\n' "http://<spec.domain>/boot/v1/bootscript?mac=<mac>"   # not 301
+   curl -sS -o /dev/null -w '%{http_code}\n' "http://<spec.domain>/boot/v1/service/status"        # 301
+   ```
 
 Edits to the ConfigMap are picked up automatically and roll the
 `coredhcp` DaemonSet. If the ConfigMap or key is missing,

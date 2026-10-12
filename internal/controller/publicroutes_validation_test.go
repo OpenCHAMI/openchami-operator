@@ -59,6 +59,9 @@ var _ = Describe("publicRoutes CRD validation", func() {
 		DeferCleanup(cleanup, cp)
 		Expect(cp.Spec.Services.SMD.PublicRoutes.Enabled).NotTo(BeNil())
 		Expect(*cp.Spec.Services.SMD.PublicRoutes.Enabled).To(BeTrue())
+		// Issue #69: the plain-HTTP boot-script route defaults on.
+		Expect(cp.Spec.Services.BootService.HTTPBootScript).NotTo(BeNil())
+		Expect(*cp.Spec.Services.BootService.HTTPBootScript).To(BeTrue())
 	})
 
 	DescribeTable("rejects invalid paths",

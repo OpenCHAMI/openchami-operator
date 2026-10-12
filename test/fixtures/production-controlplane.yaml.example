@@ -130,6 +130,11 @@ spec:
     bootService:
       enabled: true
       replicas: 3
+      # Serve GET /boot/v1/bootscript over plain HTTP (everything else on :80
+      # still 301s to HTTPS). The iPXE binaries bundled with coresmd don't
+      # trust a private CA, so the coresmd ipxe_uri below uses http://.
+      # Set false only if iPXE trusts the gateway certificate.
+      httpBootScript: true
 
     metadataService:
       enabled: true
@@ -228,7 +233,7 @@ data:
         - netmask: 255.255.0.0
         - coresmd: |
             svc_base_uri=https://venado.hpc.example.com
-            ipxe_uri=https://venado.hpc.example.com/boot/v1/bootscript
+            ipxe_uri=http://venado.hpc.example.com/boot/v1/bootscript
             ca_cert=/root_ca/root_ca.crt
             cache_valid=30s
             lease_time=24h

@@ -363,6 +363,22 @@ type BootServiceSpec struct {
 	// +kubebuilder:validation:XValidation:rule="!has(self.paths) || self.paths.all(p, p.startsWith('/boot/'))",message="bootService publicRoutes.paths must start with /boot/"
 	// +optional
 	PublicRoutes PublicRoutesSpec `json:"publicRoutes,omitempty"`
+
+	// HTTPBootScript serves GET /boot/v1/bootscript on the gateway's
+	// plain-HTTP listener in addition to HTTPS, so iPXE builds that don't
+	// trust the gateway CA can fetch their boot script. Every other HTTP
+	// request is still redirected to HTTPS. Only takes effect while
+	// /boot/v1/bootscript is a public route (publicRoutes).
+	// +kubebuilder:default=true
+	// +optional
+	HTTPBootScript *bool `json:"httpBootScript,omitempty"`
+}
+
+// HTTPBootScriptEnabled reports whether the boot script should also be
+// served over plain HTTP. A nil HTTPBootScript (field omitted, CRD
+// defaulting skipped) means enabled.
+func (b BootServiceSpec) HTTPBootScriptEnabled() bool {
+	return b.HTTPBootScript == nil || *b.HTTPBootScript
 }
 
 // MetadataServiceSpec configures the metadata (cloud-init) service.

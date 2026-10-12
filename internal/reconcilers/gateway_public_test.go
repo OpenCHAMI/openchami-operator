@@ -58,6 +58,13 @@ func assertHTTPRouteAbsent(t *testing.T, c client.Client, cp *openchamiv1alpha1.
 // returns the matched paths.
 func publicRoutePaths(t *testing.T, hr *gwapiv1.HTTPRoute, wantBackend string, wantPort int32) []string {
 	t.Helper()
+	return publicRoutePathsOn(t, hr, listenerHTTPS, wantBackend, wantPort)
+}
+
+// publicRoutePathsOn is publicRoutePaths for a route that must attach
+// only to the given listener.
+func publicRoutePathsOn(t *testing.T, hr *gwapiv1.HTTPRoute, wantListener, wantBackend string, wantPort int32) []string {
+	t.Helper()
 	if len(hr.Spec.Rules) != 1 {
 		t.Fatalf("route %q: want exactly 1 rule, got %d", hr.Name, len(hr.Spec.Rules))
 	}
@@ -73,8 +80,8 @@ func publicRoutePaths(t *testing.T, hr *gwapiv1.HTTPRoute, wantBackend string, w
 		t.Errorf("route %q: backend=%s:%v want %s:%d", hr.Name, ref.Name, ref.Port, wantBackend, wantPort)
 	}
 	if len(hr.Spec.ParentRefs) != 1 || hr.Spec.ParentRefs[0].SectionName == nil ||
-		string(*hr.Spec.ParentRefs[0].SectionName) != listenerHTTPS {
-		t.Errorf("route %q: must attach only to the HTTPS listener, got %+v", hr.Name, hr.Spec.ParentRefs)
+		string(*hr.Spec.ParentRefs[0].SectionName) != wantListener {
+		t.Errorf("route %q: must attach only to the %s listener, got %+v", hr.Name, wantListener, hr.Spec.ParentRefs)
 	}
 	var paths []string
 	for i, m := range rule.Matches {
@@ -147,7 +154,7 @@ func TestGatewayReconciler_PublicRoutesHaveNoSecurityPolicy(t *testing.T) {
 			targets[string(ref.Name)] = sp.Name
 		}
 	}
-	for _, public := range []string{routeSMDPublic, routeBootPublic} {
+	for _, public := range []string{routeSMDPublic, routeBootPublic, routeBootPublicHTTP} {
 		if sp, ok := targets[public]; ok {
 			t.Errorf("SecurityPolicy %q targets public route %q", sp, public)
 		}
@@ -200,6 +207,7 @@ func TestGatewayReconciler_PublicRoutesAppliedBeforeTokensmith(t *testing.T) {
 	}
 	_ = getHTTPRoute(t, c, cp, routeSMDPublic)
 	_ = getHTTPRoute(t, c, cp, routeBootPublic)
+	_ = getHTTPRoute(t, c, cp, routeBootPublicHTTP)
 	assertHTTPRouteAbsent(t, c, cp, routeSMD)
 	assertHTTPRouteAbsent(t, c, cp, routeBootService)
 }
@@ -222,6 +230,7 @@ func TestGatewayReconciler_PublicRouteDisabledIsDeleted(t *testing.T) {
 	}
 	assertHTTPRouteAbsent(t, c, cp, routeSMDPublic)
 	assertHTTPRouteAbsent(t, c, cp, routeBootPublic)
+	assertHTTPRouteAbsent(t, c, cp, routeBootPublicHTTP)
 	// The protected SMD route must survive.
 	_ = getHTTPRoute(t, c, cp, routeSMD)
 
@@ -253,7 +262,7 @@ func TestGatewayReconciler_DescribeIncludesPublicRoutes(t *testing.T) {
 			found[o.GetName()] = true
 		}
 	}
-	for _, name := range []string{routeSMDPublic, routeBootPublic} {
+	for _, name := range []string{routeSMDPublic, routeBootPublic, routeBootPublicHTTP} {
 		if !found[name] {
 			t.Errorf("Describe() missing HTTPRoute %q", name)
 		}
