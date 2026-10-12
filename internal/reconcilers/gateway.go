@@ -1184,6 +1184,7 @@ func (r *GatewayReconciler) buildSMDRateLimit(cp *openchamiv1alpha1.OpenCHAMICon
 				TargetRefs: []gwapiv1.LocalPolicyTargetReferenceWithSectionName{target},
 			},
 			RateLimit: &egv1alpha1.RateLimitSpec{
+				Type: egv1alpha1.GlobalRateLimitType,
 				Global: &egv1alpha1.GlobalRateLimit{
 					Rules: []egv1alpha1.RateLimitRule{{
 						ClientSelectors: []egv1alpha1.RateLimitSelectCondition{{
