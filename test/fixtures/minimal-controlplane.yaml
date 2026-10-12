@@ -64,7 +64,7 @@ spec:
     coreDHCP:
       enabled: true
       nodeSelector:
-        openchami.org/testcluster-provision-network-ready: "true"
+        openchami.org/frodo-provision-network-ready: "true"
       leaseRanges:
         - subnet: 192.168.100.0/24
           start: 192.168.100.100
@@ -73,7 +73,7 @@ spec:
       enabled: true
       bmcSubnet: 192.168.200.0/24
       nodeSelector:
-        openchami.org/testcluster-bmc-network-ready: "true"
+        openchami.org/frodo-bmc-network-ready: "true"
       schedule: "0 * * * *"   # hourly in dev
 
   networking:
