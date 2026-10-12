@@ -24,7 +24,7 @@ echo "Applying the test cluster configuration..."
 kubectl apply -f test/fixtures/minimal-controlplane.yaml
 
 echo "Waiting up to 300 seconds for the OpenCHAMI control plane to reach Ready state..."
-kubectl wait --for=condition=Ready openchamicontrolplane/testcluster --timeout=300s
+kubectl wait --for=condition=Ready openchamicontrolplane/frodo --timeout=300s
 
 echo "Control plane is Ready. Fetching Envoy Gateway service details for Magellan routing:"
 kubectl get svc -n envoy-gateway-system
