@@ -370,7 +370,7 @@ envtest:
 
 install-tools: controller-gen envtest ## Install all required tools
 	@which golangci-lint > /dev/null || \
-	  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $$(go env GOPATH)/bin v2.13.2
+	  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $$(go env GOPATH)/bin v2.14.0
 	@which goimports > /dev/null || go install golang.org/x/tools/cmd/goimports@latest
 	@which kind > /dev/null || go install sigs.k8s.io/kind@latest
 	@echo "All tools installed."
