@@ -22,6 +22,8 @@ kubectl wait --namespace openchami-operator-system \
 
 echo "Applying the test cluster configuration..."
 kubectl apply -f test/fixtures/minimal-controlplane.yaml
+kubectl label nodes openchami-dev-control-plane openchami.org/frodo-provision-network-ready=true
+kubectl label nodes openchami-dev-control-plane openchami.org/frodo-bmc-network-ready=true
 
 echo "Waiting up to 300 seconds for the OpenCHAMI control plane to reach Ready state..."
 kubectl wait --for=condition=Ready openchamicontrolplane/frodo --timeout=300s
