@@ -32,22 +32,22 @@ echo "Gathering OpenCHAMI diagnostic data into $OUTFILE..."
     echo -e "\n========================================"
     echo "OPERATOR LOGS"
     echo "========================================"
-    kubectl logs -n openchami-operator-system -l control-plane=controller-manager --tail=200
+    kubectl logs -n openchami-operator-system -l control-plane=controller-manager --tail=5
 
     echo -e "\n========================================"
     echo "TOKENSMITH LOGS"
     echo "========================================"
-    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=tokensmith --tail=200 || echo "No tokensmith logs."
+    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=tokensmith --tail=5 || echo "No tokensmith logs."
 
     echo -e "\n========================================"
     echo "METADATA SERVICE LOGS (PREVIOUS CRASH)"
     echo "========================================"
-    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=metadata-service --previous --tail=100 2>/dev/null || echo "No previous metadata-service logs found."
+    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=metadata-service --previous --tail=5 2>/dev/null || echo "No previous metadata-service logs found."
     
     echo -e "\n========================================"
     echo "METADATA SERVICE LOGS (CURRENT)"
     echo "========================================"
-    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=metadata-service --tail=100 2>/dev/null || echo "No current metadata-service logs found."
+    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=metadata-service --tail=5 2>/dev/null || echo "No current metadata-service logs found."
 
 } > "$OUTFILE"
 
