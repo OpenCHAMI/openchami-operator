@@ -20,6 +20,7 @@ import (
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 )
 
 // alphaProbeDS is the canonical DaemonSet name for the "alpha" probe.
@@ -57,6 +58,67 @@ func TestNetworkProbeReconciler_DisabledTriviallyReady(t *testing.T) {
 	if cp.Status.NetworkProbe != nil {
 		t.Errorf("expected status.networkProbe to be cleared when disabled, got %+v",
 			cp.Status.NetworkProbe)
+	}
+}
+
+func TestNetworkProbeReconciler_RejectsLegacyAndOldConfigurationLabels(t *testing.T) {
+	cp := newControlPlane("alpha")
+	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet}
+	r := &NetworkProbeReconciler{Recorder: record.NewFakeRecorder(10)}
+	ds := r.buildDaemonSet(cp)
+	ds.Status.NumberReady = 1
+	key := networkprobe.ReadyLabel("alpha", probeTypeProvision)
+	revisionKey := networkprobe.RevisionLabel("alpha", probeTypeProvision)
+	revision := probeTargetConfig(cp, probeTypeProvision).Revision()
+	nodes := []*corev1.Node{
+		{ObjectMeta: metav1.ObjectMeta{Name: "legacy", Labels: map[string]string{key: testProbeLabelTrue}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "old-config", Labels: map[string]string{key: testProbeLabelTrue, revisionKey: "old"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "current", Labels: map[string]string{key: testProbeLabelTrue, revisionKey: revision}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithStatusSubresource(ds).WithObjects(cp, ds, nodes[0], nodes[1], nodes[2]).Build()
+	r.Client = c
+	for range 2 {
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
+			t.Fatal(err)
+		}
+		if got := cp.Status.NetworkProbe.NodesWithProvisionAccess; len(got) != 1 || got[0] != "current" {
+			t.Fatalf("accepted legacy/old labels: %v", got)
+		}
+	}
+	// Changing an endpoint makes even the formerly current label ineligible.
+	cp.Generation++
+	cp.Spec.NetworkProbe.ProvisionNetwork.ValidateHost = "host"
+	cp.Spec.NetworkProbe.ProvisionNetwork.ValidatePort = 443
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatal(err)
+	}
+	if cp.Status.NetworkProbe.ProbeReady || len(cp.Status.NetworkProbe.NodesWithProvisionAccess) != 0 {
+		t.Fatal("old configuration authorized scheduling")
+	}
+	if EffectiveNodeSelector(cp, probeTypeProvision)[revisionKey] == revision {
+		t.Fatal("selector did not change with target")
+	}
+}
+
+func TestNetworkProbeReconciler_InvalidTargetCannotTrustLabels(t *testing.T) {
+	for _, subnet := range []string{"0.0.0.0/0", "bad-cidr"} {
+		t.Run(subnet, func(t *testing.T) {
+			cp := newControlPlane("alpha")
+			cp.Spec.NetworkProbe.Enabled = true
+			cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: subnet}
+			r := &NetworkProbeReconciler{Recorder: record.NewFakeRecorder(10)}
+			ds := r.buildDaemonSet(cp)
+			ds.Status.NumberReady = 1
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node", Labels: EffectiveNodeSelector(cp, probeTypeProvision)}}
+			r.Client = fake.NewClientBuilder().WithScheme(newScheme(t)).WithStatusSubresource(ds).WithObjects(cp, ds, node).Build()
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
+				t.Fatal(err)
+			}
+			if cp.Status.NetworkProbe.ProbeReady {
+				t.Fatal("invalid target trusted existing labels")
+			}
+		})
 	}
 }
 
@@ -100,8 +162,11 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 	if ds.Spec.Template.Spec.NodeSelector != nil {
 		t.Errorf("expected no nodeSelector (probe runs everywhere), got %+v", ds.Spec.Template.Spec.NodeSelector)
 	}
-	if ds.Spec.Template.Spec.HostNetwork {
-		t.Errorf("expected HostNetwork=false, got true")
+	if !ds.Spec.Template.Spec.HostNetwork {
+		t.Errorf("expected HostNetwork=true, got false")
+	}
+	if ds.Spec.Template.Spec.DNSPolicy != corev1.DNSClusterFirstWithHostNet {
+		t.Fatal("expected host-network cluster DNS")
 	}
 	if len(ds.Spec.Template.Spec.Tolerations) != 1 || ds.Spec.Template.Spec.Tolerations[0].Operator != corev1.TolerationOpExists {
 		t.Errorf("expected single Exists toleration, got %+v", ds.Spec.Template.Spec.Tolerations)
@@ -239,13 +304,15 @@ func TestNetworkProbeReconciler_PopulatesProbeStatus(t *testing.T) {
 			Labels: map[string]string{
 				provLabel: testProbeLabelTrue,
 				bmcLabel:  testProbeLabelTrue,
+				networkprobe.RevisionLabel("alpha", probeTypeProvision): probeTargetConfig(cp, probeTypeProvision).Revision(),
+				networkprobe.RevisionLabel("alpha", probeTypeBMC):       probeTargetConfig(cp, probeTypeBMC).Revision(),
 			},
 		},
 	}
 	provisionOnly := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "node-b",
-			Labels: map[string]string{provLabel: testProbeLabelTrue},
+			Labels: map[string]string{provLabel: testProbeLabelTrue, networkprobe.RevisionLabel("alpha", probeTypeProvision): probeTargetConfig(cp, probeTypeProvision).Revision()},
 		},
 	}
 

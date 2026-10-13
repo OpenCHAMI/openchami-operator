@@ -610,7 +610,9 @@ func (r *NetworkPoliciesReconciler) magellanPolicy(ns string) networkingv1.Netwo
 }
 
 // networkProbePolicy permits the network-probe DaemonSet to reach arbitrary
-// HTTPS endpoints (cluster admins configure ValidateHosts to point anywhere).
+// HTTPS endpoints. The probe uses host networking; actual enforcement depends
+// on the CNI. Node-side API/DNS and other configured TCP validation ports must
+// be permitted by the deployment's host-network policy.
 func (r *NetworkPoliciesReconciler) networkProbePolicy(ns string) networkingv1.NetworkPolicy {
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),

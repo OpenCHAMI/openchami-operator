@@ -200,11 +200,11 @@ The validating webhook enforces that every **enabled** service has a correspondi
 spec:
   networkProbe:
     enabled: true                       # default false
-    intervalSeconds: 30                 # default 30
+    intervalSeconds: 30                 # default 300; must be positive
     provisionNetwork:
       subnet: 10.10.0.0/16              # required when enabled
       validateHost: 10.10.0.1           # optional reachability target
-      validatePort: 67                  # optional
+      validatePort: 443                 # required with validateHost; TCP, not UDP DHCP
       validateTimeout: 5s               # optional
     bmcNetwork:
       subnet: 10.20.0.0/16
@@ -213,6 +213,23 @@ spec:
 ```
 
 When enabled, the operator deploys a DaemonSet that probes each node and labels it `openchami.org/<clusterName>-provision-network-ready=true` / `openchami.org/<clusterName>-bmc-network-ready=true`. CoreDHCP and Magellan use those labels for node selection. (Kubernetes label keys allow at most one `/`, so the cluster name is joined with a hyphen rather than a second slash.)
+
+Eligibility requires a usable unicast host address inside the target CIDR on an
+up, non-loopback interface; pod routes and node default routes cannot qualify a
+node. The probe uses `hostNetwork: true` and `ClusterFirstWithHostNet` DNS. A
+subnet-only target is valid. Optional TCP validation requires host and port
+together (1–65535) and a positive timeout (default `5s`). CIDRs such as `/0`,
+loopback, and multicast networks are rejected.
+
+Consumers and status require a matching `openchami.org/<clusterName>-<kind>-probe-revision`
+label as well as readiness. The digest includes target configuration and the
+probe algorithm. Failure clears the revision. Legacy ready-only labels and
+results from earlier configurations do not authorize scheduling. See
+[upgrade guidance](upgrade-and-versioning.md#network-probe-safety-transition-issue-40).
+
+The host-network probe needs node-side API/DNS and configured TCP endpoint
+connectivity. NetworkPolicy handling of host-network traffic depends on the CNI;
+ordinary pod policy is not a guarantee of host traffic isolation.
 
 When disabled, you must set `spec.services.coreDHCP.nodeSelector` and `spec.services.magellan.nodeSelector` explicitly. The validating webhook enforces invariant 4 (no two clusters target the same node for CoreDHCP).
 

@@ -156,15 +156,18 @@ type DHCPLeaseRange struct {
 
 // NetworkProbeTarget describes a network to probe and an optional connectivity check.
 type NetworkProbeTarget struct {
-	// Subnet is the CIDR to check for a local route.
+	// Subnet must contain a usable local address on an up, non-loopback host interface.
 	// +kubebuilder:validation:Required
 	Subnet string `json:"subnet"`
 
-	// ValidateHost is an IP/hostname to TCP-dial as a secondary reachability check.
+	// ValidateHost is an optional IP/hostname to TCP-dial after host attachment passes.
+	// When supplied, ValidatePort is required.
 	// +optional
 	ValidateHost string `json:"validateHost,omitempty"`
 
 	// ValidatePort is the TCP port for the connectivity check.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	ValidatePort int32 `json:"validatePort,omitempty"`
 
@@ -180,6 +183,7 @@ type NetworkProbeSpec struct {
 
 	// IntervalSeconds between successive probes on each node.
 	// +kubebuilder:default=300
+	// +kubebuilder:validation:Minimum=1
 	// +optional
 	IntervalSeconds int32 `json:"intervalSeconds,omitempty"`
 

@@ -94,3 +94,37 @@ Conditions:
 There's no damage — the operator simply skipped the cluster. To resolve:
 - Roll back the operator to `1.4.2`, **or**
 - Bump `pinnedVersion` to `1.5.0` (after validating in staging).
+
+## Network probe safety transition (issue #40)
+
+Upgrade the operator and its `/probe` image together. The image already packages
+both binaries; deployments overriding `spec.networkProbe.image` or pinning
+`images.pinned["network-probe"]` must select an image containing the fixed probe.
+An old image cannot emit the new algorithm revision, so it remains ineligible.
+Publish/select that image through the normal release process before deployment.
+
+The fixed probe runs with host networking and requires a usable address inside
+each configured subnet on an up, non-loopback host interface. Subnet-only targets
+remain supported; TCP validation adds a second check. Targets relying only on a
+routed path will stop qualifying. Check interval, CIDRs, optional host/port pairs,
+and timeouts before applying the stricter CRD/admission rules.
+
+Legacy ready-only labels no longer authorize scheduling. Existing DHCP
+DaemonSets get current revision-qualified selectors even before the probe passes
+or when a referenced config is unavailable. This intentionally interrupts DHCP
+on nodes until their fixed probe qualifies them. Separate API operations and
+DaemonSet termination are asynchronous; do not expect an instantaneous cutover.
+Magellan suspends future runs while blocked and restores its previous suspend
+setting on recovery. Already-running Jobs are not moved or terminated.
+
+Readiness/revision labels describe the latest periodic result, not a lease with
+an expiry. A probe that stops after success can leave its last result behind.
+This change prevents legacy/configuration-mismatched results from qualifying
+nodes; it does not implement freshness deadlines or verify DHCP packet exchanges.
+
+Generated dev/test DHCP configs still listen on `0.0.0.0:67`. Local attachment
+alone does not make every listener safe. For production, use the existing
+`configMapRef` facility to bind the intended interface (for example
+`server4.listen: ["%eno1"]`); the operator does not rewrite user configuration.
+Host-network API/DNS and optional TCP connectivity, CNI enforcement, actual L2
+behavior, and rollout timing need deployment validation.

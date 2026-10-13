@@ -7,6 +7,7 @@ package reconcilers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -47,6 +48,100 @@ func TestCoreDHCPReconciler_DisabledSkips(t *testing.T) {
 	}, ds)
 	if !apierrors.IsNotFound(getErr) {
 		t.Errorf("expected coredhcp DaemonSet to be absent when disabled, got err=%v", getErr)
+	}
+}
+
+func TestCoreDHCPReconciler_ReadinessMatrix(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status appsv1.DaemonSetStatus
+		ready  bool
+	}{
+		{"zero desired", appsv1.DaemonSetStatus{ObservedGeneration: 2}, false},
+		{"none ready", appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 3}, false},
+		{"one of three", appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 3, NumberReady: 1}, false},
+		{"stale generation", appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 3, NumberReady: 3, NumberAvailable: 3, UpdatedNumberScheduled: 3}, false},
+		{"old pods", appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 3, NumberReady: 3, NumberAvailable: 3, UpdatedNumberScheduled: 2}, false},
+		{"not available", appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 3, NumberReady: 3, NumberAvailable: 2, UpdatedNumberScheduled: 3}, false},
+		{"misscheduled", appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 3, NumberReady: 3, NumberAvailable: 3, UpdatedNumberScheduled: 3, NumberMisscheduled: 1}, false},
+		{"fully ready", appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 3, NumberReady: 3, NumberAvailable: 3, UpdatedNumberScheduled: 3}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := newControlPlane("alpha")
+			cp.Spec.Services.CoreDHCP.Enabled = true
+			cp.Spec.Services.CoreDHCP.NodeSelector = map[string]string{testNodeRoleKey: testNodeRoleDHCP}
+			cp.Spec.Services.CoreDHCP.LeaseRanges = []openchamiv1alpha1.DHCPLeaseRange{{Subnet: testProvisionSubnet, Start: testLeaseRangeStartLarge, End: testLeaseRangeEndLarge}}
+			r := &CoreDHCPReconciler{Recorder: record.NewFakeRecorder(10)}
+			ds := r.buildDaemonSet(cp, "hash")
+			ds.Generation, ds.Status = 2, tc.status
+			r.Client = fake.NewClientBuilder().WithScheme(newScheme(t)).WithStatusSubresource(ds).WithObjects(cp, ds).Build()
+			result, err := r.Reconcile(context.Background(), cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionDHCPReady); got != tc.ready {
+				t.Fatalf("DHCPReady=%v, want %v", got, tc.ready)
+			}
+			if (result.RequeueAfter == 0) != tc.ready {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestCoreDHCPReconciler_WithdrawsLegacySelectionBeforeGates(t *testing.T) {
+	for _, probeReady := range []bool{false, true} {
+		t.Run(fmt.Sprintf("probeReady=%v", probeReady), func(t *testing.T) {
+			cp := newControlPlane("alpha")
+			cp.Spec.Services.CoreDHCP.Enabled = true
+			cp.Spec.Services.CoreDHCP.ConfigMapRef = &openchamiv1alpha1.CoreDHCPConfigMapRef{Name: "missing-config"}
+			cp.Spec.NetworkProbe.Enabled = true
+			cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet}
+			if probeReady {
+				apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{Type: conditions.ConditionNetworkProbeReady, Status: metav1.ConditionTrue, Reason: conditions.ReasonReady, ObservedGeneration: cp.Generation})
+			}
+			r := &CoreDHCPReconciler{Recorder: record.NewFakeRecorder(10)}
+			ds := r.buildDaemonSet(cp, "last-good-config")
+			ds.Spec.Template.Spec.NodeSelector = map[string]string{fmt.Sprintf(probeNetworkReadyLabelFmt, "alpha", probeTypeProvision): testProbeLabelTrue}
+			original := ds.Spec.Template.Spec.DeepCopy()
+			c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(cp, ds).Build()
+			r.Client = c
+			for range 2 {
+				if _, err := r.Reconcile(context.Background(), cp); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := &appsv1.DaemonSet{}
+			if err := c.Get(context.Background(), types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Spec.Template.Spec.NodeSelector, EffectiveNodeSelector(cp, probeTypeProvision)) {
+				t.Fatalf("legacy selection still active: %v", got.Spec.Template.Spec.NodeSelector)
+			}
+			if !reflect.DeepEqual(original.Containers, got.Spec.Template.Spec.Containers) || !reflect.DeepEqual(original.Volumes, got.Spec.Template.Spec.Volumes) {
+				t.Fatal("selector-only apply changed the last-good workload")
+			}
+			if got.Spec.Template.Annotations[coreDHCPConfigHashAnnotation] != "last-good-config" {
+				t.Fatal("config hash changed")
+			}
+			if apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionDHCPReady) {
+				t.Fatal("blocked workload reported ready")
+			}
+			cp.Spec.NetworkProbe.Enabled = false
+			cp.Spec.Services.CoreDHCP.ConfigMapRef = nil
+			cp.Spec.Services.CoreDHCP.NodeSelector = map[string]string{testNodeRoleKey: testNodeRoleDHCP}
+			cp.Spec.Services.CoreDHCP.LeaseRanges = []openchamiv1alpha1.DHCPLeaseRange{{Subnet: testProvisionSubnet, Start: testLeaseRangeStartLarge, End: testLeaseRangeEndLarge}}
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Get(context.Background(), types.NamespacedName{Name: ds.Name, Namespace: ds.Namespace}, got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Spec.Template.Spec.NodeSelector, cp.Spec.Services.CoreDHCP.NodeSelector) {
+				t.Fatalf("manual selector retains probe fields: %v", got.Spec.Template.Spec.NodeSelector)
+			}
+
+		})
 	}
 }
 
@@ -235,7 +330,7 @@ func TestCoreDHCPReconciler_ReadyWhenAvailable(t *testing.T) {
 			Name:      ServiceCoreDHCP,
 			Namespace: ControlPlaneNamespace(cp),
 		},
-		Status: appsv1.DaemonSetStatus{NumberReady: 1},
+		Status: appsv1.DaemonSetStatus{NumberReady: 1, DesiredNumberScheduled: 1, UpdatedNumberScheduled: 1, NumberAvailable: 1},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
@@ -268,10 +363,12 @@ func TestCoreDHCPReconciler_UsesProbeNodeSelector(t *testing.T) {
 		End:    testLeaseRangeEndLarge,
 	}}
 	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet}
 	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
-		Type:   conditions.ConditionNetworkProbeReady,
-		Status: metav1.ConditionTrue,
-		Reason: conditions.ReasonReady,
+		Type:               conditions.ConditionNetworkProbeReady,
+		ObservedGeneration: cp.Generation,
+		Status:             metav1.ConditionTrue,
+		Reason:             conditions.ReasonReady,
 	})
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()

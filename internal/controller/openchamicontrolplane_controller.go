@@ -30,6 +30,7 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 	"github.com/openchami/openchami-operator/internal/reconcilers"
 	"github.com/openchami/openchami-operator/internal/s3"
 	"github.com/openchami/openchami-operator/internal/status"
@@ -401,21 +402,16 @@ func (r *OpenCHAMIControlPlaneReconciler) nodeToCluster(ctx context.Context, obj
 		if !c.Spec.NetworkProbe.Enabled {
 			continue
 		}
-		// Either probe type can change independently — a node may pass the
-		// BMC subnet probe but not the provision probe, or vice versa — so
-		// we trigger a reconcile when either label is present on the node.
-		provisionKey := fmt.Sprintf("openchami.org/%s-provision-network-ready", c.Spec.ClusterName)
-		bmcKey := fmt.Sprintf("openchami.org/%s-bmc-network-ready", c.Spec.ClusterName)
-		if _, ok := node.Labels[provisionKey]; ok {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
-			})
-			continue
-		}
-		if _, ok := node.Labels[bmcKey]; ok {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
-			})
+		// Readiness and revision can change independently during a probe upgrade.
+		for _, kind := range []string{"provision", "bmc"} {
+			_, hasReady := node.Labels[networkprobe.ReadyLabel(c.Spec.ClusterName, kind)]
+			_, hasRevision := node.Labels[networkprobe.RevisionLabel(c.Spec.ClusterName, kind)]
+			if hasReady || hasRevision {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
+				})
+				break
+			}
 		}
 	}
 	return requests

@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 )
 
 // init.go-scoped constants. Prefixed with `init` to avoid collision with the
@@ -189,17 +190,21 @@ func (o *initOpts) validate() error {
 		return fmt.Errorf("--s3-endpoint is required")
 	}
 
-	if o.provisionSubnet != "" {
-		if _, _, err := net.ParseCIDR(o.provisionSubnet); err != nil {
-			return fmt.Errorf("--provision-subnet %q is not a valid CIDR: %w", o.provisionSubnet, err)
+	for _, item := range []struct {
+		name, subnet, host string
+		port               int32
+	}{
+		{"provision", o.provisionSubnet, o.provisionValidateHost, o.provisionValidatePort},
+		{"bmc", o.bmcSubnet, o.bmcValidateHost, o.bmcValidatePort},
+	} {
+		if item.subnet == "" && item.host == "" && item.port == 0 {
+			continue
+		}
+		cfg := networkprobe.Target{Subnet: item.subnet, Host: item.host, Port: int(item.port)}
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("%s network probe flags: %w", item.name, err)
 		}
 	}
-	if o.bmcSubnet != "" {
-		if _, _, err := net.ParseCIDR(o.bmcSubnet); err != nil {
-			return fmt.Errorf("--bmc-subnet %q is not a valid CIDR: %w", o.bmcSubnet, err)
-		}
-	}
-
 	if o.dhcpRange != "" {
 		if _, _, err := initSplitDHCPRange(o.dhcpRange); err != nil {
 			return err

@@ -16,6 +16,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -84,8 +85,8 @@ type CoreDHCPReconciler struct {
 // Reconcile applies the CoreDHCP DaemonSet and reports DHCPReady.
 //
 // When the network probe is enabled but ConditionNetworkProbeReady is not
-// True, this reconciler defers and requeues; the DaemonSet is only applied
-// once the probe has identified eligible nodes.
+// True for the current generation, this reconciler defers and requeues. New
+// DaemonSets wait for eligibility; existing selectors are restricted immediately.
 func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
 	log := logging.Enrich(ctx, cp, "coredhcp")
 
@@ -94,10 +95,15 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 		return ctrl.Result{}, nil
 	}
 
+	// Tighten an existing selector before either the probe or config-source
+	// gate can return. Otherwise legacy pods keep serving on unsafe nodes.
+	if err := r.restrictExistingSelection(ctx, cp); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Probe gate: when probing is enabled, we must wait for the probe
 	// reconciler to report at least one eligible node before scheduling.
-	if cp.Spec.NetworkProbe.Enabled &&
-		!apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionNetworkProbeReady) {
+	if !probeGateReady(cp, probeTypeProvision) {
 		log.Info("waiting for network probe before deploying coredhcp")
 		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionDHCPReady,
@@ -171,12 +177,19 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 
 	// TODO(phase11): expose CoreDHCP node list on cluster.Status (no field yet).
 
-	if numberReady == 0 {
+	status := current.Status
+	fullyReady := getErr == nil && status.ObservedGeneration >= current.Generation &&
+		status.DesiredNumberScheduled > 0 && numberReady == status.DesiredNumberScheduled &&
+		status.UpdatedNumberScheduled == status.DesiredNumberScheduled &&
+		status.NumberAvailable == status.DesiredNumberScheduled && status.NumberMisscheduled == 0
+	if !fullyReady {
 		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
-			Type:               conditions.ConditionDHCPReady,
-			Status:             metav1.ConditionFalse,
-			Reason:             conditions.ReasonProvisioning,
-			Message:            "waiting for coredhcp DaemonSet pods to become ready",
+			Type:   conditions.ConditionDHCPReady,
+			Status: metav1.ConditionFalse,
+			Reason: conditions.ReasonProvisioning,
+			Message: fmt.Sprintf("waiting for coredhcp DaemonSet: desired=%d ready=%d updated=%d available=%d misscheduled=%d observedGeneration=%d generation=%d",
+				status.DesiredNumberScheduled, numberReady, status.UpdatedNumberScheduled, status.NumberAvailable,
+				status.NumberMisscheduled, status.ObservedGeneration, current.Generation),
 			ObservedGeneration: cp.Generation,
 		})
 		return ctrl.Result{RequeueAfter: coreDHCPRequeueAfter}, nil
@@ -190,6 +203,30 @@ func (r *CoreDHCPReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
+}
+
+// restrictExistingSelection owns only the node selector, using a separate SSA
+// manager so an early gate cannot prune the main reconciler's pod/config fields.
+func (r *CoreDHCPReconciler) restrictExistingSelection(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) error {
+	current := &appsv1.DaemonSet{}
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: ServiceCoreDHCP}
+	if err := r.Client.Get(ctx, key, current); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("reading existing coredhcp selector: %w", err)
+	}
+	selector := EffectiveNodeSelector(cp, probeTypeProvision)
+	patch := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": appsAPIVersion, "kind": kindDaemonSet,
+		"metadata":   map[string]any{"name": key.Name, "namespace": key.Namespace},
+		probeSpecKey: map[string]any{"template": map[string]any{probeSpecKey: map[string]any{"nodeSelector": selectorMap(selector)}}},
+	}}
+	if err := r.Client.Patch(ctx, patch, client.Apply, //nolint:staticcheck // SSA via Patch
+		client.ForceOwnership, client.FieldOwner(probeGateFieldManager)); err != nil {
+		return fmt.Errorf("restricting existing coredhcp selector: %w", err)
+	}
+	return nil
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.

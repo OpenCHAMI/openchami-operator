@@ -7,10 +7,9 @@
 // The probe runs as a per-node DaemonSet (see
 // internal/reconcilers/networkprobe.go). At each interval it:
 //
-//  1. Inspects the node's routing table to confirm a route exists into the
+//  1. Inspects host interfaces for a usable local address in the
 //     configured provision subnet (and, optionally, the BMC subnet).
-//     Implementation: github.com/vishvananda/netlink RouteGet on a sample
-//     IP from each subnet (Linux only).
+//     Implementation: unprivileged netlink link/address enumeration (Linux only).
 //
 //  2. Optionally TCP-dials a validation host:port within each subnet using
 //     net.DialTimeout.
@@ -33,11 +32,15 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
+
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -47,7 +50,7 @@ import (
 
 const (
 	defaultIntervalSeconds = 300
-	defaultDialTimeout     = 5 * time.Second
+	defaultDialTimeout     = networkprobe.DefaultTimeout
 	probeLabelTrue         = "true"
 	probeLabelFalse        = "false"
 
@@ -66,21 +69,11 @@ const (
 	envBMCTimeout = "PROBE_BMC_TIMEOUT"
 )
 
-// targetConfig captures the resolved spec for a single probe target. nil means
-// the target was not configured in spec and should be skipped. sampleIP is the
-// IP RouteGet is called against — the network address is fine because the
-// kernel only uses it to look up the relevant route, not to deliver a packet.
-//
-// When the operator-supplied env vars produce a config that cannot be
-// evaluated (malformed CIDR, port out of range, partial validate-host
-// settings), parseTarget returns a config with valid=false and parseErr set
-// to the reason; checkTarget short-circuits to label=false rather than
-// crashing the binary. This preserves the SubReconciler contract that the
-// DaemonSet "stays up, but reports no eligible nodes" — which is what the
-// NoEligibleNodes condition path in networkprobe.go expects.
+// targetConfig holds a validated target and its algorithm/configuration revision.
+// Invalid targets stay in the loop and explicitly report false.
 type targetConfig struct {
-	subnet   *net.IPNet
-	sampleIP net.IP
+	subnet   netip.Prefix
+	revision string
 	host     string
 	port     int
 	timeout  time.Duration
@@ -89,7 +82,7 @@ type targetConfig struct {
 }
 
 // probeRunner owns one probe pod's per-tick logic. Behaviour-bearing fields
-// (routeCheck/dialCheck/patchLabels/now) are exported as struct fields so
+// (attachmentCheck/dialCheck/patchLabels/now) are exported as struct fields so
 // tests can inject deterministic stand-ins without having to spin up a real
 // netlink socket or kube-apiserver.
 type probeRunner struct {
@@ -100,10 +93,10 @@ type probeRunner struct {
 	bmc         *targetConfig
 	logger      *log.Logger
 
-	routeCheck  func(net.IP) error
-	dialCheck   func(addr string, timeout time.Duration) error
-	patchLabels func(ctx context.Context, node string, labels map[string]string) error
-	now         func() time.Time
+	attachmentCheck func(netip.Prefix) error
+	dialCheck       func(addr string, timeout time.Duration) error
+	patchLabels     func(ctx context.Context, node string, labels map[string]string) error
+	now             func() time.Time
 }
 
 // run loops forever (or until ctx is cancelled), calling runOnce every
@@ -129,14 +122,27 @@ func (r *probeRunner) run(ctx context.Context) error {
 
 // runOnce evaluates each configured target and patches the node's labels in
 // a single API call. Returns the patch error so callers can log; per-target
-// failures (route or TCP) are encoded as label=false rather than error.
+// failures (attachment or TCP) are encoded as label=false rather than error.
 func (r *probeRunner) runOnce(ctx context.Context) error {
 	labels := map[string]string{}
-	if r.provision != nil {
-		labels[probeLabelKey(r.clusterName, "provision")] = boolStr(r.checkTarget("provision", r.provision))
-	}
-	if r.bmc != nil {
-		labels[probeLabelKey(r.clusterName, "bmc")] = boolStr(r.checkTarget("bmc", r.bmc))
+	for _, item := range []struct {
+		kind   string
+		target *targetConfig
+	}{
+		{"provision", r.provision}, {"bmc", r.bmc},
+	} {
+		if item.target == nil {
+			continue
+		}
+		passed := r.checkTarget(item.kind, item.target)
+		labels[probeLabelKey(r.clusterName, item.kind)] = boolStr(passed)
+		// Clear attestation on failure: a terminating legacy binary may still
+		// write ready=true, but cannot restore the new revision label.
+		revision := ""
+		if passed {
+			revision = item.target.revision
+		}
+		labels[networkprobe.RevisionLabel(r.clusterName, item.kind)] = revision
 	}
 	if len(labels) == 0 {
 		r.logger.Printf("no targets configured; skipping label patch")
@@ -145,7 +151,7 @@ func (r *probeRunner) runOnce(ctx context.Context) error {
 	return r.patchLabels(ctx, r.nodeName, labels)
 }
 
-// checkTarget runs the route-table check first, then (if configured) a TCP
+// checkTarget runs the host attachment check first, then (if configured) a TCP
 // dial check. Either failure flips the resulting label to "false". The kind
 // argument is only used in log lines. A target whose env vars failed to
 // parse (valid=false) reports false unconditionally.
@@ -154,8 +160,8 @@ func (r *probeRunner) checkTarget(kind string, t *targetConfig) bool {
 		r.logger.Printf("%s target unusable: %s", kind, t.parseErr)
 		return false
 	}
-	if err := r.routeCheck(t.sampleIP); err != nil {
-		r.logger.Printf("%s route check failed for %s: %v", kind, t.subnet, err)
+	if err := r.attachmentCheck(t.subnet); err != nil {
+		r.logger.Printf("%s attachment check failed for %s: %v", kind, t.subnet, err)
 		return false
 	}
 	if t.host == "" {
@@ -170,7 +176,7 @@ func (r *probeRunner) checkTarget(kind string, t *targetConfig) bool {
 }
 
 func probeLabelKey(cp, kind string) string {
-	return fmt.Sprintf("openchami.org/%s-%s-network-ready", cp, kind)
+	return networkprobe.ReadyLabel(cp, kind)
 }
 
 func boolStr(b bool) string {
@@ -190,52 +196,33 @@ func parseTarget(subnet, host, port, timeout string) *targetConfig {
 	if subnet == "" {
 		return nil
 	}
-	_, ipNet, err := net.ParseCIDR(subnet)
-	if err != nil {
-		return &targetConfig{
-			parseErr: fmt.Sprintf("parsing subnet %q: %v", subnet, err),
+	t := &targetConfig{timeout: defaultDialTimeout}
+	p := 0
+	if port != "" {
+		var err error
+		p, err = strconv.Atoi(port)
+		if err != nil || p == 0 {
+			t.parseErr = "validatePort must be between 1 and 65535 when supplied"
+			return t
 		}
 	}
-	t := &targetConfig{
-		subnet:   ipNet,
-		sampleIP: ipNet.IP,
-		timeout:  defaultDialTimeout,
+	cfg := networkprobe.Target{Subnet: subnet, Host: host, Port: p, Timeout: timeout}
+	t.revision = cfg.Revision()
+	if err := cfg.Validate(); err != nil {
+		t.parseErr = err.Error()
+		return t
 	}
-	if host != "" {
-		if port == "" {
-			return &targetConfig{
-				parseErr: fmt.Sprintf("validate host %q without port", host),
-			}
-		}
-		p, perr := strconv.Atoi(port)
-		if perr != nil {
-			return &targetConfig{
-				parseErr: fmt.Sprintf("parsing port %q: %v", port, perr),
-			}
-		}
-		if p <= 0 || p > 65535 {
-			return &targetConfig{
-				parseErr: fmt.Sprintf("port %d out of range", p),
-			}
-		}
-		t.host = host
-		t.port = p
-	}
+	t.subnet, _ = networkprobe.Prefix(subnet)
+	t.host, t.port = host, p
 	if timeout != "" {
-		d, terr := time.ParseDuration(timeout)
-		if terr != nil {
-			return &targetConfig{
-				parseErr: fmt.Sprintf("parsing timeout %q: %v", timeout, terr),
-			}
-		}
-		t.timeout = d
+		t.timeout, _ = time.ParseDuration(timeout)
 	}
 	t.valid = true
 	return t
 }
 
 // runnerFromEnv builds a probeRunner from the operator-injected env vars.
-// On success the runner has its routeCheck/dialCheck/patchLabels/now hooks
+// On success the runner has its attachmentCheck/dialCheck/patchLabels/now hooks
 // wired to production implementations; tests construct the runner directly.
 func runnerFromEnv(cs kubernetes.Interface, logger *log.Logger) (*probeRunner, error) {
 	cp := os.Getenv(envClusterName)
@@ -252,9 +239,10 @@ func runnerFromEnv(cs kubernetes.Interface, logger *log.Logger) (*probeRunner, e
 		if err != nil {
 			return nil, fmt.Errorf("parsing %s=%q: %w", envIntervalSeconds, v, err)
 		}
-		if n > 0 {
-			intervalSec = n
+		if n <= 0 || int64(n) > int64((1<<63-1)/time.Second) {
+			return nil, fmt.Errorf("%s must be a positive duration in seconds", envIntervalSeconds)
 		}
+		intervalSec = n
 	}
 	provision := parseTarget(
 		os.Getenv(envProvisionSubnet),
@@ -268,18 +256,29 @@ func runnerFromEnv(cs kubernetes.Interface, logger *log.Logger) (*probeRunner, e
 		os.Getenv(envBMCPort),
 		os.Getenv(envBMCTimeout),
 	)
+	for _, item := range []struct {
+		target *targetConfig
+		env    string
+	}{
+		{provision, "PROBE_PROVISION_REVISION"}, {bmc, "PROBE_BMC_REVISION"},
+	} {
+		if item.target != nil && os.Getenv(item.env) != item.target.revision {
+			item.target.valid = false
+			item.target.parseErr = "probe revision does not match this binary and target configuration"
+		}
+	}
 	if provision == nil && bmc == nil {
 		return nil, errors.New("no probe targets configured (set PROBE_PROVISION_SUBNET and/or PROBE_BMC_SUBNET)")
 	}
 	return &probeRunner{
-		clusterName: cp,
-		nodeName:    node,
-		interval:    time.Duration(intervalSec) * time.Second,
-		provision:   provision,
-		bmc:         bmc,
-		logger:      logger,
-		routeCheck:  defaultRouteCheck,
-		dialCheck:   defaultDialCheck,
+		clusterName:     cp,
+		nodeName:        node,
+		interval:        time.Duration(intervalSec) * time.Second,
+		provision:       provision,
+		bmc:             bmc,
+		logger:          logger,
+		attachmentCheck: defaultAttachmentCheck,
+		dialCheck:       defaultDialCheck,
 		patchLabels: func(ctx context.Context, n string, labels map[string]string) error {
 			return patchNodeLabels(ctx, cs, n, labels)
 		},

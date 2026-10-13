@@ -17,6 +17,8 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
 
+const testProbeRevision = "new"
+
 // TestNodeToCluster_TriggersOnEitherProbeLabel is the regression test for the
 // 2026-05-04 watch-handler bug: nodeToCluster only checked the provision
 // label, so a node that flipped only its bmc-network-ready value (e.g. a
@@ -75,6 +77,9 @@ func TestNodeToCluster_TriggersOnEitherProbeLabel(t *testing.T) {
 			labels: map[string]string{"openchami.org/frontier-provision-network-ready": annotationOptInTrue},
 			want:   0,
 		},
+		{name: "provision revision changed", labels: map[string]string{"openchami.org/venado-provision-probe-revision": testProbeRevision}, want: 1},
+		{name: "BMC revision changed", labels: map[string]string{"openchami.org/venado-bmc-probe-revision": testProbeRevision}, want: 1},
+		{name: "other cluster revision", labels: map[string]string{"openchami.org/frontier-bmc-probe-revision": testProbeRevision}, want: 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

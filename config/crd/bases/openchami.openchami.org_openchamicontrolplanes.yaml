@@ -286,16 +286,20 @@ spec:
                       Required when Enabled=true and Magellan is enabled.
                     properties:
                       subnet:
-                        description: Subnet is the CIDR to check for a local route.
+                        description: Subnet must contain a usable local address on
+                          an up, non-loopback host interface.
                         type: string
                       validateHost:
-                        description: ValidateHost is an IP/hostname to TCP-dial as
-                          a secondary reachability check.
+                        description: |-
+                          ValidateHost is an optional IP/hostname to TCP-dial after host attachment passes.
+                          When supplied, ValidatePort is required.
                         type: string
                       validatePort:
                         description: ValidatePort is the TCP port for the connectivity
                           check.
                         format: int32
+                        maximum: 65535
+                        minimum: 1
                         type: integer
                       validateTimeout:
                         description: ValidateTimeout is the dial timeout, e.g. "3s".
@@ -330,6 +334,7 @@ spec:
                     description: IntervalSeconds between successive probes on each
                       node.
                     format: int32
+                    minimum: 1
                     type: integer
                   provisionNetwork:
                     description: |-
@@ -337,16 +342,20 @@ spec:
                       Required when Enabled=true and CoreDHCP is enabled.
                     properties:
                       subnet:
-                        description: Subnet is the CIDR to check for a local route.
+                        description: Subnet must contain a usable local address on
+                          an up, non-loopback host interface.
                         type: string
                       validateHost:
-                        description: ValidateHost is an IP/hostname to TCP-dial as
-                          a secondary reachability check.
+                        description: |-
+                          ValidateHost is an optional IP/hostname to TCP-dial after host attachment passes.
+                          When supplied, ValidatePort is required.
                         type: string
                       validatePort:
                         description: ValidatePort is the TCP port for the connectivity
                           check.
                         format: int32
+                        maximum: 65535
+                        minimum: 1
                         type: integer
                       validateTimeout:
                         description: ValidateTimeout is the dial timeout, e.g. "3s".
