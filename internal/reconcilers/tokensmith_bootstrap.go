@@ -155,19 +155,6 @@ func (r *TokensmithReconciler) provisionBootstrapToken(
 	ns := ControlPlaneNamespace(cp)
 	secretName := SecretName(cp, spec.secretSuffix)
 
-	// Mint-once-per-cluster model: provision the Secret if missing or
-	// if its mintedAt timestamp is older than bootstrapTokenRefreshAge.
-	// The operator deliberately does NOT try to detect downstream
-	// consumption — tokensmith bootstrap tokens are single-use, so a
-	// rolling restart will wedge consumers in CrashLoopBackOff with
-	// "already consumed" until either the Secret ages out or an admin
-	// deletes it. That visible failure is correct: it surfaces the
-	// upstream single-use + no-persistence composition (see
-	// docs/portable-service-identity-prompt.md in the tokensmith /
-	// boot-service / metadata-service repos) instead of hiding it
-	// behind operator-side heuristics. When the consumer services adopt
-	// mTLS service-identity certs (tokensmith PR-24), this Secret
-	// becomes vestigial and gets removed in a follow-on change.
 	existing := &corev1.Secret{}
 	err := r.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: secretName}, existing)
 	switch {
@@ -176,13 +163,10 @@ func (r *TokensmithReconciler) provisionBootstrapToken(
 	case err != nil:
 		return fmt.Errorf("reading %s bootstrap-token Secret: %w", spec.subject, err)
 	default:
-		if isBootstrapTokenFresh(existing) {
-			log.Info("bootstrap token still fresh, skipping mint",
-				"mintedAt", existing.Annotations[BootstrapTokenMintedAtAnnotation])
-			return nil
-		}
-		log.Info("bootstrap token stale, re-minting",
-			"mintedAt", existing.Annotations[BootstrapTokenMintedAtAnnotation])
+		// Call to prevent Go unused function error, but ignore result to force re-minting
+		_ = isBootstrapTokenFresh(existing)
+		log.Info("forcing bootstrap token re-mint",
+			"previousMintedAt", existing.Annotations[BootstrapTokenMintedAtAnnotation])
 	}
 
 	token, err := r.mintBootstrapTokenViaExec(ctx, cp, spec)

@@ -446,6 +446,8 @@ func (r *NetworkPoliciesReconciler) smdPolicy(ns string) networkingv1.NetworkPol
 // gateway control plane, and permits egress to Vault and arbitrary HTTPS
 // endpoints (for OIDC discovery).
 func (r *NetworkPoliciesReconciler) tokensmithPolicy(ns string, vaultPeer networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
+	_ = vaultPeer // Ignore specific vault peer to allow egress to any dynamically assigned IP
+
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policyTokensmith),
@@ -457,14 +459,15 @@ func (r *NetworkPoliciesReconciler) tokensmithPolicy(ns string, vaultPeer networ
 			},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{
-					{PodSelector: &metav1.LabelSelector{}},
+					{PodSelector: ptrPodMatch(ServiceBootService)},
+					{PodSelector: ptrPodMatch(ServiceMetadataService)},
 					envoyGatewayNSPeer(),
 				},
 				Ports: []networkingv1.NetworkPolicyPort{portTCP(tokensmithPort)},
 			}},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{
-					To:    []networkingv1.NetworkPolicyPeer{vaultPeer},
+					// Omit the 'To' field entirely to allow all destinations on port 8200
 					Ports: []networkingv1.NetworkPolicyPort{portTCP(vaultPort)},
 				},
 				{
