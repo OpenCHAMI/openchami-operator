@@ -17,7 +17,7 @@ After editing any CRD type or any `+kubebuilder` marker, run `make generate mani
 
 | Target | What it does |
 |---|---|
-| `make fmt` | `goimports -w .` |
+| `make fmt` | Runs the pinned `goimports` version from the Makefile, independent of the binary installed on `PATH`. |
 | `make vet` | `go vet ./...` |
 | `make lint` | `golangci-lint run` |
 | `make validate-invariants` | Greps the source for the most common invariant violations: direct `recorder.Event`, direct `log.FromContext`, `client.Create` followed by `client.Update`, runbook reasons missing slugs, etc. |

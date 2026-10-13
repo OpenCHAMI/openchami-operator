@@ -19,6 +19,7 @@ LDFLAGS := \
 # Tool versions
 CONTROLLER_GEN_VERSION := v0.21.0
 ENVTEST_VERSION        := v0.25.0
+GOIMPORTS_VERSION      := v0.52.0
 
 # Image
 IMAGE_REGISTRY ?= ghcr.io/openchami
@@ -75,8 +76,7 @@ manifests: controller-gen ## Generate CRD and webhook manifests
 ##@ Quality
 
 fmt: ## Run goimports
-	@which goimports > /dev/null || go install golang.org/x/tools/cmd/goimports@latest
-	goimports -w .
+	go run golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION) -w .
 
 vet: ## Run go vet
 	go vet ./...
@@ -371,7 +371,7 @@ envtest:
 install-tools: controller-gen envtest ## Install all required tools
 	@which golangci-lint > /dev/null || \
 	  curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $$(go env GOPATH)/bin v2.14.0
-	@which goimports > /dev/null || go install golang.org/x/tools/cmd/goimports@latest
+	go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	@which kind > /dev/null || go install sigs.k8s.io/kind@latest
 	@echo "All tools installed."
 
