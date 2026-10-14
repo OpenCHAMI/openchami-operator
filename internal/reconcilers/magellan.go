@@ -7,12 +7,16 @@ package reconcilers
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,7 +27,8 @@ import (
 )
 
 const (
-	magellanRequeueAfter = 30 * time.Second
+	magellanRequeueAfter           = 30 * time.Second
+	probeOriginalSuspendAnnotation = "openchami.org/probe-original-suspend"
 )
 
 // MagellanReconciler ensures the Magellan BMC-discovery CronJob exists.
@@ -44,8 +49,11 @@ func (r *MagellanReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 		return ctrl.Result{}, nil
 	}
 
-	if cp.Spec.NetworkProbe.Enabled &&
-		!apimeta.IsStatusConditionTrue(cp.Status.Conditions, conditions.ConditionNetworkProbeReady) {
+	ready := probeGateReady(cp, probeTypeBMC)
+	if err := r.restrictExistingSelection(ctx, cp, ready); err != nil {
+		return ctrl.Result{}, err
+	}
+	if !ready {
 		log.Info("waiting for network probe before deploying magellan")
 		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionMagellanReady,
@@ -73,6 +81,46 @@ func (r *MagellanReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha
 		ObservedGeneration: cp.Generation,
 	})
 	return ctrl.Result{}, nil
+}
+
+// restrictExistingSelection suspends future runs while old labels are withdrawn.
+// Existing Jobs are unaffected; the prior suspend setting is restored on recovery.
+func (r *MagellanReconciler) restrictExistingSelection(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, ready bool) error {
+	current := &batchv1.CronJob{}
+	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: ServiceMagellan}
+	if err := r.Client.Get(ctx, key, current); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("reading existing magellan selector: %w", err)
+	}
+	original, saved := current.Annotations[probeOriginalSuspendAnnotation]
+	suspend := current.Spec.Suspend != nil && *current.Spec.Suspend
+	metadata := map[string]any{"name": key.Name, "namespace": key.Namespace}
+	if !ready {
+		if !saved {
+			original = strconv.FormatBool(suspend)
+		}
+		metadata["annotations"] = map[string]any{probeOriginalSuspendAnnotation: original}
+		suspend = true
+	} else if saved {
+		var err error
+		suspend, err = strconv.ParseBool(original)
+		if err != nil {
+			return fmt.Errorf("parsing saved magellan suspend setting: %w", err)
+		}
+	}
+	patch := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": batchAPIVersion, "kind": kindCronJob, "metadata": metadata,
+		probeSpecKey: map[string]any{"suspend": suspend, "jobTemplate": map[string]any{probeSpecKey: map[string]any{
+			"template": map[string]any{probeSpecKey: map[string]any{"nodeSelector": selectorMap(EffectiveNodeSelector(cp, probeTypeBMC))}},
+		}}},
+	}}
+	if err := r.Client.Patch(ctx, patch, client.Apply, //nolint:staticcheck // SSA via Patch
+		client.ForceOwnership, client.FieldOwner(probeGateFieldManager)); err != nil {
+		return fmt.Errorf("restricting existing magellan scheduling: %w", err)
+	}
+	return nil
 }
 
 // Describe returns the Kubernetes objects this reconciler would apply.

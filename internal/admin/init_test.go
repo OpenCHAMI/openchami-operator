@@ -33,6 +33,7 @@ const (
 	initFlagS3Endpoint         = "--s3-endpoint"
 	initFlagProvisionSubnet    = "--provision-subnet"
 	initFlagBMCSubnet          = "--bmc-subnet"
+	initFlagBMCValidatePort    = "--bmc-validate-port"
 	initFlagAllowInsecureVault = "--allow-insecure-vault"
 	initFlagVaultAuth          = "--vault-auth"
 	initFlagOutput             = "--output"
@@ -46,6 +47,34 @@ func initBaseArgs() []string {
 		initFlagDomain, initTestDomain,
 		initFlagVaultAddr, initTestVaultAddrTLS,
 		initFlagS3Endpoint, initTestS3Endpoint,
+	}
+}
+
+func TestInitCmd_ProbeValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		valid bool
+	}{
+		{"subnet only", []string{initFlagProvisionSubnet, initTestProvisionSubnet}, true},
+		{"optional TCP", []string{initFlagBMCSubnet, initTestBMCSubnet, "--bmc-validate-host", "bmc.example", initFlagBMCValidatePort, "443"}, true},
+		{"default subnet", []string{initFlagProvisionSubnet, "0.0.0.0/0"}, false},
+		{"invalid subnet", []string{initFlagBMCSubnet, "invalid"}, false},
+		{"host without port", []string{initFlagProvisionSubnet, initTestProvisionSubnet, "--provision-validate-host", "host.example"}, false},
+		{"port without host", []string{initFlagBMCSubnet, initTestBMCSubnet, initFlagBMCValidatePort, "443"}, false},
+		{"endpoint without subnet", []string{"--bmc-validate-host", "bmc.example", initFlagBMCValidatePort, "443"}, false},
+		{"port out of range", []string{initFlagProvisionSubnet, initTestProvisionSubnet, "--provision-validate-host", "host.example", "--provision-validate-port", "65536"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append(initBaseArgs(), tc.flags...)
+			stdout, _, err := initRunCmd(t, args...)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, err=%v", tc.valid, err)
+			}
+			if !tc.valid && stdout != "" {
+				t.Fatal("invalid flags generated a manifest")
+			}
+		})
 	}
 }
 

@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+const probeValidationHost = "host"
+
 // Shared test constants extracted to keep goconst happy.
 const (
 	wTestVaultHTTPS = "https://vault.test:8200"
@@ -42,6 +44,67 @@ func newWebhookScheme(t *testing.T) *runtime.Scheme {
 		t.Fatalf("adding scheme: %v", err)
 	}
 	return scheme
+}
+
+func TestValidateProbeTargets_CreateAndUpdate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target NetworkProbeTarget
+		valid  bool
+	}{
+		{"subnet only", NetworkProbeTarget{Subnet: wTestProvision}, true},
+		{"optional TCP", NetworkProbeTarget{Subnet: wTestProvision, ValidateHost: probeValidationHost, ValidatePort: 443}, true},
+		{"malformed subnet", NetworkProbeTarget{Subnet: "bad-cidr"}, false},
+		{"default subnet", NetworkProbeTarget{Subnet: "0.0.0.0/0"}, false},
+		{"default IPv6 subnet", NetworkProbeTarget{Subnet: "::/0"}, false},
+		{"host only", NetworkProbeTarget{Subnet: wTestProvision, ValidateHost: probeValidationHost}, false},
+		{"port only", NetworkProbeTarget{Subnet: wTestProvision, ValidatePort: 443}, false},
+		{"bad port", NetworkProbeTarget{Subnet: wTestProvision, ValidateHost: probeValidationHost, ValidatePort: 65536}, false},
+		{"bad duration", NetworkProbeTarget{Subnet: wTestProvision, ValidateTimeout: "later"}, false},
+		{"zero duration", NetworkProbeTarget{Subnet: wTestProvision, ValidateTimeout: "0s"}, false},
+	} {
+		for _, kind := range []string{"provisionNetwork", "bmcNetwork"} {
+			t.Run(tc.name+"/"+kind, func(t *testing.T) {
+				w := newWebhook(t)
+				old := newFixtureCluster("alpha")
+				candidate := old.DeepCopy()
+				if kind == "provisionNetwork" {
+					candidate.Spec.NetworkProbe.ProvisionNetwork = &tc.target
+				} else {
+					candidate.Spec.NetworkProbe.BMCNetwork = &tc.target
+				}
+				_, createErr := w.ValidateCreate(context.Background(), candidate)
+				_, updateErr := w.ValidateUpdate(context.Background(), old, candidate)
+				for _, err := range []error{createErr, updateErr} {
+					if (err == nil) != tc.valid {
+						t.Fatalf("valid=%v, err=%v", tc.valid, err)
+					}
+					if !tc.valid {
+						expectInvalid(t, err, kind)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestValidateProbeIntervalAndDisabledTargets(t *testing.T) {
+	w := newWebhook(t)
+	for _, seconds := range []int32{-1, 0, 30} {
+		candidate := newFixtureCluster("alpha")
+		candidate.Spec.NetworkProbe.IntervalSeconds = seconds
+		_, err := w.ValidateCreate(context.Background(), candidate)
+		if (err == nil) != (seconds > 0) {
+			t.Fatalf("interval=%d, err=%v", seconds, err)
+		}
+	}
+	candidate := newFixtureCluster("alpha")
+	candidate.Spec.NetworkProbe.Enabled = false
+	candidate.Spec.NetworkProbe.ProvisionNetwork = &NetworkProbeTarget{Subnet: "ignored-while-disabled"}
+	candidate.Spec.Services.CoreDHCP.NodeSelector = map[string]string{"cluster": "alpha"}
+	if _, err := w.ValidateCreate(context.Background(), candidate); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // newFixtureCluster returns a minimally-valid OpenCHAMIControlPlane suitable for
@@ -76,6 +139,7 @@ func newFixtureCluster(name string) *OpenCHAMIControlPlane {
 			},
 			NetworkProbe: NetworkProbeSpec{
 				Enabled:          true,
+				IntervalSeconds:  300,
 				ProvisionNetwork: &NetworkProbeTarget{Subnet: wTestProvision},
 				BMCNetwork:       &NetworkProbeTarget{Subnet: wTestBMC},
 			},

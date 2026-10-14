@@ -38,6 +38,8 @@ spec.logging.flushIntervalSeconds      = 60
 8. If `coreDHCP.enabled=true`: `networkProbe.provisionNetwork` must be non-nil
 9. If `magellan.enabled=true`: `networkProbe.bmcNetwork` must be non-nil
 10. If `coreDHCP.nodeSelector` is set: emit a warning (it will be ignored)
+11. Validate each configured target: non-default unicast CIDR, host/port both set or both absent, TCP port 1–65535, and positive timeout.
+12. `intervalSeconds` must be positive after defaulting. Runtime checks repeat target validation.
 
 ## ValidateUpdate()
 Re-run create validations for mutable fields, plus:

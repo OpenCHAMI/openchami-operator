@@ -7,6 +7,7 @@ package reconcilers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -20,6 +21,8 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 )
+
+const testMagellanSchedule = "*/30 * * * *"
 
 func TestMagellanReconciler_DisabledSkips(t *testing.T) {
 	scheme := newScheme(t)
@@ -46,11 +49,79 @@ func TestMagellanReconciler_DisabledSkips(t *testing.T) {
 	}
 }
 
+func TestMagellanReconciler_SuspendsAndRestoresExistingJob(t *testing.T) {
+	for _, originallySuspended := range []bool{false, true} {
+		t.Run(fmt.Sprintf("originalSuspend=%v", originallySuspended), func(t *testing.T) {
+			cp := newControlPlane("alpha")
+			cp.Spec.NetworkProbe.Enabled = true
+			cp.Spec.NetworkProbe.BMCNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet}
+			cp.Spec.Services.Magellan.Enabled = true
+			cp.Spec.Services.Magellan.Schedule = testMagellanSchedule
+			r := &MagellanReconciler{Recorder: record.NewFakeRecorder(10)}
+			cj := r.buildCronJob(cp)
+			cj.Spec.Suspend = &originallySuspended
+			cj.Spec.JobTemplate.Spec.Template.Spec.NodeSelector = map[string]string{fmt.Sprintf(probeNetworkReadyLabelFmt, "alpha", probeTypeBMC): testProbeLabelTrue}
+			containers := cj.Spec.JobTemplate.Spec.Template.Spec.Containers
+			c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(cp, cj).Build()
+			r.Client = c
+			key := types.NamespacedName{Name: cj.Name, Namespace: cj.Namespace}
+			for range 2 {
+				if _, err := r.Reconcile(context.Background(), cp); err != nil {
+					t.Fatal(err)
+				}
+				got := &batchv1.CronJob{}
+				if err := c.Get(context.Background(), key, got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Spec.Suspend == nil || !*got.Spec.Suspend {
+					t.Fatal("future jobs not suspended")
+				}
+				if !reflect.DeepEqual(got.Spec.JobTemplate.Spec.Template.Spec.NodeSelector, EffectiveNodeSelector(cp, probeTypeBMC)) {
+					t.Fatal("legacy selector still active")
+				}
+				if !reflect.DeepEqual(got.Spec.JobTemplate.Spec.Template.Spec.Containers, containers) {
+					t.Fatal("gate changed workload")
+				}
+			}
+			apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{Type: conditions.ConditionNetworkProbeReady, Status: metav1.ConditionTrue, Reason: conditions.ReasonReady, ObservedGeneration: cp.Generation})
+			for range 2 {
+				if _, err := r.Reconcile(context.Background(), cp); err != nil {
+					t.Fatal(err)
+				}
+				got := &batchv1.CronJob{}
+				if err := c.Get(context.Background(), key, got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Spec.Suspend == nil || *got.Spec.Suspend != originallySuspended {
+					t.Fatalf("original suspend setting not restored: %v", got.Spec.Suspend)
+				}
+				if _, saved := got.Annotations[probeOriginalSuspendAnnotation]; saved {
+					t.Fatal("saved suspend annotation not removed")
+				}
+			}
+			// Disabling the probe must drop the gate manager's revision selector.
+			cp.Spec.NetworkProbe.Enabled = false
+			cp.Spec.Services.Magellan.NodeSelector = map[string]string{testNodeRoleKey: testNodeRoleBMC}
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
+				t.Fatal(err)
+			}
+			got := &batchv1.CronJob{}
+			if err := c.Get(context.Background(), key, got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got.Spec.JobTemplate.Spec.Template.Spec.NodeSelector, cp.Spec.Services.Magellan.NodeSelector) {
+				t.Fatalf("manual selector retains probe fields: %v", got.Spec.JobTemplate.Spec.Template.Spec.NodeSelector)
+			}
+		})
+	}
+}
+
 func TestMagellanReconciler_WaitsForProbe(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
 	cp.Spec.Services.Magellan.Enabled = true
 	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.NetworkProbe.BMCNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet}
 	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 		Type:    conditions.ConditionNetworkProbeReady,
 		Status:  metav1.ConditionFalse,
@@ -147,7 +218,7 @@ func TestMagellanReconciler_ReadyOnceCreated(t *testing.T) {
 	cp.Spec.Services.Magellan = openchamiv1alpha1.MagellanSpec{
 		Enabled:           true,
 		NodeSelector:      map[string]string{testNodeRoleKey: testNodeRoleBMC},
-		Schedule:          "*/30 * * * *",
+		Schedule:          testMagellanSchedule,
 		BMCSubnet:         testBMCSubnet,
 		ConcurrencyPolicy: batchv1.ForbidConcurrent,
 	}
@@ -172,13 +243,15 @@ func TestMagellanReconciler_UsesProbeNodeSelector(t *testing.T) {
 	scheme := newScheme(t)
 	cp := newControlPlane("alpha")
 	cp.Spec.Services.Magellan.Enabled = true
-	cp.Spec.Services.Magellan.Schedule = "*/30 * * * *"
+	cp.Spec.Services.Magellan.Schedule = testMagellanSchedule
 	cp.Spec.Services.Magellan.ConcurrencyPolicy = batchv1.ForbidConcurrent
 	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.NetworkProbe.BMCNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testBMCSubnet}
 	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
-		Type:   conditions.ConditionNetworkProbeReady,
-		Status: metav1.ConditionTrue,
-		Reason: conditions.ReasonReady,
+		Type:               conditions.ConditionNetworkProbeReady,
+		ObservedGeneration: cp.Generation,
+		Status:             metav1.ConditionTrue,
+		Reason:             conditions.ReasonReady,
 	})
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()

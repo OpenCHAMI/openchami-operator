@@ -15,11 +15,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
+	"github.com/openchami/openchami-operator/internal/conditions"
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 )
 
 // RunbookURL returns the canonical runbook URL for a given Event reason.
@@ -56,7 +59,10 @@ func EffectiveNodeSelector(
 	if cp.Spec.NetworkProbe.Enabled {
 		key := fmt.Sprintf(probeNetworkReadyLabelFmt,
 			cp.Spec.ClusterName, probeType)
-		return map[string]string{key: probeLabelValueTrue}
+		return map[string]string{
+			key: probeLabelValueTrue,
+			networkprobe.RevisionLabel(cp.Spec.ClusterName, probeType): probeTargetConfig(cp, probeType).Revision(),
+		}
 	}
 	switch probeType {
 	case probeTypeProvision:
@@ -65,6 +71,44 @@ func EffectiveNodeSelector(
 		return cp.Spec.Services.Magellan.NodeSelector
 	}
 	return nil
+}
+
+// probeTargetConfig is shared by environment construction and node selection.
+func probeTargetConfig(cp *openchamiv1alpha1.OpenCHAMIControlPlane, kind string) networkprobe.Target {
+	t := cp.Spec.NetworkProbe.ProvisionNetwork
+	if kind == probeTypeBMC {
+		t = cp.Spec.NetworkProbe.BMCNetwork
+	}
+	return probeConfig(t)
+}
+
+func probeConfig(t *openchamiv1alpha1.NetworkProbeTarget) networkprobe.Target {
+	if t == nil {
+		return networkprobe.Target{}
+	}
+	return networkprobe.Target{Subnet: t.Subnet, Host: t.ValidateHost, Port: int(t.ValidatePort), Timeout: t.ValidateTimeout}
+}
+
+func probeGateReady(cp *openchamiv1alpha1.OpenCHAMIControlPlane, kind string) bool {
+	if !cp.Spec.NetworkProbe.Enabled {
+		return true
+	}
+	condition := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkProbeReady)
+	return condition != nil && condition.Status == metav1.ConditionTrue && condition.ObservedGeneration == cp.Generation &&
+		cp.Spec.NetworkProbe.IntervalSeconds >= 0 && probeTargetConfig(cp, kind).Validate() == nil
+}
+
+const (
+	probeGateFieldManager = fieldManager + "-probe-gate"
+	probeSpecKey          = "spec"
+)
+
+func selectorMap(selector map[string]string) map[string]any {
+	result := make(map[string]any, len(selector))
+	for key, value := range selector {
+		result[key] = value
+	}
+	return result
 }
 
 // ControlPlaneNamespace returns the canonical Kubernetes namespace for a cluster.

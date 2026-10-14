@@ -57,6 +57,11 @@ may be piped directly to `kubectl apply -f -`.
 | `--skip-checks` | false | Advisory: skip the pre-flight connectivity validation (not yet implemented for `init`; the flag is reserved). |
 | `--output` / `-o` | `-` (stdout) | Write to a file path. |
 
+Network targets require a non-default unicast subnet. Supplying a validation
+host requires its matching TCP port (1–65535), and vice versa; subnet-only probes
+remain valid. The generated probe configuration requires local host subnet
+attachment before any optional TCP check.
+
 ### Examples
 
 ```sh

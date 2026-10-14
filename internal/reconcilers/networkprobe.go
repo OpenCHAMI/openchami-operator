@@ -24,6 +24,7 @@ import (
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
 	"github.com/openchami/openchami-operator/internal/logging"
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 )
 
 const (
@@ -108,6 +109,7 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cp *openchamiv1a
 	}
 
 	if numberReady == 0 {
+		cp.Status.NetworkProbe = &openchamiv1alpha1.NetworkProbeStatus{}
 		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionNetworkProbeReady,
 			Status:             metav1.ConditionFalse,
@@ -131,10 +133,14 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cp *openchamiv1a
 	bmcNodes := []string{}
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		if v, ok := n.Labels[provisionLabel]; ok && v == probeLabelValueTrue {
+		if n.Labels[provisionLabel] == probeLabelValueTrue &&
+			n.Labels[networkprobe.RevisionLabel(cp.Spec.ClusterName, probeTypeProvision)] == probeTargetConfig(cp, probeTypeProvision).Revision() &&
+			probeTargetConfig(cp, probeTypeProvision).Validate() == nil {
 			provisionNodes = append(provisionNodes, n.Name)
 		}
-		if v, ok := n.Labels[bmcLabel]; ok && v == probeLabelValueTrue {
+		if n.Labels[bmcLabel] == probeLabelValueTrue &&
+			n.Labels[networkprobe.RevisionLabel(cp.Spec.ClusterName, probeTypeBMC)] == probeTargetConfig(cp, probeTypeBMC).Revision() &&
+			probeTargetConfig(cp, probeTypeBMC).Validate() == nil {
 			bmcNodes = append(bmcNodes, n.Name)
 		}
 	}
@@ -146,7 +152,7 @@ func (r *NetworkProbeReconciler) Reconcile(ctx context.Context, cp *openchamiv1a
 
 	provisionOK := !provisionConfigured || len(provisionNodes) > 0
 	bmcOK := !bmcConfigured || len(bmcNodes) > 0
-	probeReady := provisionOK && bmcOK
+	probeReady := provisionOK && bmcOK && (provisionConfigured || bmcConfigured) && cp.Spec.NetworkProbe.IntervalSeconds >= 0
 
 	cp.Status.NetworkProbe = &openchamiv1alpha1.NetworkProbeStatus{
 		NodesWithProvisionAccess: provisionNodes,
@@ -218,8 +224,8 @@ func fieldRefEnv(name, fieldPath string) corev1.EnvVar {
 	}
 }
 
-// targetEnvVars expands a NetworkProbeTarget into four PROBE_<prefix>_*
-// environment variables. Always emits all four (empty when target is nil)
+// targetEnvVars expands a NetworkProbeTarget into five PROBE_<prefix>_*
+// environment variables. Always emits all five (empty when target is nil)
 // so the probe binary sees a deterministic env shape.
 func targetEnvVars(prefix string, t *openchamiv1alpha1.NetworkProbeTarget) []corev1.EnvVar {
 	subnet, host, port, timeout := "", "", "", ""
@@ -236,6 +242,7 @@ func targetEnvVars(prefix string, t *openchamiv1alpha1.NetworkProbeTarget) []cor
 		{Name: "PROBE_" + prefix + "_HOST", Value: host},
 		{Name: "PROBE_" + prefix + "_PORT", Value: port},
 		{Name: "PROBE_" + prefix + "_TIMEOUT", Value: timeout},
+		{Name: "PROBE_" + prefix + "_REVISION", Value: probeConfig(t).Revision()},
 	}
 }
 
@@ -257,7 +264,7 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIC
 	env = append(env, targetEnvVars("PROVISION", cp.Spec.NetworkProbe.ProvisionNetwork)...)
 	env = append(env, targetEnvVars("BMC", cp.Spec.NetworkProbe.BMCNetwork)...)
 
-	hostNetwork := false
+	hostNetwork := true
 
 	image, pullPolicy := ResolveImage(cp, ServiceNetworkProbe)
 	container := corev1.Container{
@@ -286,6 +293,7 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIC
 					EnableServiceLinks: DisableServiceLinks(),
 					PriorityClassName:  priorityClassSystemNodeCritical,
 					HostNetwork:        hostNetwork,
+					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
 					SecurityContext:    CommonPodSecurityContext(),
 					// Probe must run on every node, including control-plane.
 					Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},

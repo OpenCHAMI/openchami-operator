@@ -14,10 +14,12 @@ DaemonSet:   openchami-{name}-network-probe
 Namespace:   openchami-{name}
 Runs on:     ALL nodes (no nodeSelector)
 Priority:    system-node-critical
+hostNetwork: true
+dnsPolicy:   ClusterFirstWithHostNet
 
 Security: CommonSecurityContext() applies.
           No NET_BIND_SERVICE needed.
-          Netlink route inspection and TCP connects are unprivileged.
+          Netlink interface/address inspection and TCP connects are unprivileged.
 
 Env vars:
   PROBE_CLUSTER_NAME       = spec.clusterName
@@ -26,32 +28,35 @@ Env vars:
   PROBE_PROVISION_HOST     = spec.networkProbe.provisionNetwork.validateHost
   PROBE_PROVISION_PORT     = spec.networkProbe.provisionNetwork.validatePort
   PROBE_PROVISION_TIMEOUT  = spec.networkProbe.provisionNetwork.validateTimeout
+  PROBE_PROVISION_REVISION = hash of target configuration + probe algorithm
   PROBE_BMC_SUBNET         = spec.networkProbe.bmcNetwork.subnet
   PROBE_BMC_HOST           = spec.networkProbe.bmcNetwork.validateHost
   PROBE_BMC_PORT           = spec.networkProbe.bmcNetwork.validatePort
   PROBE_BMC_TIMEOUT        = spec.networkProbe.bmcNetwork.validateTimeout
+  PROBE_BMC_REVISION       = hash of target configuration + probe algorithm
   NODE_NAME                = fieldRef: spec.nodeName
 ```
 
 **Probe binary logic** (`cmd/probe/main.go` — implement here):
 ```go
 func probeNetwork(target) bool {
-    // 1. Check routing table via github.com/vishvananda/netlink
-    //    RouteGet(target IP in subnet) — if error, return false
-    // 2. If ValidateHost set: net.DialTimeout("tcp", host:port, timeout)
-    //    If error, return false
+    // 1. Require a usable local address in target.Subnet on an up,
+    //    non-loopback host interface. A default route does not count.
+    // 2. If ValidateHost set: TCP-dial host:port; failure returns false.
     return true
 }
 
-// Apply both true AND false labels explicitly:
-// openchami.org/{clusterName}/provision-network-ready = "true"|"false"
-// openchami.org/{clusterName}/bmc-network-ready       = "true"|"false"
-// Use nodeClient.CoreV1().Nodes().Patch(ctx, nodeName, MergePatchType, ...)
+// Patch readiness and revision atomically for each configured target:
+// openchami.org/{clusterName}-provision-network-ready = "true"|"false"
+// openchami.org/{clusterName}-provision-probe-revision = expected hash on
+// success, empty on failure. BMC uses the same scheme with "bmc".
+// A late ready=true patch from a legacy probe cannot restore a revoked revision.
+// Both status tallying and consumer selectors require true + current revision.
 ```
 
 **Node watch → status update:**
 When reconcile is triggered by a node label change, read all nodes,
-collect those with `=true` labels, update:
+collect those with `=true` labels AND the current target/algorithm revision, update:
 - `status.networkProbe.nodesWithProvisionAccess`
 - `status.networkProbe.nodesWithBMCAccess`
 
@@ -62,7 +67,9 @@ collect those with `=true` labels, update:
 
 ## 6.2 CoreDHCP DaemonSet — `internal/reconcilers/coredhcp.go`
 
-If probing enabled AND `NetworkProbeReady=False`:
+If probing enabled AND `NetworkProbeReady` is not true for the current generation:
+  First restrict an existing DaemonSet to current revision-qualified selectors,
+  even if its configMapRef is unavailable. Preserve its last-good pod/config fields.
   Set `DHCPReady=False, Reason=WaitingForNetworkProbe`
   Return `ctrl.Result{RequeueAfter: 30s}`
 
@@ -109,7 +116,9 @@ Node cordon watcher: when a node with CoreDHCP running gets
 Bootstrap token Job: after tokensmith ready, mint token into Secret
 `coredhcp-smd-token`. Only if Secret does not already exist.
 
-Condition: `DHCPReady=True` when NumberReady>0. Populate `status.coreDHCPNodes`.
+Condition: `DHCPReady=True` only for a current observed generation, positive desired
+count, all desired pods updated and ready/available, and zero misscheduled pods.
+This reports workload readiness, not successful DHCP exchanges.
 
 Config source (issue #66): the operator mirrors either a config rendered
 from `leaseRanges` (dev/test only) or the user ConfigMap named by
@@ -123,8 +132,10 @@ coresmd reaches SMD/boot-service through the gateway's public GET routes.
 
 ## 6.3 Magellan CronJob — `internal/reconcilers/magellan.go`
 
-If probing enabled AND `NetworkProbeReady=False`:
-  Set `MagellanReady=False, Reason=WaitingForNetworkProbe`, requeue 30s.
+If probing enabled AND `NetworkProbeReady` is not true for the current generation:
+  Restrict an existing CronJob to current revision-qualified selectors and suspend
+  future runs. Restore its previous suspend setting on recovery. Existing Jobs
+  are unaffected. Set `MagellanReady=False, Reason=WaitingForNetworkProbe`, requeue 30s.
 
 Node affinity via `spec.jobTemplate.spec.template.spec.nodeSelector`:
   `helpers.EffectiveNodeSelector(cluster, "bmc")`

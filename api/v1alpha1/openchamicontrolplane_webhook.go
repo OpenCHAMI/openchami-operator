@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openchami/openchami-operator/internal/networkprobe"
+
 	batchv1 "k8s.io/api/batch/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -418,6 +420,7 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 			}
 		}
 	} else {
+		allErrs = append(allErrs, validateNetworkProbeTargets(obj.Spec.NetworkProbe, probePath)...)
 		// 8. Probe + DHCP requires provisionNetwork.
 		if obj.Spec.Services.CoreDHCP.Enabled && obj.Spec.NetworkProbe.ProvisionNetwork == nil {
 			allErrs = append(allErrs, field.Required(
@@ -751,4 +754,29 @@ func isSecureOIDCRedirectURI(s string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// validateNetworkProbeTargets validates enabled probe configuration consistently
+// with the standalone binary. Mutating admission defaults intervalSeconds first.
+func validateNetworkProbeTargets(probe NetworkProbeSpec, probePath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	if probe.IntervalSeconds <= 0 {
+		errs = append(errs, field.Invalid(probePath.Child("intervalSeconds"), probe.IntervalSeconds, "must be positive"))
+	}
+	for _, item := range []struct {
+		name   string
+		target *NetworkProbeTarget
+	}{
+		{"provisionNetwork", probe.ProvisionNetwork}, {"bmcNetwork", probe.BMCNetwork},
+	} {
+		target := item.target
+		if target == nil {
+			continue
+		}
+		cfg := networkprobe.Target{Subnet: target.Subnet, Host: target.ValidateHost, Port: int(target.ValidatePort), Timeout: target.ValidateTimeout}
+		if err := cfg.Validate(); err != nil {
+			errs = append(errs, field.Invalid(probePath.Child(item.name), target, err.Error()))
+		}
+	}
+	return errs
 }

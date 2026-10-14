@@ -76,8 +76,9 @@ The order is fixed in `internal/controller/openchamicontrolplane_controller.go::
 ## NetworkProbe
 - **File:** `internal/reconcilers/networkprobe.go`
 - **Owns:** the network-probe DaemonSet plus a small controller that labels Nodes when probes pass.
-- **Labels applied:** `openchami.org/<clusterName>-provision-network-ready=true`, `openchami.org/<clusterName>-bmc-network-ready=true`. (One pair per cluster — Kubernetes label keys allow at most one `/`, so the cluster name is joined with a hyphen rather than a second slash.)
-- **Condition:** `NetworkProbeReady`.
+- **Labels applied:** readiness (`true` or `false`) and revision labels for provision and BMC targets: `openchami.org/<clusterName>-<kind>-network-ready` and `openchami.org/<clusterName>-<kind>-probe-revision`. Successful checks write the current revision; failed checks clear it.
+- **Condition:** `NetworkProbeReady`. Requires an eligible node for each configured target. Eligibility means a usable local host address in the subnet, optionally followed by a TCP check; a default route cannot qualify a node.
+- **Scheduling:** readiness and a current target/algorithm revision are required together. The probe runs in the host network namespace. Legacy labels do not qualify.
 - **Status:** populates `cluster.Status.NetworkProbe.NodesWithProvisionAccess[]` and `NodesWithBMCAccess[]`.
 - **Skipped when:** `spec.networkProbe.enabled=false`. In that case CoreDHCP/Magellan node selection comes from `spec.services.coreDHCP.nodeSelector` / `spec.services.magellan.nodeSelector` directly. The validation webhook enforces no-overlap across clusters (invariant 4) when probes are disabled.
 
@@ -88,14 +89,14 @@ The order is fixed in `internal/controller/openchamicontrolplane_controller.go::
 - **Config source:** rendered from `leaseRanges` (minimal, dev/test only) or copied verbatim from `spec.services.coreDHCP.configMapRef` (a ConfigMap in the CR's namespace, watched for changes). The pod template carries `openchami.org/coredhcp-config-hash` so config edits roll the pods.
 - **Mounts:** `/etc/coredhcp/config.yml` (config), `/tmp` (writable emptyDir; lease DBs go here), `/root_ca/root_ca.crt` (optional; the gateway TLS Secret's `ca.crt`).
 - **Ports:** UDP 67 (DHCP) and UDP 69 (coresmd TFTP), both hostPorts.
-- **Condition:** `DHCPReady`. `False/ConfigMapNotFound` when the referenced ConfigMap or key is missing; `False/InvalidConfig` when no config can be generated. In both cases the existing DaemonSet (if any) is left untouched.
+- **Condition:** `DHCPReady`. `False/ConfigMapNotFound` when the referenced ConfigMap or key is missing; `False/InvalidConfig` when no config can be generated. In both cases the last-good pod/config fields are preserved, but the node selector is tightened before returning. Ready requires a current DaemonSet generation, all desired pods updated and ready/available, and no misscheduled pods.
 - **Skipped when:** `spec.services.coreDHCP.enabled=false`.
 - **Depends on:** NetworkProbe (waits for `NetworkProbeReady` if probes enabled), SMD (auth token for SMD lookups; minted by tokensmith — TODO referenced in source as `phase06b`).
 
 ## Magellan
 - **File:** `internal/reconcilers/magellan.go`
 - **Owns:** a Magellan CronJob (BMC discovery scan).
-- **Condition:** `MagellanReady`.
+- **Condition:** `MagellanReady`. On a failed probe gate, an existing CronJob gets the current revision-qualified selector and is suspended. Its previous suspend setting is restored on recovery. Already-running Jobs are unaffected.
 - **Skipped when:** `spec.services.magellan.enabled=false`.
 - **Depends on:** NetworkProbe (BMC-network reachability), SMD (writes inventory back).
 
