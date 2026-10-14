@@ -11,6 +11,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +27,66 @@ import (
 // alphaProbeDS is the canonical DaemonSet name for the "alpha" probe.
 // Mirrors the formula used by NetworkProbeReconciler.buildDaemonSet().
 const alphaProbeDS = "openchami-alpha-network-probe"
+
+func TestNetworkProbeReconciler_ServiceAccountToken(t *testing.T) {
+	for _, initial := range []*bool{nil, new(false)} {
+		name := "inherited"
+		if initial != nil {
+			name = "disabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			cp := newControlPlane("alpha")
+			cp.Spec.NetworkProbe.Enabled = true
+			cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProvisionSubnet}
+			r := &NetworkProbeReconciler{Recorder: record.NewFakeRecorder(10)}
+			existing := r.buildDaemonSet(cp)
+			existing.Spec.Template.Spec.AutomountServiceAccountToken = initial
+			r.Client = fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(cp, existing).Build()
+			rbac := &RBACReconciler{Client: r.Client}
+			var firstTemplate *corev1.PodTemplateSpec
+			for range 2 {
+				if _, err := rbac.Reconcile(ctx, cp); err != nil {
+					t.Fatalf("reconciling RBAC: %v", err)
+				}
+				if _, err := r.Reconcile(ctx, cp); err != nil {
+					t.Fatalf("reconciling probe: %v", err)
+				}
+				ds := &appsv1.DaemonSet{}
+				if err := r.Client.Get(ctx, types.NamespacedName{Namespace: existing.Namespace, Name: existing.Name}, ds); err != nil {
+					t.Fatal(err)
+				}
+				if token := ds.Spec.Template.Spec.AutomountServiceAccountToken; token == nil || !*token {
+					t.Fatal("probe pod must explicitly enable service-account token mounting")
+				}
+				if firstTemplate != nil && !equality.Semantic.DeepEqual(*firstTemplate, ds.Spec.Template) {
+					t.Fatal("repeated reconciliation changed the pod template")
+				}
+				firstTemplate = ds.Spec.Template.DeepCopy()
+				for _, saName := range serviceAccountNames {
+					sa := &corev1.ServiceAccount{}
+					if err := r.Client.Get(ctx, types.NamespacedName{Namespace: existing.Namespace, Name: saName}, sa); err != nil {
+						t.Fatal(err)
+					}
+					if token := sa.AutomountServiceAccountToken; token == nil || *token {
+						t.Fatalf("service account %s must retain its disabled automount default", saName)
+					}
+				}
+			}
+			objects, err := r.Describe(cp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(objects) != 1 {
+				t.Fatalf("expected one described DaemonSet, got %d objects", len(objects))
+			}
+			described, ok := objects[0].(*appsv1.DaemonSet)
+			if !ok || !equality.Semantic.DeepEqual(*firstTemplate, described.Spec.Template) {
+				t.Fatal("Describe must match the reconciled probe pod template")
+			}
+		})
+	}
+}
 
 func TestNetworkProbeReconciler_DisabledTriviallyReady(t *testing.T) {
 	scheme := newScheme(t)
@@ -155,6 +216,9 @@ func TestNetworkProbeReconciler_AppliesDaemonSet(t *testing.T) {
 
 	if ds.Spec.Template.Spec.ServiceAccountName != ServiceNetworkProbe {
 		t.Errorf("expected SA=%q, got %q", ServiceNetworkProbe, ds.Spec.Template.Spec.ServiceAccountName)
+	}
+	if token := ds.Spec.Template.Spec.AutomountServiceAccountToken; token == nil || !*token {
+		t.Fatal("new probe pods must explicitly enable service-account token mounting")
 	}
 	if ds.Spec.Template.Spec.PriorityClassName != testPriorityClass {
 		t.Errorf("expected priority=system-node-critical, got %q", ds.Spec.Template.Spec.PriorityClassName)
