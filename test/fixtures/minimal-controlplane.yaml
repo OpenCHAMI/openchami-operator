@@ -59,7 +59,7 @@ spec:
       enabled: true
       replicas: 1
       image:
-        tag: pr-14
+        tag: pr-15
         pullPolicy: Always
     coreDHCP:
       enabled: true

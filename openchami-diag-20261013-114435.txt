@@ -1,0 +1,358 @@
+========================================
+CLUSTER STATE: PODS
+========================================
+NAMESPACE                       NAME                                                              READY   STATUS             RESTARTS      AGE   IP            NODE                          NOMINATED NODE   READINESS GATES
+cert-manager                    cert-manager-7c859cc7c-4zvz2                                      1/1     Running            0             21m   10.244.0.6    openchami-dev-control-plane   <none>           <none>
+cert-manager                    cert-manager-cainjector-6bdf7cfcb5-s6hg6                          1/1     Running            0             21m   10.244.0.7    openchami-dev-control-plane   <none>           <none>
+cert-manager                    cert-manager-webhook-788c7d5dfb-pjx8j                             1/1     Running            0             21m   10.244.0.4    openchami-dev-control-plane   <none>           <none>
+cnpg-system                     cnpg-controller-manager-bf7b57d44-wfphp                           1/1     Running            0             21m   10.244.0.3    openchami-dev-control-plane   <none>           <none>
+envoy-gateway-system            envoy-gateway-5578d5995f-bcmt5                                    1/1     Running            0             20m   10.244.0.11   openchami-dev-control-plane   <none>           <none>
+envoy-gateway-system            envoy-openchami-frodo-openchami-gateway-3e06194e-676594cd5rgz77   2/2     Running            0             18m   10.244.0.21   openchami-dev-control-plane   <none>           <none>
+kube-system                     coredns-6f6b679f8f-8z8pm                                          1/1     Running            0             21m   10.244.0.9    openchami-dev-control-plane   <none>           <none>
+kube-system                     coredns-6f6b679f8f-qst4v                                          1/1     Running            0             21m   10.244.0.2    openchami-dev-control-plane   <none>           <none>
+kube-system                     etcd-openchami-dev-control-plane                                  1/1     Running            0             22m   172.30.0.2    openchami-dev-control-plane   <none>           <none>
+kube-system                     kindnet-bsdht                                                     1/1     Running            0             21m   172.30.0.2    openchami-dev-control-plane   <none>           <none>
+kube-system                     kube-apiserver-openchami-dev-control-plane                        1/1     Running            0             22m   172.30.0.2    openchami-dev-control-plane   <none>           <none>
+kube-system                     kube-controller-manager-openchami-dev-control-plane               1/1     Running            0             22m   172.30.0.2    openchami-dev-control-plane   <none>           <none>
+kube-system                     kube-proxy-8p54w                                                  1/1     Running            0             21m   172.30.0.2    openchami-dev-control-plane   <none>           <none>
+kube-system                     kube-scheduler-openchami-dev-control-plane                        1/1     Running            0             22m   172.30.0.2    openchami-dev-control-plane   <none>           <none>
+local-path-storage              local-path-provisioner-57c5987fd4-ljlgq                           1/1     Running            0             21m   10.244.0.5    openchami-dev-control-plane   <none>           <none>
+openchami-frodo                 boot-service-6b4d96579b-hkdxk                                     1/1     Running            4 (17m ago)   19m   10.244.0.18   openchami-dev-control-plane   <none>           <none>
+openchami-frodo                 metadata-service-bc7dd4679-g6dcm                                  0/1     CrashLoopBackOff   2 (17s ago)   69s   10.244.0.27   openchami-dev-control-plane   <none>           <none>
+openchami-frodo                 openchami-frodo-postgres-1                                        1/1     Running            0             17m   10.244.0.24   openchami-dev-control-plane   <none>           <none>
+openchami-frodo                 smd-5dd75b86cd-9q9zf                                              1/1     Running            0             19m   10.244.0.16   openchami-dev-control-plane   <none>           <none>
+openchami-frodo                 tokensmith-7f49cd957c-tzxph                                       1/1     Running            0             19m   10.244.0.23   openchami-dev-control-plane   <none>           <none>
+openchami-operator-system       openchami-operator-controller-manager-6897b99984-lm5lk            1/1     Running            0             19m   10.244.0.15   openchami-dev-control-plane   <none>           <none>
+vault-secrets-operator-system   vault-secrets-operator-controller-manager-7bb6945749-8qn4v        2/2     Running            0             21m   10.244.0.8    openchami-dev-control-plane   <none>           <none>
+
+========================================
+OPENCHAMI CONTROL PLANE
+========================================
+Name:         frodo
+Namespace:    default
+Labels:       <none>
+Annotations:  <none>
+API Version:  openchami.openchami.org/v1alpha1
+Kind:         OpenCHAMIControlPlane
+Metadata:
+  Creation Timestamp:  2026-10-13T16:25:15Z
+  Finalizers:
+    openchami.org/cluster-protection
+  Generation:        1
+  Resource Version:  2829
+  UID:               d8dda1af-df41-4c9e-9ace-7299575bac2f
+Spec:
+  Cluster Name:  frodo
+  Database:
+    Instances:     1
+    Storage Size:  5Gi
+  Domain:          frodo.local
+  Images:
+    Stream:  release
+  Logging:
+    Compactor Enabled:       false
+    Compactor Schedule:      0 2 * * *
+    Enabled:                 false
+    Flush Interval Seconds:  30
+    Log Bucket:              testcluster-logs
+    Query Enabled:           false
+    Query Port:              8080
+    Query Replicas:          1
+    Retention Days:          7
+  Network Probe:
+    Enabled:           false
+    Interval Seconds:  300
+  Networking:
+    Gateway Class:  envoy
+    Tls:
+      Issuer:       selfsigned-dev
+      Secret Name:  frodo-gateway-tls
+  Observability:
+  Operator Channel:  stable
+  Platform:
+    Object Storage:
+      Bucket:        testcluster-boot-images
+      Endpoint:      http://openchami-localstack-dev:4566
+      Tls Insecure:  true
+    Vault:
+      Address:  http://openchami-vault-dev:8200
+      App Role Secret Ref:
+        Name:       testcluster-approle
+      Auth Method:  appRole
+  Services:
+    Boot Service:
+      Enabled:           true
+      Http Boot Script:  true
+      Public Routes:
+        Enabled:  true
+      Replicas:   1
+      Tls:
+        Enabled:  false
+    Core DHCP:
+      Enabled:               true
+      Known Lease Duration:  1h
+      Lease Ranges:
+        End:     192.168.100.200
+        Start:   192.168.100.100
+        Subnet:  192.168.100.0/24
+      Node Selector:
+        openchami.org/frodo-provision-network-ready:  true
+      Unknown Lease Duration:                         5m
+    Magellan:
+      Bmc Subnet:          192.168.200.0/24
+      Concurrency Policy:  Forbid
+      Enabled:             true
+      Node Selector:
+        openchami.org/frodo-bmc-network-ready:  true
+      Schedule:                                 0 * * * *
+    Metadata Service:
+      Enabled:  true
+      Image:
+        Pull Policy:       Always
+        Tag:               pr-14
+      Preserve Client IP:  false
+      Replicas:            1
+      Tls:
+        Enabled:  false
+    Smd:
+      Enabled:  true
+      Image:
+        Pull Policy:  Always
+        Tag:          v2.20.3
+      Public Routes:
+        Enabled:  true
+      Replicas:   1
+      Tls:
+        Enabled:  false
+    Tokensmith:
+      Cli OIDC:
+        Assignments:
+          allow_all
+        Redirect URIs:
+          http://127.0.0.1:8250/callback
+      Enabled:  true
+      Image:
+        Pull Policy:  Always
+        Tag:          pr-24
+      Oidc Provider:  vault
+      Replicas:       2
+      Tls:
+        Enabled:  false
+Status:
+  Cert Expiry Time:  2026-10-16T16:25:36Z
+  Conditions:
+    Last Transition Time:  2026-10-13T16:25:30Z
+    Message:               reconciliation is active
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  ReconcileActive
+    Last Transition Time:  2026-10-13T16:25:30Z
+    Message:               Namespace exists with correct labels
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  NamespaceReady
+    Last Transition Time:  2026-10-13T16:25:32Z
+    Message:               Vault paths, policies, and VSO resources configured
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  VaultConfigured
+    Last Transition Time:  2026-10-13T16:25:32Z
+    Message:               bucket testcluster-boot-images is ready
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  BucketReady
+    Last Transition Time:  2026-10-13T16:27:47Z
+    Message:               CNPG cluster healthy; 2 managed databases ready
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  DatabaseReady
+    Last Transition Time:  2026-10-13T16:25:42Z
+    Message:               service-identity CA, server cert, and per-service client certs all issued
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  ServiceIdentityReady
+    Last Transition Time:  2026-10-13T16:25:35Z
+    Message:               probe disabled, manual nodeSelectors in use
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  NetworkProbeReady
+    Last Transition Time:  2026-10-13T16:25:35Z
+    Message:               waiting for coredhcp DaemonSet pods to become ready
+    Observed Generation:   1
+    Reason:                Provisioning
+    Status:                False
+    Type:                  DHCPReady
+    Last Transition Time:  2026-10-13T16:25:35Z
+    Message:               magellan CronJob applied
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  MagellanReady
+    Last Transition Time:  2026-10-13T16:25:43Z
+    Message:               certificate valid until 2026-10-16T16:25:36Z
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  CertificatesValid
+    Last Transition Time:  2026-10-13T16:27:04Z
+    Message:               Envoy Gateway reports Programmed=True
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  GatewayReady
+    Last Transition Time:  2026-10-13T16:25:37Z
+    Message:               16 network policies applied
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  NetworkPoliciesReady
+    Last Transition Time:  2026-10-13T16:25:37Z
+    Message:               topology ConfigMap applied
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  TopologyPublished
+    Last Transition Time:  2026-10-13T16:25:37Z
+    Message:               logging disabled
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  LogBucketReady
+    Last Transition Time:  2026-10-13T16:25:37Z
+    Message:               logging disabled
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  LogCollectorReady
+    Last Transition Time:  2026-10-13T16:25:37Z
+    Message:               logq-compactor disabled
+    Observed Generation:   1
+    Reason:                Ready
+    Status:                True
+    Type:                  LogCompactorReady
+    Last Transition Time:  2026-10-13T16:25:37Z
+    Message:               waiting on services: [metadata-service]
+    Observed Generation:   1
+    Reason:                Provisioning
+    Status:                False
+    Type:                  ServicesReady
+  Gateway:
+    Routes:
+      Boot - Service:              /boot
+      Boot - Service - Admin:      /admin/boot
+      Metadata - Service:          /cloud-init
+      Metadata - Service - Admin:  /cloud-init/admin
+      Smd:                         /hsm
+      Tokensmith - Jwks:           /.well-known/jwks.json
+      Tokensmith - Token:          /oauth/token
+    URL:                           https://frodo.local
+  Managed By Version:              dev
+  Namespace:                       openchami-frodo
+  Observed Generation:             1
+  Phase:                           Provisioning
+  Services:
+    Boot - Service:
+      Endpoint:  http://boot-service.openchami-frodo.svc.cluster.local:27778
+      Message:   boot-service Deployment available
+      Ready:     true
+    Metadata - Service:
+      Endpoint:  http://metadata-service.openchami-frodo.svc.cluster.local:8081
+      Message:   waiting for metadata-service Deployment (availableReplicas=0)
+      Ready:     false
+    Smd:
+      Endpoint:  http://smd.openchami-frodo.svc.cluster.local:27779
+      Message:   smd deployment available
+      Ready:     true
+    Tokensmith:
+      Endpoint:       http://tokensmith.openchami-frodo.svc.cluster.local:8080
+      Message:        tokensmith Deployment available
+      Ready:          true
+  Topology Version:   sha256:14bb02ea28cde6dbb88a2d751c5def7405fb2c88a3abf8b6385d788691959f41
+  Vault Path Prefix:  openchami/frodo
+Events:
+  Type    Reason                 Age                   From                              Message
+  ----    ------                 ----                  ----                              -------
+  Normal  Ready                  19m                   openchamicontrolplane-controller  Provisioned AppRole SecretID into Secret openchami-frodo/testcluster-approle for VSO — Runbook: https://openchami.org/docs/ops/ready
+  Normal  ServiceIdentityIssued  3m37s (x48 over 18m)  openchamicontrolplane-controller  service-identity CA + tokensmith server cert + per-service client certs all available — Runbook: https://openchami.org/docs/ops/serviceidentityissued
+
+========================================
+NETWORK POLICIES & ENDPOINTS
+========================================
+NAME                               POD-SELECTOR                                 AGE
+allow-cnpg-kubernetes-api-egress   cnpg.io/cluster=openchami-frodo-postgres     18m
+allow-dns-egress                   <none>                                       18m
+allow-logs-egress                  app.kubernetes.io/name=funicular-collector   18m
+allow-vault-egress                 <none>                                       18m
+allow-versitygw-egress             app.kubernetes.io/name=boot-service          18m
+boot-service-policy                app.kubernetes.io/name=boot-service          18m
+coredhcp-policy                    app.kubernetes.io/name=coredhcp              18m
+default-deny-all                   <none>                                       18m
+funicular-policy                   app.kubernetes.io/name=funicular-collector   18m
+magellan-policy                    app.kubernetes.io/name=magellan              18m
+metadata-service-policy            app.kubernetes.io/name=metadata-service      18m
+networkprobe-policy                app.kubernetes.io/name=network-probe         18m
+postgres-egress-policy             cnpg.io/cluster=openchami-frodo-postgres     18m
+postgres-ingress-policy            cnpg.io/cluster=openchami-frodo-postgres     18m
+smd-policy                         app.kubernetes.io/name=smd                   18m
+tokensmith-internal-allow          app.kubernetes.io/name=tokensmith            7m49s
+tokensmith-policy                  app.kubernetes.io/name=tokensmith            18m
+tokensmith-vault-egress-allow      app.kubernetes.io/name=tokensmith            76s
+NAME                          ENDPOINTS           AGE
+boot-service                  10.244.0.18:27778   19m
+metadata-service                                  19m
+openchami-frodo-postgres-r    10.244.0.24:5432    19m
+openchami-frodo-postgres-ro   <none>              19m
+openchami-frodo-postgres-rw   10.244.0.24:5432    19m
+smd                           10.244.0.16:27779   19m
+tokensmith                    10.244.0.23:8080    19m
+
+========================================
+SECRETS (BOOTSTRAP TOKENS)
+========================================
+openchami-frodo-boot-service-bootstrap-token       Opaque                     1      17m
+openchami-frodo-metadata-service-bootstrap-token   Opaque                     1      17m
+openchami-frodo-tokensmith-oidc                    Opaque                     3      19m
+openchami-frodo-tokensmith-server-tls              kubernetes.io/tls          3      19m
+
+========================================
+OPERATOR LOGS
+========================================
+2026-10-13T16:44:07Z	INFO	prometheus-operator integration disabled, skipping (existing ServiceMonitor preserved)	{"controller": "openchamicontrolplane", "controllerGroup": "openchami.openchami.org", "controllerKind": "OpenCHAMIControlPlane", "OpenCHAMIControlPlane": {"name":"frodo","namespace":"default"}, "namespace": "default", "name": "frodo", "reconcileID": "2a55d04a-a2f5-4690-80ae-0d04dffa72ce", "cluster": "frodo", "reconciler": "servicemonitor", "generation": 1, "namespace": "openchami-frodo"}
+2026-10-13T16:44:07Z	INFO	logging disabled, skipping log bucket	{"controller": "openchamicontrolplane", "controllerGroup": "openchami.openchami.org", "controllerKind": "OpenCHAMIControlPlane", "OpenCHAMIControlPlane": {"name":"frodo","namespace":"default"}, "namespace": "default", "name": "frodo", "reconcileID": "2a55d04a-a2f5-4690-80ae-0d04dffa72ce", "cluster": "frodo", "reconciler": "logbucket", "generation": 1, "namespace": "openchami-frodo"}
+2026-10-13T16:44:07Z	INFO	logging disabled, skipping funicular collector	{"controller": "openchamicontrolplane", "controllerGroup": "openchami.openchami.org", "controllerKind": "OpenCHAMIControlPlane", "OpenCHAMIControlPlane": {"name":"frodo","namespace":"default"}, "namespace": "default", "name": "frodo", "reconcileID": "2a55d04a-a2f5-4690-80ae-0d04dffa72ce", "cluster": "frodo", "reconciler": "funicular", "generation": 1, "namespace": "openchami-frodo"}
+2026-10-13T16:44:07Z	INFO	logq-compactor disabled, skipping	{"controller": "openchamicontrolplane", "controllerGroup": "openchami.openchami.org", "controllerKind": "OpenCHAMIControlPlane", "OpenCHAMIControlPlane": {"name":"frodo","namespace":"default"}, "namespace": "default", "name": "frodo", "reconcileID": "2a55d04a-a2f5-4690-80ae-0d04dffa72ce", "cluster": "frodo", "reconciler": "logq-compactor", "generation": 1, "namespace": "openchami-frodo"}
+2026-10-13T16:44:07Z	INFO	logq-query disabled, skipping	{"controller": "openchamicontrolplane", "controllerGroup": "openchami.openchami.org", "controllerKind": "OpenCHAMIControlPlane", "OpenCHAMIControlPlane": {"name":"frodo","namespace":"default"}, "namespace": "default", "name": "frodo", "reconcileID": "2a55d04a-a2f5-4690-80ae-0d04dffa72ce", "cluster": "frodo", "reconciler": "logq-query", "generation": 1, "namespace": "openchami-frodo"}
+
+========================================
+TOKENSMITH LOGS
+========================================
+{"level":"warn","component":"tokenservice","handler":"oauth_token","client_ip":"10.244.0.27:33376","subject":"metadata-service","token_hash_prefix":"83cb88d0","consumed_at":1791908832,"consumed_by_ip":"10.244.0.19:57650","time":1791909855,"message":"Bootstrap token already consumed (replay attempt)"}
+[90m4:44PM[0m [32mINF[0m [1mRequest[0m [36mbytes_in=[0m230 [36mbytes_out=[0m103 [36mduration=[0m0.146463 [36mmethod=[0mPOST [36mremote_addr=[0m10.244.0.27:33376 [36mrequest_id=[0m [36mrequest_uri=[0m/oauth/token [36mstatus=[0m"Bad Request" [36mstatus_code=[0m400 [36muser_agent=[0mGo-http-client/1.1
+[90m4:44PM[0m [32mINF[0m [1mRequest[0m [36mbytes_in=[0m0 [36mbytes_out=[0m264 [36mduration=[0m0.144182 [36mmethod=[0mGET [36mremote_addr=[0m10.244.0.1:45392 [36mrequest_id=[0m [36mrequest_uri=[0m/health [36mstatus=[0mOK [36mstatus_code=[0m200 [36muser_agent=[0mkube-probe/1.31
+[90m4:44PM[0m [32mINF[0m [1mRequest[0m [36mbytes_in=[0m0 [36mbytes_out=[0m264 [36mduration=[0m0.128217 [36mmethod=[0mGET [36mremote_addr=[0m10.244.0.1:45388 [36mrequest_id=[0m [36mrequest_uri=[0m/health [36mstatus=[0mOK [36mstatus_code=[0m200 [36muser_agent=[0mkube-probe/1.31
+[90m4:44PM[0m [32mINF[0m [1mRequest[0m [36mbytes_in=[0m0 [36mbytes_out=[0m264 [36mduration=[0m0.143328 [36mmethod=[0mGET [36mremote_addr=[0m10.244.0.1:60748 [36mrequest_id=[0m [36mrequest_uri=[0m/health [36mstatus=[0mOK [36mstatus_code=[0m200 [36muser_agent=[0mkube-probe/1.31
+
+========================================
+METADATA SERVICE LOGS (PREVIOUS CRASH)
+========================================
+      --config string   config file (default is $HOME/.ochami-metadata.yaml)
+      --debug           Enable debug logging
+      --mock-smd        Use built-in mock SMD data instead of requiring SMD_URL
+
+2026/10/13 16:44:18 bootstrap token exchange via http://tokensmith.openchami-frodo.svc.cluster.local:8080/oauth/token failed: bootstrap token exchange canceled: context deadline exceeded
+
+========================================
+METADATA SERVICE LOGS (CURRENT)
+========================================
+      --config string   config file (default is $HOME/.ochami-metadata.yaml)
+      --debug           Enable debug logging
+      --mock-smd        Use built-in mock SMD data instead of requiring SMD_URL
+
+2026/10/13 16:44:18 bootstrap token exchange via http://tokensmith.openchami-frodo.svc.cluster.local:8080/oauth/token failed: bootstrap token exchange canceled: context deadline exceeded
