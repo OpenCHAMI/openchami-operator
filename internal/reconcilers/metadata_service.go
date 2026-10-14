@@ -198,6 +198,7 @@ func (r *MetadataServiceReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCH
 		"serve",
 		"--port", fmt.Sprintf("%d", metadataServicePort),
 		"--data-dir", metadataServiceDataDir,
+		"--tokensmith-target-service", bootstrapTokenAudience,
 	}
 	ns := ControlPlaneNamespace(cp)
 

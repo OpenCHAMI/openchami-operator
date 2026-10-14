@@ -75,9 +75,23 @@ The dev cluster brings up Vault on `127.0.0.1:8200` (root token `dev-root-token`
 
 ### Apply a test cluster
 
+For a clean, in-cluster deployment smoke test, run:
+
+```sh
+bash hack/deploy-tamarindo.sh
+```
+
+This deletes the existing `openchami-dev` kind cluster and the local Vault and
+LocalStack volumes, rebuilds the operator, labels the node for `frodo`, applies
+the minimal fixture, and waits for `.status.phase=Ready`. NetworkPolicies remain
+enabled. Failures print pod, condition, event, and metadata-service diagnostics.
+The script honors standard proxy environment variables, falls back to Docker's
+default proxy configuration, and adds local-network bypasses. It does not embed
+site-specific proxy addresses. Set `READY_TIMEOUT` to override the default `600s`.
+
 ```sh
 kubectl apply -f test/fixtures/minimal-controlplane.yaml
-kubectl get openchamicontrolplane testcluster -w
+kubectl get openchamicontrolplane frodo -w
 ```
 
 ### Reset
