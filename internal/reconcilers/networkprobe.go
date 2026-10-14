@@ -290,11 +290,14 @@ func (r *NetworkProbeReconciler) buildDaemonSet(cp *openchamiv1alpha1.OpenCHAMIC
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: ServiceNetworkProbe,
-					EnableServiceLinks: DisableServiceLinks(),
-					PriorityClassName:  priorityClassSystemNodeCritical,
-					HostNetwork:        hostNetwork,
-					DNSPolicy:          corev1.DNSClusterFirstWithHostNet,
-					SecurityContext:    CommonPodSecurityContext(),
+					// The probe patches Node labels through the Kubernetes API.
+					// Override the ServiceAccount's disabled automount default.
+					AutomountServiceAccountToken: new(true),
+					EnableServiceLinks:           DisableServiceLinks(),
+					PriorityClassName:            priorityClassSystemNodeCritical,
+					HostNetwork:                  hostNetwork,
+					DNSPolicy:                    corev1.DNSClusterFirstWithHostNet,
+					SecurityContext:              CommonPodSecurityContext(),
 					// Probe must run on every node, including control-plane.
 					Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					Containers:  []corev1.Container{container},

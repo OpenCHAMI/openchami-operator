@@ -128,3 +128,19 @@ alone does not make every listener safe. For production, use the existing
 `server4.listen: ["%eno1"]`); the operator does not rewrite user configuration.
 Host-network API/DNS and optional TCP connectivity, CNI enforcement, actual L2
 behavior, and rollout timing need deployment validation.
+
+## Network probe service-account token (issue #41)
+
+The probe pod template explicitly enables service-account token mounting so
+`/probe` can initialize its in-cluster Kubernetes client. All operator-created
+ServiceAccounts retain `automountServiceAccountToken: false`; the probe's
+pod-level setting takes precedence. Reconciliation updates existing probe
+DaemonSets and automatically rolls out replacement pods with projected API
+credentials. Manual ServiceAccount patches or pod deletion are unnecessary.
+
+After upgrading, verify replacement probe pods have a `kube-api-access-*`
+projected volume and no longer report a missing service-account token at startup.
+Token mounting alone does not guarantee `NetworkProbeReady=True`: the missing
+ClusterRoleBinding tracked by [issue #43](https://github.com/OpenCHAMI/openchami-operator/issues/43)
+and API/validation-target connectivity tracked by [issue #42](https://github.com/OpenCHAMI/openchami-operator/issues/42)
+are separate requirements for successful node labeling.
