@@ -74,7 +74,15 @@ var _ = Describe("Network", Ordered, func() {
 					"network-probe DaemonSet should have numberReady > 0")
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
-			By("waiting for the probe to apply a provision-network-ready label to at least one node")
+			By("verifying the probe ServiceAccount can patch nodes")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "auth", "can-i", "patch", "nodes", "--quiet",
+					"--as=system:serviceaccount:"+ns+":network-probe")
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "network-probe ServiceAccount should be authorized to patch nodes")
+			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
+
+			By("waiting for actual probe node labels")
 			label := networkNodeLabel(clusterName, "provision")
 			Eventually(func(g Gomega) {
 				ok := networkAnyNodeHasLabelKey(g, label)
