@@ -60,8 +60,7 @@ const (
 	vaultPort int32 = 8200
 
 	// httpsExternalPort permits TLS egress to arbitrary external endpoints.
-	// Used by tokensmith (OIDC discovery), magellan (BMC HTTPS), and the
-	// network probe (general reachability checks).
+	// Used by tokensmith (OIDC discovery) and magellan (BMC HTTPS).
 	httpsExternalPort int32 = 443
 
 	// dnsPort permits resolution against the cluster DNS service.
@@ -225,7 +224,7 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		r.metadataServicePolicy(ns),
 		r.coreDHCPPolicy(ns),
 		r.magellanPolicy(ns),
-		r.networkProbePolicy(ns),
+		r.networkProbePolicy(ns, cp, apiEgress),
 		r.funicularPolicy(ns, versityPeer),
 		r.postgresIngressPolicy(ns),
 		r.postgresEgressPolicy(ns),
@@ -609,20 +608,40 @@ func (r *NetworkPoliciesReconciler) magellanPolicy(ns string) networkingv1.Netwo
 	}
 }
 
-// networkProbePolicy permits the network-probe DaemonSet to reach arbitrary
-// HTTPS endpoints. The probe uses host networking; actual enforcement depends
-// on the CNI. Node-side API/DNS and other configured TCP validation ports must
-// be permitted by the deployment's host-network policy.
-func (r *NetworkPoliciesReconciler) networkProbePolicy(ns string) networkingv1.NetworkPolicy {
+// networkProbePolicy permits node-label patches to the discovered API endpoints
+// and TCP checks on the configured validation ports. Validation destinations
+// are unrestricted because validateHost may be a hostname and NetworkPolicy
+// has no hostname selector. The probe uses host networking; CNI enforcement
+// varies, and independent host-network policies must also permit this traffic.
+func (r *NetworkPoliciesReconciler) networkProbePolicy(ns string, cp *openchamiv1alpha1.OpenCHAMIControlPlane, apiEgress KubernetesAPIEgress) networkingv1.NetworkPolicy {
+	apiPorts := make([]networkingv1.NetworkPolicyPort, 0, len(apiEgress.Ports))
+	for _, p := range apiEgress.Ports {
+		apiPorts = append(apiPorts, portTCP(p))
+	}
+	egress := []networkingv1.NetworkPolicyEgressRule{{To: apiEgress.Peers, Ports: apiPorts}}
+
+	validationPorts := make([]networkingv1.NetworkPolicyPort, 0, 2)
+	seen := map[int32]bool{}
+	for _, target := range []*openchamiv1alpha1.NetworkProbeTarget{
+		cp.Spec.NetworkProbe.ProvisionNetwork, cp.Spec.NetworkProbe.BMCNetwork,
+	} {
+		if target == nil || target.ValidateHost == "" || target.ValidatePort < 1 || target.ValidatePort > 65535 || seen[target.ValidatePort] {
+			continue
+		}
+		seen[target.ValidatePort] = true
+		validationPorts = append(validationPorts, portTCP(target.ValidatePort))
+	}
+	if len(validationPorts) > 0 {
+		egress = append(egress, networkingv1.NetworkPolicyEgressRule{Ports: validationPorts})
+	}
+
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policyNetworkProbe),
 		Spec: networkingv1.NetworkPolicySpec{
 			PodSelector: podMatch(ServiceNetworkProbe),
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-			Egress: []networkingv1.NetworkPolicyEgressRule{{
-				Ports: []networkingv1.NetworkPolicyPort{portTCP(httpsExternalPort)},
-			}},
+			Egress:      egress,
 		},
 	}
 }

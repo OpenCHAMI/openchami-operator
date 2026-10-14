@@ -18,17 +18,30 @@ It is pre-written in `internal/reconcilers/helpers.go` — use it directly.
 | `allow-vault-egress` | all | — | Vault :8200 (vaultEgressPeer) |
 | `allow-versitygw-egress` | boot-service | — | VersityGW :10000 |
 | `allow-logs-egress` | funicular-collector | — | VersityGW :10000 |
-| `allow-cnpg-kubernetes-api-egress` | cnpg.io/cluster=* | — | default namespace :443 |
+| `allow-cnpg-kubernetes-api-egress` | cnpg.io/cluster=* | — | discovered Kubernetes API endpoint IPs and TCP ports |
 | `smd-policy` | smd | boot-service, metadata-service, coredhcp, magellan, envoy-gateway-system NS | postgres-rw:5432, tokensmith:8080 |
 | `tokensmith-policy` | tokensmith | all in NS, envoy-gateway-system NS | vault:8200, :443 |
 | `boot-service-policy` | boot-service | coredhcp, envoy-gateway-system NS | smd:27779, postgres-rw:5432, versitygw:10000, tokensmith:8080 |
 | `metadata-service-policy` | metadata-service | envoy-gateway-system NS | smd:27779, tokensmith:8080 |
 | `coredhcp-policy` | coredhcp | — | smd:27779, boot-service:27778 |
 | `magellan-policy` | magellan | — | smd:27779, :443 |
-| `networkprobe-policy` | network-probe | — | :443 (ValidateHost reachability) |
+| `networkprobe-policy` | network-probe | — | discovered Kubernetes API endpoint IPs and TCP ports; configured provision/BMC TCP validation ports |
 | `funicular-policy` | funicular-collector | — | versitygw:10000 |
 | `postgres-ingress-policy` | cnpg.io/cluster=* | smd, boot-service, cnpg cluster peers, cnpg-system NS | — |
 | `postgres-egress-policy` | cnpg.io/cluster=* | — | cnpg cluster peers :5432 |
+
+The probe's API rule reuses `KubernetesAPIEgressPeers` so it permits the real
+endpoint port (e.g. 6443 on RKE2), rather than assuming TCP/443. A separate
+rule permits each distinct configured `validatePort` when its `validateHost`
+is supplied. Validation destinations are unrestricted because hosts can be
+DNS names and NetworkPolicy has no hostname selector. Subnet-only targets
+need no validation-port allowance. DNS is covered by `allow-dns-egress`.
+
+Both CoreDHCP and the network probe use host networking. Whether ordinary
+NetworkPolicies apply to host-network pods depends on the CNI. These rules
+describe the probe's required egress where they are enforced; deployments
+must also allow it through any independent host firewall or host-network
+policy. Host networking and host subnet attachment checks remain required.
 
 ## Implementation pattern
 ```go
