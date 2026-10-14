@@ -6,6 +6,7 @@ package reconcilers
 
 import (
 	"context"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -35,6 +36,7 @@ const (
 	testExternalVersityGWAddr  = "http://172.16.5.10:10000"
 	testExternalVaultCIDR      = "10.20.30.40/32"
 	testExternalVersityGWCIDR  = "172.16.5.10/32"
+	testProbeSubnet            = "192.168.1.0/24"
 
 	// testAPIServerIP is the address seeded into the default/kubernetes
 	// Endpoints fixture so KubernetesAPIEgressPeers has something to discover.
@@ -609,6 +611,115 @@ func TestNetworkPoliciesReconciler_Idempotent(t *testing.T) {
 		t.Errorf("expected %d policies after idempotent passes, got %d",
 			len(expectedPolicyNames()), len(list.Items))
 	}
+}
+
+func TestNetworkPoliciesReconciler_NetworkProbeEgress(t *testing.T) {
+	target := func(host string, port int32) *openchamiv1alpha1.NetworkProbeTarget {
+		return &openchamiv1alpha1.NetworkProbeTarget{Subnet: testProbeSubnet, ValidateHost: host, ValidatePort: port}
+	}
+	tests := []struct {
+		name           string
+		provision, bmc *openchamiv1alpha1.NetworkProbeTarget
+		ports          []int32
+	}{
+		{name: "no targets"},
+		{name: "subnet only", provision: target("", 0), bmc: target("", 0)},
+		{name: "provision SSH", provision: target("192.168.1.1", 22), ports: []int32{22}},
+		{name: "BMC hostname", bmc: target("bmc.test.invalid", 623), ports: []int32{623}},
+		{name: "both targets", provision: target("192.168.1.1", 22), bmc: target("bmc.test.invalid", 623), ports: []int32{22, 623}},
+		{name: "duplicate ports", provision: target("192.168.1.1", 22), bmc: target("bmc.test.invalid", 22), ports: []int32{22}},
+		{name: "HTTPS validation", provision: target("192.168.1.1", 443), ports: []int32{443}},
+		{name: "API port validation", provision: target("192.168.1.1", testAPIServerPort), ports: []int32{testAPIServerPort}},
+		{name: "port without host", provision: target("", 22)},
+		{name: "host without port", provision: target("192.168.1.1", 0)},
+		{name: "invalid ports", provision: target("192.168.1.1", -1), bmc: target("bmc.test.invalid", 65536)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cp := newInClusterNetworkPolicyCluster("alpha")
+			cp.Spec.NetworkProbe.Enabled = true
+			cp.Spec.NetworkProbe.ProvisionNetwork = tt.provision
+			cp.Spec.NetworkProbe.BMCNetwork = tt.bmc
+			c := fake.NewClientBuilder().WithScheme(newScheme(t)).
+				WithObjects(cp, kubernetesEndpoints(testAPIServerIP, "192.168.150.10")).
+				WithTypeConverters(managedfields.NewDeducedTypeConverter()).Build()
+			r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			policy := policyByName(listPolicies(t, c, ControlPlaneNamespace(cp)), policyNetworkProbe)
+			assertNetworkProbeEgress(t, policy, []string{testAPIServerCIDR, "192.168.150.10/32"}, testAPIServerPort, tt.ports)
+		})
+	}
+}
+
+func assertNetworkProbeEgress(t *testing.T, policy *networkingv1.NetworkPolicy, apiCIDRs []string, apiPort int32, validationPorts []int32) {
+	t.Helper()
+	if policy == nil {
+		t.Fatal("missing networkprobe-policy")
+	}
+	if !reflect.DeepEqual(policy.Spec.PodSelector, podMatch(ServiceNetworkProbe)) ||
+		!reflect.DeepEqual(policy.Spec.PolicyTypes, []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}) {
+		t.Fatalf("unexpected probe selector or policy types: %+v", policy.Spec)
+	}
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(apiCIDRs))
+	for _, cidr := range apiCIDRs {
+		peers = append(peers, networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: cidr}})
+	}
+	want := []networkingv1.NetworkPolicyEgressRule{{To: peers, Ports: []networkingv1.NetworkPolicyPort{portTCP(apiPort)}}}
+	if len(validationPorts) > 0 {
+		ports := make([]networkingv1.NetworkPolicyPort, 0, len(validationPorts))
+		for _, port := range validationPorts {
+			ports = append(ports, portTCP(port))
+		}
+		want = append(want, networkingv1.NetworkPolicyEgressRule{Ports: ports})
+	}
+	if !reflect.DeepEqual(policy.Spec.Egress, want) {
+		t.Fatalf("probe egress = %+v, want %+v", policy.Spec.Egress, want)
+	}
+}
+
+func TestNetworkPoliciesReconciler_NetworkProbeEgressUpdates(t *testing.T) {
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{
+		Subnet: testProbeSubnet, ValidateHost: "192.168.1.1", ValidatePort: 22,
+	}
+	c := newNetworkPolicyClient(newScheme(t), cp)
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+	for _, port := range []int32{22, 8443, 0} {
+		cp.Spec.NetworkProbe.ProvisionNetwork.ValidatePort = port
+		if port == 0 {
+			cp.Spec.NetworkProbe.ProvisionNetwork.ValidateHost = ""
+		}
+		// Repeat each configuration to exercise SSA updates and idempotency.
+		for range 2 {
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
+				t.Fatalf("reconcile validation port %d: %v", port, err)
+			}
+			var ports []int32
+			if port != 0 {
+				ports = []int32{port}
+			}
+			policy := policyByName(listPolicies(t, c, ControlPlaneNamespace(cp)), policyNetworkProbe)
+			assertNetworkProbeEgress(t, policy, []string{testAPIServerCIDR}, testAPIServerPort, ports)
+		}
+	}
+}
+
+func TestNetworkPoliciesReconciler_NetworkProbeDescribeOffline(t *testing.T) {
+	cp := newInClusterNetworkPolicyCluster("alpha")
+	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{
+		Subnet: testProbeSubnet, ValidateHost: "probe.test.invalid", ValidatePort: 22,
+	}
+	r := &NetworkPoliciesReconciler{}
+	objs, err := r.Describe(cp)
+	if err != nil {
+		t.Fatalf("offline describe: %v", err)
+	}
+	policy := findDescribedPolicy(t, objs, policyNetworkProbe)
+	assertNetworkProbeEgress(t, policy, []string{SyntaxOnlyExternalCIDR}, defaultKubernetesAPIPort, []int32{22})
 }
 
 func TestNetworkPoliciesReconciler_TwoClustersIsolated(t *testing.T) {

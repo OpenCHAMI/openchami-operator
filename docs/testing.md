@@ -48,6 +48,31 @@ go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/...
 
 The build tag `e2e` keeps these tests out of `make test`. They take real time and need real infrastructure.
 
+### Probe egress policy verification (issue #42)
+
+The default kindnet setup does not enforce NetworkPolicy. Passing the usual
+kind tests therefore does not demonstrate that probe egress policies work.
+Use a disposable cluster with an enforcing CNI for connectivity verification:
+
+1. Configure reachable provision and BMC TCP validation endpoints on ports
+   other than 443 (e.g. 22 and 623), with subnets attached to eligible hosts.
+2. Verify `networkprobe-policy` contains those ports and a separate rule
+   restricted to the discovered API endpoint IPs and listening ports (e.g.
+   6443), while DNS remains allowed by `allow-dns-egress`.
+3. Confirm probe logs have no dial or node-patch failures and eligible nodes
+   receive readiness=true plus the current probe revision labels.
+4. Change a validation port, then remove TCP validation. Verify reconciliation
+   removes obsolete port allowances while preserving API access.
+
+The probe uses `hostNetwork: true`, whose NetworkPolicy enforcement varies by
+CNI. Establish whether the CNI applies these policies to host-network pods.
+Where it does not, verify the generated rules with an ordinary pod carrying
+the network-probe label in the control-plane namespace: configured validation
+ports and API access should succeed, while an unrelated listening TCP port
+should be blocked. Test the real host-network probe separately and account
+for any host firewall or CNI host policies. A successful host-network probe
+alone does not prove ordinary NetworkPolicy enforcement.
+
 ### Suite layout
 
 | File | Tests |
