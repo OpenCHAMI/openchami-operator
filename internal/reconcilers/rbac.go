@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	fieldManager     = "openchami-operator"
-	configReaderName = "operator-config-reader"
-	rbacAPIVersion   = "rbac.authorization.k8s.io/v1"
+	fieldManager       = "openchami-operator"
+	configReaderName   = "operator-config-reader"
+	rbacAPIVersion     = "rbac.authorization.k8s.io/v1"
+	serviceAccountKind = "ServiceAccount"
 )
 
 // serviceAccountNames lists every SA the operator creates in the cluster namespace.
@@ -38,7 +39,7 @@ var serviceAccountNames = []string{
 	configReaderName,
 }
 
-// RBACReconciler ensures ServiceAccounts, Roles, and ClusterRoles exist.
+// RBACReconciler ensures ServiceAccounts, roles, and their bindings exist.
 type RBACReconciler struct {
 	Client   client.Client
 	Recorder record.EventRecorder
@@ -77,12 +78,18 @@ func (r *RBACReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.Op
 		return ctrl.Result{}, fmt.Errorf("reconciling network-probe clusterrole: %w", err)
 	}
 
+	crb := r.buildNetworkProbeClusterRoleBinding(cp)
+	if err := r.Client.Patch(ctx, crb, client.Apply, //nolint:staticcheck // SSA via Patch is the supported pattern
+		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling network-probe clusterrolebinding: %w", err)
+	}
+
 	return ctrl.Result{}, nil
 }
 
 func (r *RBACReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	ns := ControlPlaneNamespace(cp)
-	objs := make([]client.Object, 0, len(serviceAccountNames)+3)
+	objs := make([]client.Object, 0, len(serviceAccountNames)+4)
 	for _, name := range serviceAccountNames {
 		objs = append(objs, r.buildServiceAccount(ns, name))
 	}
@@ -90,6 +97,7 @@ func (r *RBACReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (
 		r.buildConfigReaderRole(cp),
 		r.buildConfigReaderRoleBinding(cp),
 		r.buildNetworkProbeClusterRole(cp),
+		r.buildNetworkProbeClusterRoleBinding(cp),
 	)
 	return objs, nil
 }
@@ -97,7 +105,7 @@ func (r *RBACReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) (
 func (r *RBACReconciler) buildServiceAccount(ns, name string) *corev1.ServiceAccount {
 	f := false
 	return &corev1.ServiceAccount{
-		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"},
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: serviceAccountKind},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
@@ -133,7 +141,7 @@ func (r *RBACReconciler) buildConfigReaderRoleBinding(cp *openchamiv1alpha1.Open
 			Namespace: ns,
 		},
 		Subjects: []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
+			Kind:      serviceAccountKind,
 			Name:      configReaderName,
 			Namespace: ns,
 		}},
@@ -156,5 +164,23 @@ func (r *RBACReconciler) buildNetworkProbeClusterRole(cp *openchamiv1alpha1.Open
 			Resources: []string{"nodes"},
 			Verbs:     []string{"get", "patch"},
 		}},
+	}
+}
+
+func (r *RBACReconciler) buildNetworkProbeClusterRoleBinding(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *rbacv1.ClusterRoleBinding {
+	name := "openchami-" + cp.Spec.ClusterName + "-network-probe"
+	return &rbacv1.ClusterRoleBinding{
+		TypeMeta:   metav1.TypeMeta{APIVersion: rbacAPIVersion, Kind: "ClusterRoleBinding"},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Subjects: []rbacv1.Subject{{
+			Kind:      serviceAccountKind,
+			Name:      ServiceNetworkProbe,
+			Namespace: ControlPlaneNamespace(cp),
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     name,
+		},
 	}
 }

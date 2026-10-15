@@ -65,11 +65,17 @@ Role + RoleBinding for `operator-config-reader`:
 ClusterRole `openchami-{clusterName}-network-probe`:
 - get + patch on nodes (cluster-scoped for label writes)
 
+ClusterRoleBinding `openchami-{clusterName}-network-probe`:
+- references the matching network-probe ClusterRole
+- binds only ServiceAccount `network-probe` in `openchami-{clusterName}`
+- applied after the ClusterRole and included in `Describe()` output
+
 ## Deletion (reconcileDelete)
 1. Delete namespace (cascades resources)
 2. If annotation `openchami.org/cleanup-vault=true`: delete Vault paths
 3. If annotation `openchami.org/cleanup-s3=true`: delete bucket contents
-4. Delete ClusterRole `openchami-{clusterName}-network-probe`
+4. Delete ClusterRoleBinding, then ClusterRole `openchami-{clusterName}-network-probe`
+   (ignore missing resources; retain the finalizer and retry other errors)
 5. Remove finalizer
 
 ## Watches
