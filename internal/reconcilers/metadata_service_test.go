@@ -97,7 +97,8 @@ func TestMetadataServiceReconciler_AppliesAllResources(t *testing.T) {
 	// OCHAMI_METADATA_* env vars. Port and data-dir are passed via
 	// container args so the deployment is explicit and independent of
 	// any viper alias bugs in the upstream binary.
-	wantArgs := []string{"serve", "--port", "8081", "--data-dir", metadataServiceDataDir}
+	wantArgs := []string{"serve", "--port", "8081", "--data-dir", metadataServiceDataDir,
+		"--tokensmith-target-service", bootstrapTokenAudience}
 	if len(container.Args) != len(wantArgs) {
 		t.Fatalf("expected container args %v, got %v", wantArgs, container.Args)
 	}

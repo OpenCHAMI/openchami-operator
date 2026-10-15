@@ -199,6 +199,9 @@ func TestGatewayReconciler_AppliesSMDRateLimit(t *testing.T) {
 		len(btp.Spec.RateLimit.Global.Rules) != 1 {
 		t.Fatalf("BackendTrafficPolicy missing global rate-limit rule")
 	}
+	if btp.Spec.RateLimit.Type == nil || *btp.Spec.RateLimit.Type != egv1alpha1.GlobalRateLimitType { //nolint:staticcheck // Guard compatibility with the Envoy Gateway v1.5 CRD.
+		t.Errorf("rate-limit type=%v want Global", btp.Spec.RateLimit.Type) //nolint:staticcheck // Guard compatibility with the Envoy Gateway v1.5 CRD.
+	}
 	rule := btp.Spec.RateLimit.Global.Rules[0]
 	if rule.Limit.Requests != rateLimitRequests || rule.Limit.Unit != egv1alpha1.RateLimitUnitMinute {
 		t.Errorf("rate-limit value=%+v want %d/Minute", rule.Limit, rateLimitRequests)

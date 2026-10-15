@@ -75,6 +75,27 @@ The dev cluster brings up Vault on `127.0.0.1:8200` (root token `dev-root-token`
 
 ### Apply a test cluster
 
+For an in-cluster deployment smoke test, run:
+
+```sh
+bash hack/deploy-local.sh
+```
+
+This starts or reuses the `openchami-dev` kind cluster and local Vault/LocalStack
+stack, rebuilds and deploys the operator, labels the control-plane nodes for
+`testcluster`, applies the minimal fixture, and waits for `.status.phase=Ready`.
+NetworkPolicies remain enabled. Failures print pods, control-plane status,
+events, and operator logs. The prerequisites are the same as `make dev-up` and
+`make dev-deploy`; see [quickstart.md](quickstart.md). Proxy configuration is
+left to your environment and container runtime. Set `READY_TIMEOUT` to override
+the default `600s`.
+
+To delete the existing dev cluster and Vault/LocalStack volumes before deploying:
+
+```sh
+bash hack/deploy-local.sh --reset
+```
+
 ```sh
 kubectl apply -f test/fixtures/minimal-controlplane.yaml
 kubectl get openchamicontrolplane testcluster -w
