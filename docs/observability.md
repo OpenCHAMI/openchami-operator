@@ -53,6 +53,7 @@ The `validate-invariants` check fails if a reason ships without a runbook page.
 `internal/status/Reporter` reads conditions and computes `status.phase`. The mapping is:
 
 - All required conditions True → `Ready`.
+- `MagellanReady=False/NotConfigured` → `Degraded`, including previously Ready clusters. Discovery is unavailable; explicitly disable Magellan to opt out and allow the other services to reach Ready.
 - Any required condition False with `Reason=*Unreachable` → `Degraded` (recovery is in progress; requeue is scheduled).
 - Any required condition False with `Reason=*Failed` → `Failed`.
 - DeletionTimestamp set → `Deleting`.

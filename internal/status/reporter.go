@@ -89,7 +89,7 @@ func (r *Reporter) UpdateServiceStatus(
 //
 //  1. Failed       — any condition False with Reason containing "Error".
 //  2. Degraded     — CertificatesValid=False, or a service flipped Ready→NotReady,
-//     or NetworkProbeReady=False/NoEligibleNodes.
+//     or NetworkProbeReady=False/NoEligibleNodes, or discovery is NotConfigured.
 //  3. Provisioning — any condition False with Reason containing "Provisioning".
 //  4. Ready        — all conditions True and all enabled services Ready.
 //
@@ -106,6 +106,7 @@ func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlan
 		hasFailed         bool
 		hasDegradedCert   bool
 		hasNoEligible     bool
+		hasUnconfigured   bool
 		hasProvisioning   bool
 		anyConditionFalse bool
 	)
@@ -122,6 +123,9 @@ func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlan
 		}
 		if c.Type == conditions.ConditionNetworkProbeReady && c.Reason == conditions.ReasonNoEligibleNodes {
 			hasNoEligible = true
+		}
+		if c.Type == conditions.ConditionMagellanReady && c.Reason == conditions.ReasonNotConfigured {
+			hasUnconfigured = true
 		}
 		if strings.Contains(c.Reason, conditions.ReasonProvisioning) {
 			hasProvisioning = true
@@ -147,7 +151,7 @@ func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlan
 	switch {
 	case hasFailed:
 		cp.Status.Phase = openchamiv1alpha1.PhaseFailed
-	case hasDegradedCert, regressed != "", hasNoEligible:
+	case hasDegradedCert, regressed != "", hasNoEligible, hasUnconfigured:
 		cp.Status.Phase = openchamiv1alpha1.PhaseDegraded
 	case hasProvisioning, !allServicesReady:
 		cp.Status.Phase = openchamiv1alpha1.PhaseProvisioning

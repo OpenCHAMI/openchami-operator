@@ -120,11 +120,7 @@ spec:
           start: 192.168.100.100
           end: 192.168.100.200
     magellan:
-      enabled: true
-      bmcSubnet: 192.168.200.0/24
-      nodeSelector:
-        openchami.org/bmc: %[3]q
-      schedule: "0 * * * *"
+      enabled: false
   networking:
     gatewayClass: envoy
     tls:

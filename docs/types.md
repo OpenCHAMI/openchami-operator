@@ -449,7 +449,8 @@ const (
 Add to `internal/conditions/conditions.go` alongside the existing constants:
 
 ```go
-// ConditionMagellanReady is true when the Magellan CronJob exists.
+// ConditionMagellanReady is false with NotConfigured while enabled discovery
+// is unavailable. It is true when Magellan is explicitly disabled.
 ConditionMagellanReady = "MagellanReady"
 ```
 

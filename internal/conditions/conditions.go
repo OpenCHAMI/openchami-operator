@@ -71,7 +71,8 @@ const (
 	// has availableReplicas >= 1.
 	ConditionLogQueryReady = "LogQueryReady"
 
-	// ConditionMagellanReady is true when the Magellan CronJob exists.
+	// ConditionMagellanReady is false with NotConfigured while enabled discovery
+	// is unavailable. It is true when Magellan is explicitly disabled.
 	ConditionMagellanReady = "MagellanReady"
 
 	// ConditionNetworkPoliciesReady is true when all per-cluster
@@ -89,6 +90,7 @@ const (
 
 // Reasons used across multiple conditions.
 const (
+	ReasonNotConfigured       = "NotConfigured"
 	ReasonProvisioning        = "Provisioning"
 	ReasonReady               = "Ready"
 	ReasonError               = "Error"

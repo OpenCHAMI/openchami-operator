@@ -30,7 +30,7 @@ var _ = BeforeSuite(func() {
 |---|---|
 | E2E-03 | Probe DaemonSet runs; labels appear on kind node within 2 intervals |
 | E2E-04 | CoreDHCP waits for provision-network-ready=true before scheduling |
-| E2E-05 | Magellan waits for bmc-network-ready=true before scheduling |
+| E2E-05 | Unavailable Magellan reports NotConfigured and creates no CronJob |
 | E2E-06 | Misconfigured subnet → NetworkProbeReady=False + Warning Event |
 
 ## Observability tests — `test/e2e/observability_test.go`

@@ -22,6 +22,14 @@
   uses only stock plugins and works unchanged on the new image.
 
 ## Breaking changes
+- Magellan discovery is unavailable pending functional scan/collect/send wiring
+  (issue #44). The operator no longer creates no-op Magellan CronJobs and
+  suspends legacy operator-managed schedules, even if Magellan is disabled.
+  Existing Jobs and templates are retained; probe recovery does not resume them.
+  With Magellan enabled, `MagellanReady=False/NotConfigured` and the cluster phase
+  becomes `Degraded`. Set `spec.services.magellan.enabled: false` to explicitly
+  opt out of discovery and allow the remaining services to reach `Ready`.
+  This update does not enable discovery or require a CRD schema migration.
 - The `coredhcp` DaemonSet now also binds UDP 69 as a hostPort (coresmd TFTP).
   Nodes already running a TFTP server on 69 will not schedule the pod.
 - The unused `CLUSTER_NAME`, `LEASE_RANGES_JSON`, `UNKNOWN_LEASE_DURATION`

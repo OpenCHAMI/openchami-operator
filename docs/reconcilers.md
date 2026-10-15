@@ -95,10 +95,10 @@ The order is fixed in `internal/controller/openchamicontrolplane_controller.go::
 
 ## Magellan
 - **File:** `internal/reconcilers/magellan.go`
-- **Owns:** a Magellan CronJob (BMC discovery scan).
-- **Condition:** `MagellanReady`. On a failed probe gate, an existing CronJob gets the current revision-qualified selector and is suspended. Its previous suspend setting is restored on recovery. Already-running Jobs are unaffected.
-- **Skipped when:** `spec.services.magellan.enabled=false`.
-- **Depends on:** NetworkProbe (BMC-network reachability), SMD (writes inventory back).
+- **Behavior:** creates no new CronJobs while functional discovery is unavailable (issue #44). Suspends legacy operator-managed schedules, preserving their templates and existing Jobs. Probe recovery does not resume them.
+- **Condition:** `MagellanReady=False/NotConfigured` when enabled; the cluster phase is `Degraded`. When explicitly disabled, sets `MagellanReady=True/Ready` with a disabled message and still suspends existing schedules.
+- **Preview:** `Describe()` returns no new Magellan resources.
+- **Future dependencies:** NetworkProbe (BMC placement), BMC credentials, SMD endpoint and renewable authentication, and a scan/collect/send command pipeline with reliable failure exit codes.
 
 ## Certificates
 - **File:** `internal/reconcilers/certificates.go`
