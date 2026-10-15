@@ -83,7 +83,7 @@ bash hack/deploy-local.sh
 
 This starts or reuses the `openchami-dev` kind cluster and local Vault/LocalStack
 stack, rebuilds and deploys the operator, labels the control-plane nodes for
-`frodo`, applies the minimal fixture, and waits for `.status.phase=Ready`.
+`testcluster`, applies the minimal fixture, and waits for `.status.phase=Ready`.
 NetworkPolicies remain enabled. Failures print pods, control-plane status,
 events, and operator logs. The prerequisites are the same as `make dev-up` and
 `make dev-deploy`; see [quickstart.md](quickstart.md). Proxy configuration is
@@ -98,7 +98,7 @@ bash hack/deploy-local.sh --reset
 
 ```sh
 kubectl apply -f test/fixtures/minimal-controlplane.yaml
-kubectl get openchamicontrolplane frodo -w
+kubectl get openchamicontrolplane testcluster -w
 ```
 
 ### Reset

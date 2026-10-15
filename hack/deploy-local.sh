@@ -23,8 +23,8 @@ diagnostics() {
   trap - ERR
   echo "Deployment failed (exit $exit_code). Cluster diagnostics:" >&2
   kube get pods -A -o wide || true
-  kube -n default describe openchamicontrolplane frodo || true
-  kube -n openchami-frodo get events --sort-by=.lastTimestamp || true
+  kube -n default describe openchamicontrolplane testcluster || true
+  kube -n openchami-testcluster get events --sort-by=.lastTimestamp || true
   kube -n openchami-operator-system logs \
     -l control-plane=controller-manager --tail=80 || true
   exit "$exit_code"
@@ -46,8 +46,8 @@ kube -n openchami-operator-system wait --for=condition=Available \
 
 echo "Preparing the sample control plane..."
 kube label nodes -l node-role.kubernetes.io/control-plane \
-  openchami.org/frodo-provision-network-ready=true \
-  openchami.org/frodo-bmc-network-ready=true --overwrite
+  openchami.org/testcluster-provision-network-ready=true \
+  openchami.org/testcluster-bmc-network-ready=true --overwrite
 admission_deadline=$((SECONDS + 120))
 until kube apply --dry-run=server --request-timeout=15s \
   -f test/fixtures/minimal-controlplane.yaml; do
@@ -60,5 +60,5 @@ kube apply -f test/fixtures/minimal-controlplane.yaml
 
 echo "Waiting up to $READY_TIMEOUT for the sample control plane..."
 kube -n default wait --for=jsonpath='{.status.phase}'=Ready \
-  openchamicontrolplane/frodo --timeout="$READY_TIMEOUT"
+  openchamicontrolplane/testcluster --timeout="$READY_TIMEOUT"
 kube get svc -n envoy-gateway-system
