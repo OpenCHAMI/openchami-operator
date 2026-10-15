@@ -10,6 +10,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,6 +22,7 @@ import (
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
+	"github.com/openchami/openchami-operator/internal/reconcilers"
 )
 
 const testNamespace = "default"
@@ -153,5 +156,64 @@ var _ = Describe("OpenCHAMIControlPlane Controller", func() {
 			})).To(Succeed())
 			Expect(deps.Items).To(BeEmpty())
 		})
+	})
+})
+
+var _ = Describe("Magellan legacy schedule suspension", func() {
+	It("preserves legacy SSA-owned fields and Jobs while stopping future runs", func() {
+		const namespace = "openchami-magellan-upgrade"
+		ns := &corev1.Namespace{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Namespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		}
+		Expect(k8sClient.Patch(ctx, ns, client.Apply, client.FieldOwner("openchami-operator"))).To(Succeed()) //nolint:staticcheck // Seed legacy SSA ownership.
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, ns)).To(Succeed()) })
+		cp := &openchamiv1alpha1.OpenCHAMIControlPlane{}
+		cp.Spec.ClusterName = "magellan-upgrade"
+		cp.Spec.Services.Magellan.Enabled = true
+		cj := &batchv1.CronJob{
+			TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "CronJob"},
+			ObjectMeta: metav1.ObjectMeta{Name: reconcilers.ServiceMagellan, Namespace: namespace,
+				Labels: map[string]string{
+					"app.kubernetes.io/name":     reconcilers.ServiceMagellan,
+					"app.kubernetes.io/instance": namespace,
+					"openchami.org/managed-by":   "operator",
+				},
+				Annotations: map[string]string{"openchami.org/probe-original-suspend": "false"},
+			},
+			Spec: batchv1.CronJobSpec{
+				Schedule: "*/30 * * * *", ConcurrencyPolicy: batchv1.ForbidConcurrent, Suspend: new(false),
+				JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						RestartPolicy: corev1.RestartPolicyOnFailure,
+						Containers:    []corev1.Container{{Name: reconcilers.ServiceMagellan, Image: "ghcr.io/openchami/magellan:v0.5.1"}},
+					},
+				}}},
+			},
+		}
+		Expect(k8sClient.Patch(ctx, cj, client.Apply, client.FieldOwner("openchami-operator"))).To(Succeed()) //nolint:staticcheck // Seed legacy SSA ownership.
+		key := client.ObjectKeyFromObject(cj)
+		before := &batchv1.CronJob{}
+		Expect(k8sClient.Get(ctx, key, before)).To(Succeed())
+		job := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: "magellan-previous", Namespace: namespace},
+			Spec:       before.Spec.JobTemplate.Spec,
+		}
+		Expect(k8sClient.Create(ctx, job)).To(Succeed())
+		jobBefore := job.DeepCopy()
+		r := &reconcilers.MagellanReconciler{Client: k8sClient}
+		for range 2 {
+			_, err := r.Reconcile(ctx, cp)
+			Expect(err).NotTo(HaveOccurred())
+			after := &batchv1.CronJob{}
+			Expect(k8sClient.Get(ctx, key, after)).To(Succeed())
+			expected := before.Spec.DeepCopy()
+			expected.Suspend = new(true)
+			Expect(after.Spec).To(Equal(*expected))
+			Expect(after.Annotations).To(Equal(before.Annotations))
+		}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), job)).To(Succeed())
+		Expect(job.Spec).To(Equal(jobBefore.Spec))
+		Expect(job.Status).To(Equal(jobBefore.Status))
 	})
 })

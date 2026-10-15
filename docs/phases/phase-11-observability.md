@@ -6,6 +6,7 @@
 ```
 All conditions True + all services ready        → Ready
 CertificatesValid=False (any reason)            → Degraded
+MagellanReady=False, NotConfigured               → Degraded
 Any service Ready→NotReady transition           → Degraded + Warning Event
 NetworkProbeReady=False, NoEligibleNodes        → Degraded + Warning Event
 Any condition False, Reason contains Provisioning → Provisioning

@@ -7,7 +7,7 @@ A Kubernetes operator that deploys and manages the [OpenCHAMI](https://openchami
 Each `OpenCHAMIControlPlane` custom resource produces a self-contained, namespace-isolated OpenCHAMI deployment:
 
 - **Stateful services** — SMD, tokensmith, boot-service, metadata-service, fru-tracker, power-control — backed by a CloudNativePG-managed Postgres cluster.
-- **Network services** — CoreDHCP for PXE, Magellan for BMC discovery — pinned to nodes that pass a configurable network probe.
+- **Network services** — CoreDHCP for PXE runs on nodes that pass a configurable network probe. Magellan discovery is unavailable pending end-to-end wiring; when enabled it reports `MagellanReady=False/NotConfigured`, and legacy schedules are suspended (issue #44).
 - **Object storage** — boot images and Parquet logs land in an external VersityGW (or any S3-compatible endpoint).
 - **Auth + secrets** — service-to-service tokens and credentials flow through an external Vault, surfaced into the namespace via the Vault Secrets Operator.
 - **Gateway** — TLS-terminated, OIDC-protected access via Envoy Gateway HTTPRoute.

@@ -161,79 +161,35 @@ var _ = Describe("Network", Ordered, func() {
 		})
 	})
 
-	Context("E2E-05: Magellan waits for bmc-network-ready=true before scheduling", func() {
+	Context("E2E-05: unavailable Magellan discovery does not schedule no-op Jobs", func() {
 		const clusterName = "netmag05"
 
-		var (
-			labeledNode string
-			labelKey    string
-		)
-
 		BeforeAll(func() {
-			labelKey = networkNodeLabel(clusterName, "bmc")
 			yaml := networkProbeClusterYAML(clusterName, "10.0.0.0/24", "10.1.0.0/24")
 			yaml = networkEnableMagellan(yaml, "10.1.0.0/24")
 			networkApplyCluster(clusterName, yaml)
 		})
 
 		AfterAll(func() {
-			if labeledNode != "" && labelKey != "" {
-				By("removing the manual bmc-network-ready label from " + labeledNode)
-				cmd := exec.Command("kubectl", "label", "node", labeledNode, labelKey+"-", "--overwrite")
-				_, _ = utils.Run(cmd)
-			}
 			networkDeleteCluster(clusterName)
 		})
 
-		It("should create an unsuspended Magellan CronJob whose podSelector references the BMC probe label", func() {
-			ns := networkClusterNamespace(clusterName)
-			cj := "magellan"
-
-			By("waiting for the magellan CronJob to exist")
+		It("should report NotConfigured and leave the CronJob absent", func() {
+			By("waiting for a truthful MagellanReady condition")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "cronjob", cj, "-n", ns)
-				_, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "magellan CronJob should exist")
-			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
-
-			By("verifying the magellan CronJob is not suspended")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "cronjob", cj, "-n", ns,
-					"-o", "jsonpath={.spec.suspend}")
+				cmd := exec.Command("kubectl", "get", "openchamicontrolplane", clusterName,
+					"-o", `jsonpath={.status.conditions[?(@.type=="MagellanReady")].status}/{.status.conditions[?(@.type=="MagellanReady")].reason}`)
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				// kubectl renders an unset bool as empty; treat both "" and "false" as not-suspended.
-				v := strings.TrimSpace(out)
-				g.Expect(v == "" || v == "false").To(BeTrue(),
-					"magellan CronJob must not be suspended (got %q)", v)
+				g.Expect(strings.TrimSpace(out)).To(Equal("False/NotConfigured"))
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
-			By("verifying the magellan pod template's nodeSelector references the BMC probe label")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "cronjob", cj, "-n", ns,
-					"-o", fmt.Sprintf("jsonpath={.spec.jobTemplate.spec.template.spec.nodeSelector['%s']}",
-						strings.ReplaceAll(labelKey, ".", "\\.")))
-				out, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "kubectl get magellan CronJob failed")
-				g.Expect(strings.TrimSpace(out)).To(Equal("true"),
-					"magellan nodeSelector should require %s=true", labelKey)
-			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
-
-			By("manually labeling a node to simulate a successful BMC-network probe")
-			labeledNode = networkPickKindNode()
-			cmd := exec.Command("kubectl", "label", "node", labeledNode, labelKey+"=true", "--overwrite")
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to label node %s", labeledNode)
-
-			By("waiting for the magellan CronJob to remain healthy after the label is applied")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "cronjob", cj, "-n", ns,
-					"-o", "jsonpath={.metadata.name}")
-				out, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(strings.TrimSpace(out)).To(Equal(cj),
-					"magellan CronJob should still exist post-labeling")
-			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
+			By("verifying the operator did not create a no-op schedule")
+			cmd := exec.Command("kubectl", "get", "cronjob", "magellan",
+				"-n", networkClusterNamespace(clusterName), "--ignore-not-found", "-o", "name")
+			out, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.TrimSpace(out)).To(BeEmpty())
 		})
 	})
 
@@ -466,8 +422,8 @@ func networkEnableCoreDHCP(yaml, leaseSubnet, leaseStart, leaseEnd string) strin
 
 // networkEnableMagellan rewrites the disabled magellan block produced by
 // networkProbeClusterYAML into an enabled one with the supplied BMC subnet.
-// nodeSelector is intentionally omitted; the operator generates it from probe
-// labels.
+// Discovery remains unconfigured even when probing is enabled; this fixture
+// verifies the operator does not create a no-op schedule.
 func networkEnableMagellan(yaml, bmcSubnet string) string {
 	block := fmt.Sprintf(`    magellan:
       enabled: true

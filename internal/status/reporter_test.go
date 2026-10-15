@@ -317,3 +317,29 @@ func makeStatusTestCert(t *testing.T, notAfter time.Time) []byte {
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+func TestReporter_MagellanNotConfiguredDegrades(t *testing.T) {
+	for _, previous := range []openchamiv1alpha1.ClusterPhase{"", openchamiv1alpha1.PhaseReady, openchamiv1alpha1.PhaseDegraded} {
+		t.Run(string(previous), func(t *testing.T) {
+			c := newTestCluster("alpha")
+			c.Spec.Services.Magellan.Enabled = true
+			c.Status.Phase = previous
+			addAllConditionsTrue(c)
+			allServicesReady(c)
+			addCondition(c, conditions.ConditionMagellanReady, metav1.ConditionFalse, conditions.ReasonNotConfigured)
+			r := &Reporter{Recorder: record.NewFakeRecorder(8)}
+			for range 2 {
+				r.ComputeAndSetPhase(c)
+				if c.Status.Phase != openchamiv1alpha1.PhaseDegraded {
+					t.Fatalf("unavailable discovery must degrade cluster, got %q", c.Status.Phase)
+				}
+			}
+			c.Spec.Services.Magellan.Enabled = false
+			addCondition(c, conditions.ConditionMagellanReady, metav1.ConditionTrue, conditions.ReasonReady)
+			r.ComputeAndSetPhase(c)
+			if c.Status.Phase != openchamiv1alpha1.PhaseReady {
+				t.Fatalf("explicitly disabling discovery must allow Ready, got %q", c.Status.Phase)
+			}
+		})
+	}
+}

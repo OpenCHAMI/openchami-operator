@@ -7,11 +7,9 @@ package reconcilers
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,171 +24,82 @@ import (
 	"github.com/openchami/openchami-operator/internal/logging"
 )
 
-const (
-	magellanRequeueAfter           = 30 * time.Second
-	probeOriginalSuspendAnnotation = "openchami.org/probe-original-suspend"
-)
+const magellanRequeueAfter = 30 * time.Second
 
-// MagellanReconciler ensures the Magellan BMC-discovery CronJob exists.
-//
-// The reconciler intentionally does not parse Magellan output or surface any
-// HPC inventory: that is SMD's responsibility (see invariant #10).
+// MagellanReconciler prevents no-op discovery Jobs until the command,
+// BMC credentials, and SMD authentication are wired end to end.
+// Inventory processing belongs to Magellan and SMD (invariant #10).
 type MagellanReconciler struct {
 	Client   client.Client
 	Recorder record.EventRecorder
 }
 
-// Reconcile applies the Magellan CronJob and reports MagellanReady.
+// Reconcile suspends legacy schedules and reports discovery as unavailable.
+// Existing Jobs are retained for diagnosis. Probe recovery must not resume
+// schedules while functional discovery remains unimplemented.
 func (r *MagellanReconciler) Reconcile(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) (ctrl.Result, error) {
-	log := logging.Enrich(ctx, cp, "magellan")
-
-	if !cp.Spec.Services.Magellan.Enabled {
-		log.Info("magellan disabled, skipping")
-		return ctrl.Result{}, nil
-	}
-
-	ready := probeGateReady(cp, probeTypeBMC)
-	if err := r.restrictExistingSelection(ctx, cp, ready); err != nil {
-		return ctrl.Result{}, err
-	}
-	if !ready {
-		log.Info("waiting for network probe before deploying magellan")
+	log := logging.EnrichWithResource(logging.Enrich(ctx, cp, "magellan"), kindCronJob, ServiceMagellan)
+	if err := r.suspendExistingCronJob(ctx, cp); err != nil {
 		apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
 			Type:               conditions.ConditionMagellanReady,
 			Status:             metav1.ConditionFalse,
-			Reason:             conditions.ReasonWaitingForProbe,
-			Message:            "waiting for NetworkProbeReady before scheduling magellan",
+			Reason:             conditions.ReasonError,
+			Message:            err.Error(),
 			ObservedGeneration: cp.Generation,
 		})
-		return ctrl.Result{RequeueAfter: magellanRequeueAfter}, nil
+		return ctrl.Result{}, err
 	}
 
-	cj := r.buildCronJob(cp)
-	cjLog := logging.EnrichWithResource(log, kindCronJob, cj.Name)
-	cjLog.Info("applying magellan CronJob")
-	if err := r.Client.Patch(ctx, cj, client.Apply, //nolint:staticcheck // SSA via Patch
-		client.ForceOwnership, client.FieldOwner(fieldManager)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("applying magellan CronJob: %w", err)
-	}
-
-	apimeta.SetStatusCondition(&cp.Status.Conditions, metav1.Condition{
+	condition := metav1.Condition{
 		Type:               conditions.ConditionMagellanReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             conditions.ReasonReady,
-		Message:            "magellan CronJob applied",
+		Message:            "magellan disabled; existing schedules suspended",
 		ObservedGeneration: cp.Generation,
-	})
-	return ctrl.Result{}, nil
+	}
+	if cp.Spec.Services.Magellan.Enabled {
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = conditions.ReasonNotConfigured
+		condition.Message = "magellan discovery is not implemented: command pipeline, BMC credentials, and SMD authentication are not wired; scheduling suspended"
+		log.Info("magellan discovery unavailable; scheduling suspended")
+	} else {
+		log.Info("magellan disabled; scheduling suspended")
+	}
+	apimeta.SetStatusCondition(&cp.Status.Conditions, condition)
+	return ctrl.Result{RequeueAfter: magellanRequeueAfter}, nil
 }
 
-// restrictExistingSelection suspends future runs while old labels are withdrawn.
-// Existing Jobs are unaffected; the prior suspend setting is restored on recovery.
-func (r *MagellanReconciler) restrictExistingSelection(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, ready bool) error {
+// suspendExistingCronJob changes only suspend, using a dedicated field manager
+// so omitting the legacy workload fields does not prune them during SSA.
+func (r *MagellanReconciler) suspendExistingCronJob(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) error {
 	current := &batchv1.CronJob{}
 	key := types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: ServiceMagellan}
 	if err := r.Client.Get(ctx, key, current); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("reading existing magellan selector: %w", err)
+		return fmt.Errorf("reading existing magellan CronJob: %w", err)
 	}
-	original, saved := current.Annotations[probeOriginalSuspendAnnotation]
-	suspend := current.Spec.Suspend != nil && *current.Spec.Suspend
-	metadata := map[string]any{"name": key.Name, "namespace": key.Namespace}
-	if !ready {
-		if !saved {
-			original = strconv.FormatBool(suspend)
-		}
-		metadata["annotations"] = map[string]any{probeOriginalSuspendAnnotation: original}
-		suspend = true
-	} else if saved {
-		var err error
-		suspend, err = strconv.ParseBool(original)
-		if err != nil {
-			return fmt.Errorf("parsing saved magellan suspend setting: %w", err)
-		}
+	if current.Labels[labelManagedBy] != managedByValue ||
+		current.Labels[labelAppInst] != "openchami-"+cp.Spec.ClusterName ||
+		current.Labels[labelAppName] != ServiceMagellan {
+		return fmt.Errorf("refusing to suspend magellan CronJob %s without matching operator and cluster labels", key)
 	}
 	patch := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": batchAPIVersion, "kind": kindCronJob, "metadata": metadata,
-		probeSpecKey: map[string]any{"suspend": suspend, "jobTemplate": map[string]any{probeSpecKey: map[string]any{
-			"template": map[string]any{probeSpecKey: map[string]any{"nodeSelector": selectorMap(EffectiveNodeSelector(cp, probeTypeBMC))}},
-		}}},
+		"apiVersion": batchAPIVersion,
+		"kind":       kindCronJob,
+		"metadata":   map[string]any{"name": key.Name, "namespace": key.Namespace},
+		"spec":       map[string]any{"suspend": true},
 	}}
 	if err := r.Client.Patch(ctx, patch, client.Apply, //nolint:staticcheck // SSA via Patch
-		client.ForceOwnership, client.FieldOwner(probeGateFieldManager)); err != nil {
-		return fmt.Errorf("restricting existing magellan scheduling: %w", err)
+		client.ForceOwnership, client.FieldOwner(fieldManager+"-magellan-suspension")); err != nil {
+		return fmt.Errorf("suspending existing magellan CronJob: %w", err)
 	}
 	return nil
 }
 
-// Describe returns the Kubernetes objects this reconciler would apply.
-// Returns an empty (but non-nil) slice when Magellan is disabled.
-func (r *MagellanReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
-	if !cp.Spec.Services.Magellan.Enabled {
-		return []client.Object{}, nil
-	}
-	return []client.Object{r.buildCronJob(cp)}, nil
-}
-
-// magellanPodLabels returns the canonical label set for magellan pods.
-func magellanPodLabels(cp *openchamiv1alpha1.OpenCHAMIControlPlane) map[string]string {
-	return map[string]string{
-		labelAppName:   ServiceMagellan,
-		labelAppInst:   "openchami-" + cp.Spec.ClusterName,
-		labelManagedBy: managedByValue,
-	}
-}
-
-func (r *MagellanReconciler) buildCronJob(cp *openchamiv1alpha1.OpenCHAMIControlPlane) *batchv1.CronJob {
-	labels := magellanPodLabels(cp)
-	tmpVol, tmpMount := TmpVolume()
-	mag := cp.Spec.Services.Magellan
-
-	env := []corev1.EnvVar{
-		{Name: "MAGELLAN_BMC_SUBNET", Value: mag.BMCSubnet},
-		fieldRefEnv("NODE_NAME", "spec.nodeName"),
-	}
-
-	image, pullPolicy := ResolveImage(cp, ServiceMagellan)
-	container := corev1.Container{
-		Name:            ServiceMagellan,
-		Image:           image,
-		ImagePullPolicy: pullPolicy,
-		SecurityContext: CommonSecurityContext(),
-		Env:             env,
-		VolumeMounts:    []corev1.VolumeMount{tmpMount},
-	}
-	if mag.Resources != nil {
-		container.Resources = *mag.Resources
-	}
-
-	return &batchv1.CronJob{
-		TypeMeta: metav1.TypeMeta{APIVersion: batchAPIVersion, Kind: kindCronJob},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ServiceMagellan,
-			Namespace: ControlPlaneNamespace(cp),
-			Labels:    labels,
-		},
-		Spec: batchv1.CronJobSpec{
-			Schedule:          mag.Schedule,
-			ConcurrencyPolicy: mag.ConcurrencyPolicy,
-			JobTemplate: batchv1.JobTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: batchv1.JobSpec{
-					Template: corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{Labels: labels},
-						Spec: corev1.PodSpec{
-							ServiceAccountName: ServiceMagellan,
-							EnableServiceLinks: DisableServiceLinks(),
-							RestartPolicy:      corev1.RestartPolicyOnFailure,
-							NodeSelector:       EffectiveNodeSelector(cp, probeTypeBMC),
-							SecurityContext:    CommonPodSecurityContext(),
-							Containers:         []corev1.Container{container},
-							Volumes:            []corev1.Volume{tmpVol},
-						},
-					},
-				},
-			},
-		},
-	}
+// Describe returns no new resources while discovery is unavailable. Legacy
+// CronJobs are suspended by Reconcile; Describe cannot inspect live resources.
+func (r *MagellanReconciler) Describe(_ *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
+	return []client.Object{}, nil
 }

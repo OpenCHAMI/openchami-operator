@@ -132,20 +132,23 @@ coresmd reaches SMD/boot-service through the gateway's public GET routes.
 
 ## 6.3 Magellan CronJob — `internal/reconcilers/magellan.go`
 
-If probing enabled AND `NetworkProbeReady` is not true for the current generation:
-  Restrict an existing CronJob to current revision-qualified selectors and suspend
-  future runs. Restore its previous suspend setting on recovery. Existing Jobs
-  are unaffected. Set `MagellanReady=False, Reason=WaitingForNetworkProbe`, requeue 30s.
+Functional discovery is not implemented yet (issue #44). Until the scan →
+collect → authenticated send pipeline is wired:
 
-Node affinity via `spec.jobTemplate.spec.template.spec.nodeSelector`:
-  `helpers.EffectiveNodeSelector(cluster, "bmc")`
+- Do not create a Magellan CronJob, even when enabled and the probe is ready.
+- Suspend any existing operator-managed Magellan CronJob via server-side apply,
+  including when Magellan is disabled. Preserve its template and existing Jobs.
+- Probe recovery must not restore the old no-op schedule.
+- Set `MagellanReady=False/NotConfigured` when enabled, with an explanatory
+  message. This degrades the cluster phase, including clusters previously Ready.
+- When explicitly disabled, set `MagellanReady=True/Ready` with a disabled message
+  so stale conditions do not prevent the other services from becoming Ready.
+- `Describe()` returns no new Magellan resources.
 
-The Magellan sub-reconciler's ONLY job:
-- Deploy the CronJob
-- Set `MagellanReady=True` when CronJob exists
-
-Do NOT parse Magellan output. Do NOT populate any HPC inventory fields.
-What Magellan finds is SMD's business.
+Future functional discovery must retain BMC placement through
+`helpers.EffectiveNodeSelector(cluster, "bmc")`. Do NOT parse Magellan output or
+populate HPC inventory fields in the operator. What Magellan finds is SMD's
+business.
 
 ```bash
 tools/check-phase.sh 6
