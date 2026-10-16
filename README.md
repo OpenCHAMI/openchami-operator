@@ -42,9 +42,8 @@ make dev-down
 ```
 
 **Current status:** this is a bootstrap and debugging entrypoint, not yet a
-reliable green/red environment acceptance test. The suite has known setup
-conflicts: a test may try to recreate the operator namespace and its cleanup
-may remove resources needed by later tests. A failed run does not by itself
+reliable green/red environment acceptance test. Some scenarios may still fail
+for independent fixture or behavior issues. A failed run does not by itself
 mean your machine is configured incorrectly. Start with the first failure,
 not the number of later failures or skips.
 

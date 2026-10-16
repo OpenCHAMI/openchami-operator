@@ -95,20 +95,8 @@ else
   echo 'Starting Kind, Vault, LocalStack, and prerequisite controllers...'
   make dev-up
 fi
-echo 'Building binaries and deploying the operator...'
+echo 'Building binaries needed by the E2E tests...'
 make build
-make dev-deploy
 
-echo 'Waiting for admission webhooks...'
-deadline=$((SECONDS + 120))
-until kube apply --dry-run=server --request-timeout=15s \
-  -f test/fixtures/minimal-controlplane.yaml >/dev/null 2>&1; do
-  if (( SECONDS >= deadline )); then
-    echo 'ERROR: Admission webhooks did not become ready within 120 seconds.' >&2
-    exit 1
-  fi
-  sleep 2
-done
-
-echo 'Running the E2E suite (test failures are expected to be investigated separately)...'
+echo 'Running the E2E suite (shared suite setup deploys the operator and waits for admission)...'
 go test -race -v -count=1 -timeout 30m -tags e2e ./test/e2e/... -args -ginkgo.v
