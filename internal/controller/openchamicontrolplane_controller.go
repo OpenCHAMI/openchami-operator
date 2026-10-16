@@ -16,6 +16,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
@@ -407,6 +408,12 @@ func (r *OpenCHAMIControlPlaneReconciler) nodeToCluster(ctx context.Context, obj
 	var requests []reconcile.Request
 	for _, c := range clusterList.Items {
 		if !c.Spec.NetworkProbe.Enabled {
+			if c.Spec.Services.CoreDHCP.Enabled && labels.SelectorFromSet(
+				reconcilers.EffectiveNodeSelector(&c, "provision")).Matches(labels.Set(node.Labels)) {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{Name: c.Name, Namespace: c.Namespace},
+				})
+			}
 			continue
 		}
 		// Readiness and revision can change independently during a probe upgrade.
@@ -432,6 +439,8 @@ func (r *OpenCHAMIControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) err
 		Owns(&appsv1.DaemonSet{}).
 		Owns(&batchv1.CronJob{}).
 		Owns(&corev1.ConfigMap{}).
+		// The mapper runs for both old and new objects on updates, so removing
+		// placement labels also revokes previously allowed node addresses.
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.nodeToCluster)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.secretToCluster)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.configMapToCluster)).
