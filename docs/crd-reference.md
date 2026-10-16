@@ -546,7 +546,7 @@ Status is patched **last** on every reconcile (invariant 6). The operator never 
 |---|---|
 | `Provisioning` | At least one reconciler has not yet reported `Ready=True`. |
 | `Ready` | All required reconcilers report `Ready=True`. |
-| `Degraded` | At least one previously-Ready reconciler now reports `Ready=False` and recovery is in progress. |
+| `Degraded` | A cluster previously in `Ready` or `Degraded` has a `False` condition whose reason does not contain `Provisioning`, such as `VaultConfigured=False/Unreachable`. Also selected for invalid certificates, service readiness regressions, no eligible probe nodes, or unconfigured discovery. Conditions whose reason contains `Error` take precedence and select `Failed`. |
 | `Deleting` | `metadata.deletionTimestamp` is set; the finalizer is doing cleanup. |
 | `Failed` | A reconciler reported a fatal, unrecoverable condition (rare; most failures fall into `Degraded` and requeue). |
 

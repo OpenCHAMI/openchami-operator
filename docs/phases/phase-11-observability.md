@@ -9,9 +9,17 @@ CertificatesValid=False (any reason)            → Degraded
 MagellanReady=False, NotConfigured               → Degraded
 Any service Ready→NotReady transition           → Degraded + Warning Event
 NetworkProbeReady=False, NoEligibleNodes        → Degraded + Warning Event
+Previous phase Ready or Degraded + any False condition
+  whose Reason does not contain Provisioning   → Degraded (unless Error wins)
 Any condition False, Reason contains Provisioning → Provisioning
 Any condition False, Reason contains Error       → Failed
 ```
+
+Precedence is Failed, Degraded, Provisioning, then Ready. A recoverable Vault
+outage during initial provisioning stays Provisioning; after Ready it becomes
+Degraded and stays Degraded across retries while the outage condition persists,
+including when dependent services begin provisioning again. Once all conditions
+and enabled services recover, the phase returns to Ready.
 
 ## Reporter methods
 ```go

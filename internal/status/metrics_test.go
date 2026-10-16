@@ -141,3 +141,34 @@ func TestMetrics_VaultReachable_FalseWhenConfiguredFalse(t *testing.T) {
 		t.Errorf("openchami_cluster_vault_reachable: want 0 when not configured, got %v", got)
 	}
 }
+
+func TestMetrics_VaultOutageAndRecovery(t *testing.T) {
+	const name = "metric-vault-outage"
+	c := metricsCluster(name)
+	r := &Reporter{Recorder: record.NewFakeRecorder(8)}
+	for _, reachable := range []bool{true, false, false, true} {
+		conditionStatus, reason := metav1.ConditionFalse, conditions.ReasonUnreachable
+		wantReady, wantDegraded := 0.0, 1.0
+		if reachable {
+			conditionStatus, reason = metav1.ConditionTrue, conditions.ReasonReady
+			wantReady, wantDegraded = 1, 0
+		}
+		addCondition(c, conditions.ConditionVaultConfigured, conditionStatus, reason)
+		r.ComputeAndSetPhase(c)
+		r.UpdateMetrics(c)
+		for _, metric := range []struct {
+			name string
+			got  float64
+			want float64
+		}{
+			{"ready", testutil.ToFloat64(clusterReady.WithLabelValues(name)), wantReady},
+			{"vault reachable", testutil.ToFloat64(clusterVaultReachable.WithLabelValues(name)), wantReady},
+			{"Ready phase", testutil.ToFloat64(clusterPhase.WithLabelValues(name, string(openchamiv1alpha1.PhaseReady))), wantReady},
+			{"Degraded phase", testutil.ToFloat64(clusterPhase.WithLabelValues(name, string(openchamiv1alpha1.PhaseDegraded))), wantDegraded},
+		} {
+			if metric.got != metric.want {
+				t.Errorf("Vault reachable=%t, %s: want %v, got %v", reachable, metric.name, metric.want, metric.got)
+			}
+		}
+	}
+}

@@ -90,6 +90,7 @@ func (r *Reporter) UpdateServiceStatus(
 //  1. Failed       — any condition False with Reason containing "Error".
 //  2. Degraded     — CertificatesValid=False, or a service flipped Ready→NotReady,
 //     or NetworkProbeReady=False/NoEligibleNodes, or discovery is NotConfigured.
+//     Also any non-Provisioning False condition while previously Ready or Degraded.
 //  3. Provisioning — any condition False with Reason containing "Provisioning".
 //  4. Ready        — all conditions True and all enabled services Ready.
 //
@@ -103,12 +104,13 @@ func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlan
 
 	// Walk the conditions once, gathering everything the ladder needs.
 	var (
-		hasFailed         bool
-		hasDegradedCert   bool
-		hasNoEligible     bool
-		hasUnconfigured   bool
-		hasProvisioning   bool
-		anyConditionFalse bool
+		hasFailed            bool
+		hasDegradedCert      bool
+		hasNoEligible        bool
+		hasUnconfigured      bool
+		hasProvisioning      bool
+		hasRecoverableOutage bool
+		anyConditionFalse    bool
 	)
 	for _, c := range cp.Status.Conditions {
 		if c.Status != metav1.ConditionFalse {
@@ -129,11 +131,16 @@ func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlan
 		}
 		if strings.Contains(c.Reason, conditions.ReasonProvisioning) {
 			hasProvisioning = true
+		} else {
+			hasRecoverableOutage = true
 		}
 	}
 
 	allServicesReady := r.allEnabledServicesReady(cp)
 	allConditionsTrue := !anyConditionFalse
+	// Continue reporting an outage after the first Ready→Degraded transition,
+	// even if dependent services subsequently begin provisioning again.
+	wasReadyOrDegraded := previous == openchamiv1alpha1.PhaseReady || previous == openchamiv1alpha1.PhaseDegraded
 
 	// Emit warning events for the degraded sub-cases. Done here (not at each
 	// rule branch) so a state that triggers multiple rules still surfaces them.
@@ -151,7 +158,7 @@ func (r *Reporter) ComputeAndSetPhase(cp *openchamiv1alpha1.OpenCHAMIControlPlan
 	switch {
 	case hasFailed:
 		cp.Status.Phase = openchamiv1alpha1.PhaseFailed
-	case hasDegradedCert, regressed != "", hasNoEligible, hasUnconfigured:
+	case hasDegradedCert, regressed != "", hasNoEligible, hasUnconfigured, wasReadyOrDegraded && hasRecoverableOutage:
 		cp.Status.Phase = openchamiv1alpha1.PhaseDegraded
 	case hasProvisioning, !allServicesReady:
 		cp.Status.Phase = openchamiv1alpha1.PhaseProvisioning

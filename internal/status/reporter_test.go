@@ -188,6 +188,75 @@ func TestReporter_ProvisioningReason(t *testing.T) {
 	}
 }
 
+func TestReporter_RecoverableConditionOutage(t *testing.T) {
+	for _, condition := range []string{conditions.ConditionVaultConfigured, conditions.ConditionBucketReady} {
+		t.Run(condition, func(t *testing.T) {
+			c := newTestCluster("outage")
+			addAllConditionsTrue(c)
+			allServicesReady(c)
+			r := &Reporter{Recorder: record.NewFakeRecorder(8)}
+			r.ComputeAndSetPhase(c)
+			if c.Status.Phase != openchamiv1alpha1.PhaseReady {
+				t.Fatalf("before outage: want Ready, got %q", c.Status.Phase)
+			}
+
+			addCondition(c, condition, metav1.ConditionFalse, conditions.ReasonUnreachable)
+			for reconcile := range 3 {
+				if reconcile == 1 {
+					// A dependent service may become unavailable while the
+					// underlying outage persists. Degraded must still win.
+					c.Status.Services[reconcilers.ServiceSMD] = openchamiv1alpha1.ServiceStatus{Ready: false}
+					addCondition(c, conditions.ConditionServicesReady, metav1.ConditionFalse, conditions.ReasonProvisioning)
+				}
+				r.ComputeAndSetPhase(c)
+				if c.Status.Phase != openchamiv1alpha1.PhaseDegraded {
+					t.Fatalf("outage reconcile %d: want Degraded, got %q", reconcile, c.Status.Phase)
+				}
+			}
+
+			addCondition(c, condition, metav1.ConditionTrue, conditions.ReasonReady)
+			addCondition(c, conditions.ConditionServicesReady, metav1.ConditionTrue, conditions.ReasonReady)
+			allServicesReady(c)
+			r.ComputeAndSetPhase(c)
+			if c.Status.Phase != openchamiv1alpha1.PhaseReady {
+				t.Fatalf("after recovery: want Ready, got %q", c.Status.Phase)
+			}
+		})
+	}
+}
+
+func TestReporter_RecoverableConditionPrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		previous openchamiv1alpha1.ClusterPhase
+		reason   string
+		want     openchamiv1alpha1.ClusterPhase
+	}{
+		{"new cluster", "", conditions.ReasonUnreachable, openchamiv1alpha1.PhaseProvisioning},
+		{"startup outage", openchamiv1alpha1.PhaseProvisioning, conditions.ReasonUnreachable, openchamiv1alpha1.PhaseProvisioning},
+		{"ready outage", openchamiv1alpha1.PhaseReady, conditions.ReasonUnreachable, openchamiv1alpha1.PhaseDegraded},
+		{"ongoing outage", openchamiv1alpha1.PhaseDegraded, conditions.ReasonUnreachable, openchamiv1alpha1.PhaseDegraded},
+		{"ready provisioning", openchamiv1alpha1.PhaseReady, conditions.ReasonProvisioning, openchamiv1alpha1.PhaseProvisioning},
+		{"degraded provisioning", openchamiv1alpha1.PhaseDegraded, conditions.ReasonProvisioning, openchamiv1alpha1.PhaseProvisioning},
+		{"error outranks degradation", openchamiv1alpha1.PhaseDegraded, conditions.ReasonError, openchamiv1alpha1.PhaseFailed},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestCluster("precedence")
+			addAllConditionsTrue(c)
+			allServicesReady(c)
+			c.Status.Phase = tt.previous
+			addCondition(c, conditions.ConditionVaultConfigured, metav1.ConditionFalse, tt.reason)
+			// Provisioning elsewhere must not mask the recoverable outage.
+			addCondition(c, conditions.ConditionDatabaseReady, metav1.ConditionFalse, conditions.ReasonProvisioning)
+			r := &Reporter{Recorder: record.NewFakeRecorder(8)}
+			r.ComputeAndSetPhase(c)
+			if c.Status.Phase != tt.want {
+				t.Fatalf("want %q, got %q", tt.want, c.Status.Phase)
+			}
+		})
+	}
+}
+
 func TestReporter_ErrorReasonFails(t *testing.T) {
 	c := newTestCluster("alpha")
 	addAllConditionsTrue(c)

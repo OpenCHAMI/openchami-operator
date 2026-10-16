@@ -56,10 +56,6 @@ const (
 	lifecycleDevVaultAddrDefault = "https://vault.vault-system.svc.cluster.local:8200"
 	lifecycleVaultAddrEnvVar     = "E2E_VAULT_ADDR"
 
-	// lifecycleBadVaultAddr is a deliberately unreachable Vault endpoint
-	// used to drive ConditionVaultConfigured=False / Reason=Unreachable.
-	lifecycleBadVaultAddr = "https://vault-does-not-exist.invalid:8200"
-
 	// lifecycleConditionTrue / lifecycleConditionFalse are the metav1.Condition
 	// status string literals; reused across helpers to keep golangci-lint
 	// (goconst) happy.
@@ -179,13 +175,44 @@ func lifecycleDeleteCluster(name string) {
 	}
 }
 
-// lifecyclePatchVaultAddress patches the cluster's spec.platform.vault.address
-// using a strategic merge patch.
-func lifecyclePatchVaultAddress(name, addr string) {
-	patch := fmt.Sprintf(`{"spec":{"platform":{"vault":{"address":%q}}}}`, addr)
-	cmd := exec.Command("kubectl", "patch", "openchamicontrolplane", name, "--type=merge", "-p", patch)
-	output, err := cmd.CombinedOutput()
-	Expect(err).NotTo(HaveOccurred(), "kubectl patch failed: %s", string(output))
+// lifecyclePauseVault interrupts the operator's actual Vault connection without
+// restarting Vault or losing its in-memory dev data. Only use a dedicated test
+// Vault: every control plane using this endpoint is affected by the outage.
+func lifecyclePauseVault() func() {
+	container := os.Getenv("E2E_VAULT_CONTAINER")
+	if container == "" {
+		if os.Getenv(lifecycleVaultAddrEnvVar) != "" {
+			Skip("E2E-08 requires E2E_VAULT_CONTAINER naming the dedicated test Vault when E2E_VAULT_ADDR is overridden")
+		}
+		container = "openchami-vault-dev"
+	}
+	output, err := exec.Command("docker", "inspect", "--format", "{{.State.Running}} {{.State.Paused}}", container).CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "inspect dedicated Vault container: %s", output)
+	Expect(strings.TrimSpace(string(output))).To(Equal("true false"), "test Vault must be running and unpaused")
+
+	paused := true
+	resume := func() {
+		if !paused {
+			return
+		}
+		output, err := exec.Command("docker", "unpause", container).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "resume dedicated Vault container: %s", output)
+		paused = false
+	}
+	// Register recovery before fault injection so even a failed assertion or
+	// partially successful pause cannot leave the test Vault paused.
+	DeferCleanup(resume)
+	output, err = exec.Command("docker", "pause", container).CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "pause dedicated Vault container: %s", output)
+	return resume
+}
+
+func lifecycleClusterPhase(name string) string {
+	output, err := exec.Command("kubectl", "get", "openchamicontrolplane", name, "-o", "jsonpath={.status.phase}").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 // lifecycleClearVersionPin patches the cluster back to the stable channel
@@ -239,7 +266,9 @@ func lifecycleNamespaceGone(name string) bool {
 	return strings.TrimSpace(string(output)) == ""
 }
 
-var _ = Describe("Lifecycle", Ordered, func() {
+// E2E-08 interrupts the shared development Vault, so lifecycle specs must not
+// overlap specs on other Ginkgo parallel workers.
+var _ = Describe("Lifecycle", Ordered, Serial, func() {
 	// Each context cleans up its own cluster CRs in AfterEach so that
 	// failures in one don't leave residue for later contexts.
 	Context("E2E-01 single cluster lifecycle", func() {
@@ -343,30 +372,40 @@ var _ = Describe("Lifecycle", Ordered, func() {
 			lifecycleDeleteCluster(name)
 		})
 
-		It("reports VaultConfigured=False then recovers after the address is fixed", func() {
-			By("applying a cluster with an unreachable Vault address")
-			lifecycleApplyCluster(name, lifecycleBadVaultAddr, name)
+		It("degrades a Ready cluster throughout a Vault outage and recovers without an operator restart", func() {
+			By("waiting for a healthy cluster before interrupting Vault")
+			lifecycleApplyCluster(name, lifecycleDevVaultAddr(), name)
+			Eventually(func() string {
+				return lifecycleClusterPhase(name)
+			}).WithTimeout(lifecycleClusterTimeout).
+				WithPolling(lifecycleClusterPolling).Should(Equal("Ready"))
+
+			By("pausing the dedicated development Vault without losing its data")
+			resumeVault := lifecyclePauseVault()
 
 			By("waiting for VaultConfigured=False with Reason=Unreachable")
 			Eventually(func() bool {
 				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionFalse &&
-					lifecycleConditionReason(name, "VaultConfigured") == "Unreachable"
-			}).WithTimeout(lifecycleConditionTimeout).
-				WithPolling(lifecycleClusterPolling).
-				Should(BeTrue(), "VaultConfigured did not transition to False/Unreachable")
-
-			// The recovery half requires a reachable Vault. The default is
-			// the kind dev environment provisioned by `make dev-up`; set
-			// E2E_VAULT_ADDR to override for non-kind dev loops.
-			By("patching to a reachable Vault address")
-			lifecyclePatchVaultAddress(name, lifecycleDevVaultAddr())
-
-			By("waiting for VaultConfigured=True")
-			Eventually(func() bool {
-				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionTrue
+					lifecycleConditionReason(name, "VaultConfigured") == "Unreachable" &&
+					lifecycleClusterPhase(name) == "Degraded"
 			}).WithTimeout(lifecycleClusterTimeout).
 				WithPolling(lifecycleClusterPolling).
-				Should(BeTrue(), "VaultConfigured did not recover to True after address fix")
+				Should(BeTrue(), "expected VaultConfigured=False/Unreachable and phase=Degraded")
+
+			By("remaining Degraded across subsequent outage reconciles")
+			Consistently(func() string {
+				return lifecycleClusterPhase(name)
+			}).WithTimeout(2 * time.Minute).
+				WithPolling(lifecycleClusterPolling).Should(Equal("Degraded"))
+
+			By("resuming Vault and waiting for full recovery without restarting the operator")
+			resumeVault()
+			Eventually(func() bool {
+				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionTrue &&
+					lifecycleClusterPhase(name) == "Ready"
+			}).WithTimeout(lifecycleClusterTimeout).
+				WithPolling(lifecycleClusterPolling).
+				Should(BeTrue(), "expected VaultConfigured=True and phase=Ready after Vault recovery")
 		})
 	})
 
