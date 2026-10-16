@@ -329,6 +329,13 @@ type CLIOIDCConfig struct {
 	Assignments []string `json:"assignments,omitempty"`
 }
 
+const (
+	// TokensmithClaimPolicyEnriched requires the upstream enriched claim contract.
+	TokensmithClaimPolicyEnriched = "enriched"
+	// TokensmithClaimPolicyCSMKeycloak normalizes claims from CSM Keycloak tokens.
+	TokensmithClaimPolicyCSMKeycloak = "csm-keycloak"
+)
+
 // TokensmithSpec configures the tokensmith OIDC token service.
 type TokensmithSpec struct {
 	ServiceDefaults `json:",inline"`
@@ -348,6 +355,14 @@ type TokensmithSpec struct {
 	// endpoint when provider discovery does not advertise one.
 	// +optional
 	OIDCIntrospectionEndpoint string `json:"oidcIntrospectionEndpoint,omitempty"`
+
+	// ClaimPolicy selects how TokenSmith validates and normalizes upstream
+	// OIDC claims. The default enriched policy preserves the strict claim
+	// contract; csm-keycloak enables CSM Keycloak claim normalization.
+	// +kubebuilder:validation:Enum=enriched;csm-keycloak
+	// +kubebuilder:default=enriched
+	// +optional
+	ClaimPolicy string `json:"claimPolicy,omitempty"`
 
 	// CLIOIDC configures a separate public Vault OIDC client for CLI login.
 	// CLI users receive this client's public client_id and authenticate with

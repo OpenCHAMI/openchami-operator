@@ -58,6 +58,10 @@ PVC: `tokensmith-data`, 1Gi, ReadWriteOnce
      Annotation: `"helm.sh/resource-policy": "keep"` (never delete on CR deletion)
 Key env vars:
 ```
+TOKENSMITH_CLUSTER_ID = spec.clusterName
+TOKENSMITH_OPENCHAMI_ID = metadata.name
+TOKENSMITH_OIDC_CLAIM_POLICY = spec.services.tokensmith.claimPolicy (default enriched)
+OIDC_CLIENT_ID      = secretKeyRef: openchami-{name}-tokensmith-oidc, key: client_id
 OIDC_CLIENT_SECRET  = secretKeyRef: openchami-{name}-tokensmith-oidc, key: client_secret
 ```
 When oidcProvider=vault, also inject the Vault OIDC provider URL, which is the
