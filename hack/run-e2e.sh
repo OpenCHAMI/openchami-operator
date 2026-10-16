@@ -6,18 +6,30 @@
 set -Eeuo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [[ "${1:-}" == --help ]]; then
-  echo 'Usage: ./hack/run-e2e.sh'
-  echo 'Resets openchami-dev and dev Vault/LocalStack volumes, then runs the E2E tests.'
+usage() {
+  echo 'Usage: ./hack/run-e2e.sh [--reuse | --help]'
+  echo 'Default: reset openchami-dev and dev Vault/LocalStack volumes, then run E2E tests.'
+  echo '--reuse: keep existing infrastructure; rebuild/deploy the operator and run tests.'
   echo 'Leaves the environment running afterward. Clean up with: make dev-down'
-  exit 0
-fi
-if (( $# != 0 )); then
-  echo 'Usage: ./hack/run-e2e.sh' >&2
+}
+
+reuse=false
+if (( $# > 1 )); then
+  usage >&2
   exit 2
 fi
+case "${1:-}" in
+  --help) usage; exit 0 ;;
+  --reuse) reuse=true ;;
+  "") ;;
+  *) usage >&2; exit 2 ;;
+esac
 
-for tool in make docker go kubectl helm kind vault curl aws; do
+tools=(make docker go kubectl kind aws)
+if ! "$reuse"; then
+  tools+=(helm vault curl)
+fi
+for tool in "${tools[@]}"; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "ERROR: Required command '$tool' is missing from PATH." >&2
     exit 1
@@ -61,10 +73,28 @@ finish() {
 }
 trap finish EXIT
 
-echo 'Resetting openchami-dev and dev Vault/LocalStack volumes...'
-make dev-down
-echo 'Starting Kind, Vault, LocalStack, and prerequisite controllers...'
-make dev-up
+if "$reuse"; then
+  echo 'Reusing openchami-dev and existing dev Vault/LocalStack data...'
+  if ! kind export kubeconfig --name "$KIND_CLUSTER"; then
+    echo 'ERROR: Cannot reuse openchami-dev. Run ./hack/run-e2e.sh for a fresh setup.' >&2
+    exit 1
+  fi
+  if ! kube get --raw=/livez >/dev/null; then
+    echo 'ERROR: The existing Kubernetes API is unavailable. Start the dev stack or run without --reuse.' >&2
+    exit 1
+  fi
+  for container in openchami-vault-dev openchami-localstack-dev; do
+    if [[ "$(docker inspect --format '{{.State.Running}} {{.State.Paused}}' "$container")" != 'true false' ]]; then
+      echo "ERROR: $container must be running and unpaused. Start it or run without --reuse." >&2
+      exit 1
+    fi
+  done
+else
+  echo 'Resetting openchami-dev and dev Vault/LocalStack volumes...'
+  make dev-down
+  echo 'Starting Kind, Vault, LocalStack, and prerequisite controllers...'
+  make dev-up
+fi
 echo 'Building binaries and deploying the operator...'
 make build
 make dev-deploy

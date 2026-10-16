@@ -15,6 +15,18 @@ end-to-end tests run, start from the repository root:
 volumes. Any data in that dev stack is deleted.** Use a disposable local
 environment, not a cluster or Vault containing data you need to keep.
 
+For subsequent runs, keep the existing infrastructure and data:
+
+```sh
+./hack/run-e2e.sh --reuse
+```
+
+This skips teardown, infrastructure provisioning, prerequisite installation,
+and Vault seeding. It still rebuilds and deploys the operator, waits for
+admission readiness, and runs the tests. The existing Kind cluster, Vault,
+and LocalStack must be running. Run without `--reuse` for a fresh reset.
+Tests can still modify or delete retained resources.
+
 Before running, install Bash, Make, Docker with Compose v2, Go matching
 [go.mod](go.mod), kubectl, Helm, Kind, the Vault CLI, curl, and the AWS CLI.
 Docker must be running and accessible to your user. The script checks tools
