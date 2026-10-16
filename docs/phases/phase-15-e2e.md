@@ -20,7 +20,7 @@ var _ = BeforeSuite(func() {
 | E2E-01 | Single cluster: deploy → Ready condition → delete → namespace gone |
 | E2E-02 | Dual cluster: venado + frontier reach Ready independently |
 | E2E-07 | DHCP nodeSelector conflict rejected by webhook (probe disabled) |
-| E2E-08 | Vault unreachable: VaultConfigured=False → fix address → recovers |
+| E2E-08 | Ready → pause test Vault → VaultConfigured=False/Unreachable and sustained Degraded → resume Vault → Ready without restarting the operator |
 | E2E-09 | Version pin: ReconcileActive=False; ready after unpin |
 | E2E-10 | Upgrade simulation: new VERSION ldflags; pinned cluster untouched |
 
@@ -55,6 +55,16 @@ These run in the standard `make test` suite (no e2e tag).
 | F-06 | All probe nodes return false | NetworkProbeReady=False + Warning Event |
 
 Run fault tests with: `go test -race ./internal/reconcilers/...`
+
+E2E-08 pauses the dedicated `openchami-vault-dev` Docker container from
+`make dev-up` and registers cleanup to resume it even if the test fails. The
+lifecycle group runs serially so this outage cannot overlap other specs.
+The operator's `VAULT_ADDR` must point at this test Vault. To use another
+dedicated Docker Vault, set `E2E_VAULT_CONTAINER` to its container name and
+`E2E_VAULT_ADDR` to its service address. When `E2E_VAULT_ADDR` is overridden,
+E2E-08 skips unless `E2E_VAULT_CONTAINER` is also set. Do not target a shared or
+production Vault. Patching the CR's Vault address does not redirect the
+operator's startup-configured reachability client.
 
 ```bash
 tools/check-phase.sh 15

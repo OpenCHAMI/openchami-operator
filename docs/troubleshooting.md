@@ -154,7 +154,7 @@ Failure scenarios surfaced by audit on 2026-05-04 that `make e2e` does not cover
 
 **Symptom:** `VaultConfigured=False`, `Reason=Unreachable`, message includes `503` or `vault is sealed`.
 
-**Operator behaviour:** Honours invariant 1 — never crashes, always requeues. Sub-reconcilers that depend on Vault (`Database`, `Tokensmith`, `Boot`, `Metadata`, `Funicular`) do not run while `VaultConfigured=False`, so cluster Phase stays at `Provisioning` or `Degraded` (whichever it was last) until Vault is unsealed.
+**Operator behaviour:** Honours invariant 1 — never crashes, always requeues. An unavailable Vault during initial startup leaves the cluster in `Provisioning`. If the previous phase was `Ready` or `Degraded`, `VaultConfigured=False/Unreachable` selects `Degraded` and keeps it there across retries, even if dependent services begin provisioning again. After Vault is unsealed and all conditions and enabled services recover, the phase returns to `Ready` without restarting the operator. Conditions with an `Error` reason still take precedence and select `Failed`.
 
 **Recovery:** Unseal Vault. The operator detects the change at the next requeue (default 30s).
 
