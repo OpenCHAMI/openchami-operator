@@ -2,6 +2,45 @@
 
 A Kubernetes operator that deploys and manages the [OpenCHAMI](https://openchami.org) HPC provisioning stack as a single, namespaced custom resource.
 
+## Start here: check your local test environment
+
+To provision a local development environment and watch the operator's
+end-to-end tests run, start from the repository root:
+
+```sh
+./hack/run-e2e.sh
+```
+
+**This resets the `openchami-dev` Kind cluster and dev Vault/LocalStack
+volumes. Any data in that dev stack is deleted.** Use a disposable local
+environment, not a cluster or Vault containing data you need to keep.
+
+Before running, install Bash, Make, Docker with Compose v2, Go matching
+[go.mod](go.mod), kubectl, Helm, Kind, the Vault CLI, curl, and the AWS CLI.
+Docker must be running and accessible to your user. The script checks tools
+but does not install them. Downloads and container pulls require network
+access; configure your host and Docker proxies if needed.
+
+The script starts Kind, Vault, LocalStack, and prerequisite controllers;
+builds and deploys the operator; waits for admission readiness; then streams
+the E2E test output. It leaves the environment running afterward. Clean up with:
+
+```sh
+make dev-down
+```
+
+**Current status:** this is a bootstrap and debugging entrypoint, not yet a
+reliable green/red environment acceptance test. The suite has known setup
+conflicts: a test may try to recreate the operator namespace and its cleanup
+may remove resources needed by later tests. A failed run does not by itself
+mean your machine is configured incorrectly. Start with the first failure,
+not the number of later failures or skips.
+
+See [Testing](docs/testing.md) for prerequisites, the stages to expect,
+how to interpret results, and the intended next steps. For fast unit/envtest
+checks without Docker or a live cluster, run `make test` separately; the
+script runs E2E tests only.
+
 ## What it does
 
 Each `OpenCHAMIControlPlane` custom resource produces a self-contained, namespace-isolated OpenCHAMI deployment:
@@ -29,7 +68,10 @@ The full documentation tree lives under [`docs/`](docs/README.md). Start with:
 - **[Troubleshooting](docs/troubleshooting.md)** — common failure modes with fixes.
 - **[Contributing](docs/contributing.md)** — adding a sub-reconciler / CRD field / webhook.
 
-## Quick start
+## Manual development setup
+
+For a guided environment-and-test run, use the script above. These commands
+are the separate, manual path for working with a sample control plane:
 
 ```sh
 # Prereqs (one-time)
@@ -71,10 +113,9 @@ temporary images as `ghcr.io/openchami/openchami-operator:pr-<number>` and
 `ghcr.io/openchami/openchami-operator:pr-<number>-<head-sha>` without SBOM or
 provenance attestations; fork PRs build and smoke-test locally without pushing.
 
-For end-to-end testing against a real kind cluster:
+For end-to-end testing with automatic local environment setup:
 ```sh
-make dev-up
-make e2e
+./hack/run-e2e.sh
 make dev-down
 ```
 
