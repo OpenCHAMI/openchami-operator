@@ -211,6 +211,49 @@ should be blocked. Test the real host-network probe separately and account
 for any host firewall or CNI host policies. A successful host-network probe
 alone does not prove ordinary NetworkPolicy enforcement.
 
+### CoreDHCP cross-node ingress verification (issue #46)
+
+`test/networkpolicy` is a standalone, opt-in connectivity test. It applies the
+production NetworkPolicy reconciler against a disposable cluster, without
+starting the full operator or requiring its external services. Unit tests cover
+controller node-event dispatch separately. The test creates a temporary
+namespace and uses existing nodes without changing their labels.
+
+Create a separate cluster using `hack/local-dev/kind-networkpolicy.yaml`, then
+install a NetworkPolicy-enforcing CNI such as Calico using its official
+installation instructions for kind and the Kubernetes version in use. The
+profile disables kindnet and provides three nodes: a server node, an eligible
+remote client node, and an ineligible remote client node. Wait for all nodes
+and CNI pods to be ready before running:
+
+```sh
+kind create cluster --config hack/local-dev/kind-networkpolicy.yaml
+# Install the enforcing CNI, then wait for all nodes to be Ready.
+kind export kubeconfig --name openchami-policy
+E2E_NETWORK_POLICY=true go test -v -count=1 -timeout 12m -tags e2e ./test/networkpolicy/...
+```
+
+Use a kubeconfig whose current context is `kind-openchami-policy`; for current
+kind versions, `kind export kubeconfig --name openchami-policy` selects that
+context. Both the Go client and `kubectl exec` use this kubeconfig. The test
+requires permissions to list Nodes and API EndpointSlices, manage the temporary
+namespace and its Pods, Services and NetworkPolicies, and execute commands in
+its Pods. It uses `busybox:1.37.0` for HTTP servers and clients.
+
+The test verifies both pod IPs and Service IPs for SMD TCP/27779 and
+boot-service TCP/27778. It checks allowed traffic, denial from an ineligible
+remote host-network client, ordinary-pod isolation with client egress explicitly
+allowed, and revocation after the CoreDHCP selector stops matching. Denial must
+be a network timeout; exec or container failures cannot count as a pass. Every
+probe starts a fresh TCP connection. A cluster that ignores NetworkPolicy fails
+the negative controls. A single-node cluster is rejected.
+
+The test exercises policy generation and data-plane enforcement with stand-in
+servers, not application authentication or a full DHCP exchange. Verify the
+real coresmd client separately on RKE2/Canal, including the actual source IP
+on multihomed nodes. When finished, remove the disposable cluster with
+`kind delete cluster --name openchami-policy`.
+
 ### Suite layout
 
 | File | Tests |
