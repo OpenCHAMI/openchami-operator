@@ -118,7 +118,13 @@ spec:
       image:
         tag: pr-15
     coreDHCP:
-      enabled: false
+      enabled: true
+      nodeSelector:
+        openchami.org/dhcp-venado: "true"
+      leaseRanges:
+        - subnet: 192.168.100.0/24
+          start: 192.168.100.100
+          end: 192.168.100.200
     magellan:
       enabled: false
   networking:

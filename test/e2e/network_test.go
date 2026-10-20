@@ -368,6 +368,10 @@ spec:
       tlsInsecure: true
   networkProbe:
     enabled: true
+    image:
+      repository: example.com/openchami-operator
+      tag: v0.0.1
+      pullPolicy: IfNotPresent
     intervalSeconds: %[4]d
     provisionNetwork:
       subnet: %[2]s
@@ -386,6 +390,8 @@ spec:
     metadataService:
       enabled: true
       replicas: 1
+      image:
+        tag: pr-15
     coreDHCP:
       enabled: false
     magellan:
