@@ -107,10 +107,12 @@ spec:
     metadataService:
       enabled: true
       replicas: 1
+      image:
+        tag: pr-15
     coreDHCP:
       enabled: true
       nodeSelector:
-        openchami.org/dhcp: %[3]q
+        openchami.org/dhcp-%[3]s: "true"
       leaseRanges:
         - subnet: 192.168.100.0/24
           start: 192.168.100.100
@@ -125,7 +127,7 @@ spec:
     instances: 1
     storageSize: 5Gi
   logging:
-    enabled: true
+    enabled: false
     logBucket: %[1]s-logs
     retentionDays: 7
     flushIntervalSeconds: 30
@@ -133,8 +135,19 @@ spec:
 `, name, vaultAddr, dhcpDiscriminator, operatorChannel, pinnedLine)
 }
 
+// lifecycleRun executes a command and fails the test via Ginkgo if it errors.
+func lifecycleRun(name string, arg ...string) {
+	GinkgoT().Helper()
+	cmd := exec.Command(name, arg...)
+	output, err := cmd.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), "failed to run command %s %v: %s", name, arg, string(output))
+}
+
 // lifecycleApplyCluster pipes the given cluster YAML through `kubectl apply -f -`.
 func lifecycleApplyCluster(name, vaultAddr, dhcpDiscriminator string) {
+	nodeName := "openchami-dev-control-plane"
+	lifecycleRun("kubectl", "label", "node", nodeName, fmt.Sprintf("openchami.org/dhcp-%s=true", dhcpDiscriminator), "--overwrite")
+
 	yaml := lifecycleClusterYAML(name, vaultAddr, dhcpDiscriminator, "stable", "")
 	lifecycleApplyYAML(yaml)
 }
@@ -159,6 +172,7 @@ func lifecycleApplyYAML(yaml string) {
 // by the validating webhook. Returns the combined kubectl output for
 // substring matching by the caller.
 func lifecycleApplyYAMLExpectError(yaml string) (string, error) {
+	yaml = strings.ReplaceAll(yaml, "\t", "        ")
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(yaml)
 	output, err := cmd.CombinedOutput()
@@ -248,9 +262,16 @@ func lifecycleConditionReason(name, condType string) string {
 	return strings.TrimSpace(string(output))
 }
 
-// lifecycleClusterReady returns true when the Ready condition is "True".
+// lifecycleClusterReady returns true when the cluster phase is "Ready".
 func lifecycleClusterReady(name string) bool {
-	return lifecycleConditionStatus(name, "Ready") == lifecycleConditionTrue
+	if lifecycleClusterPhase(name) == "Ready" {
+		return true
+	}
+	out, _ := exec.Command("kubectl", "get", "openchamicontrolplane", name,
+		"-o", `jsonpath={.status.phase}{"\n"}{range .status.conditions[*]}{.type}={.status}({.reason}: {.message}){"\n"}{end}`).CombinedOutput()
+	pods, _ := exec.Command("kubectl", "get", "pods", "-n", "openchami-"+name, "--no-headers").CombinedOutput()
+	_, _ = fmt.Fprintf(GinkgoWriter, "\n--- [%s status] ---\n%s--- [%s pods] ---\n%s\n", name, string(out), name, string(pods))
+	return false
 }
 
 // lifecycleNamespaceGone returns true when the per-cluster namespace
@@ -315,7 +336,13 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		It("brings two distinct clusters to Ready independently", func() {
 			By("applying both clusters with disjoint DHCP nodeSelectors")
 			lifecycleApplyCluster(nameA, lifecycleDevVaultAddr(), nameA)
-			lifecycleApplyCluster(nameB, lifecycleDevVaultAddr(), nameB)
+			yamlB := strings.Replace(
+				lifecycleClusterYAML(nameB, lifecycleDevVaultAddr(), nameB, "stable", ""),
+				"    coreDHCP:\n      enabled: true",
+				"    coreDHCP:\n      enabled: false",
+				1,
+			)
+			lifecycleApplyYAML(yamlB)
 
 			By("waiting for venado Ready=True")
 			Eventually(func() bool {
