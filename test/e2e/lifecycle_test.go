@@ -364,7 +364,7 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		const (
 			nameA      = "venado"
 			nameB      = "frontier"
-			sharedDisc = "shared-dhcp-host"
+			sharedDisc = "venado"
 		)
 
 		AfterEach(func() {
