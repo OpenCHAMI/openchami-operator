@@ -46,8 +46,8 @@ const (
 	observabilityFunicularFlushVar   = "FUNICULAR_FLUSH_INTERVAL"
 	observabilityExpectedFlushSecs   = "60"
 	observabilityOchamiAdminBinary   = "bin/ochami-admin"
-	observabilityVaultAddr           = "https://localhost:8200"
-	observabilityVaultToken          = "root"
+	observabilityVaultAddr           = "http://127.0.0.1:8200"
+	observabilityVaultToken          = "dev-root-token"
 	observabilityCertSecretName      = "venado-gateway-tls"
 	observabilityShortLivedCertHours = 1
 )
@@ -92,31 +92,48 @@ spec:
   domain: venado.hpc.example.com
   platform:
     vault:
-      address: "https://vault.openchami-platform.svc.cluster.local:8200"
-      authMethod: kubernetes
+      address: %q
+      authMethod: appRole
+      appRoleSecretRef:
+        name: venado-approle
     objectStorage:
       endpoint: "%s"
+      bucket: venado-boot-images
+      tlsInsecure: true
   networkProbe:
     enabled: false
   services:
     smd:
+      enabled: true
       replicas: 1
     tokensmith:
+      enabled: true
       oidcProvider: vault
     bootService:
+      enabled: true
       replicas: 1
     metadataService:
+      enabled: true
       replicas: 1
+      image:
+        tag: pr-15
+    coreDHCP:
+      enabled: false
+    magellan:
+      enabled: false
   networking:
     gatewayClass: envoy
     tls:
-      issuer: ca-issuer
+      issuer: selfsigned-dev
       secretName: %s
   database:
     instances: 1
     storageSize: 1Gi
   logging:
     enabled: true
+    image:
+      repository: registry.k8s.io/pause
+      tag: "3.10"
     logBucket: %s
     retentionDays: %d
     flushIntervalSeconds: %s
@@ -124,6 +141,7 @@ spec:
 		observabilityVenadoClusterName,
 		observabilityVenadoCRNamespace,
 		observabilityVenadoClusterName,
+		lifecycleDevVaultAddr(),
 		observabilityLocalstackURL(),
 		observabilityCertSecretName,
 		observabilityVenadoLogBucket,
