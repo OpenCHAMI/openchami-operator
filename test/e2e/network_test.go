@@ -19,7 +19,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/openchami/openchami-operator/internal/networkprobe"
 	"github.com/openchami/openchami-operator/test/utils"
 )
 
@@ -96,71 +95,41 @@ var _ = Describe("Network", Ordered, func() {
 	Context("E2E-04: CoreDHCP waits for provision-network-ready=true before scheduling", func() {
 		const clusterName = "netdhcp04"
 
-		var (
-			labeledNode string
-			labelKey    string
-			revKey      string
-		)
-
 		BeforeAll(func() {
-			labelKey = networkNodeLabel(clusterName, "provision")
-			revKey = networkprobe.RevisionLabel(clusterName, "provision")
 			yaml := networkProbeClusterYAML(clusterName, "10.0.0.0/24", "10.1.0.0/24")
 			yaml = networkEnableCoreDHCP(yaml, "10.0.0.0/24", "10.0.0.100", "10.0.0.200")
 			networkApplyCluster(clusterName, yaml)
 		})
 
 		AfterAll(func() {
-			if labeledNode != "" {
-				By("removing the manual provision-network labels from " + labeledNode)
-				cmd := exec.Command("kubectl", "label", "node", labeledNode, labelKey+"-", revKey+"-", "--overwrite")
-				_, _ = utils.Run(cmd)
-			}
 			networkDeleteCluster(clusterName)
 		})
 
 		It("should wait for the probe label before creating and scheduling the CoreDHCP DaemonSet", func() {
 			ns := networkClusterNamespace(clusterName)
 			ds := "coredhcp"
-			probeDS := fmt.Sprintf("openchami-%s-network-probe", clusterName)
+			labelKey := networkNodeLabel(clusterName, "provision")
 
-			By("waiting for DHCPReady=False/WaitingForProbe while no node is eligible")
+			By("waiting for DHCPReady=False/WaitingForProbe while no node matches 10.0.0.0/24")
 			Eventually(func(g Gomega) {
 				status, reason := networkPollCondition(g, clusterName, "DHCPReady")
 				g.Expect(status).To(Equal("False"))
 				g.Expect(reason).To(Equal("WaitingForProbe"))
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
-			By("waiting for the network-probe DaemonSet to be ready and suspending its probe loop")
-			Eventually(func(g Gomega) {
-				ready := networkDaemonSetNumberReady(g, ns, probeDS)
-				g.Expect(ready).To(BeNumerically(">", 0))
-			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
-
-			revOut, err := utils.Run(exec.Command("kubectl", "get", "daemonset", probeDS, "-n", ns,
-				"-o", `jsonpath={.spec.template.spec.containers[0].env[?(@.name=="PROBE_PROVISION_REVISION")].value}`))
+			By("discovering the Kind node's actual InternalIP and updating provisionNetwork.subnet so the probe succeeds")
+			nodeIPOut, err := utils.Run(exec.Command("kubectl", "get", "nodes",
+				"-o", "jsonpath={.items[0].status.addresses[?(@.type==\"InternalIP\")].address}"))
 			Expect(err).NotTo(HaveOccurred())
-			revVal := strings.TrimSpace(revOut)
+			nodeIP := strings.TrimSpace(nodeIPOut) + "/32"
 
-			// Pause the probe binary from overwriting our manual label by setting its command to sleep
-			_, err = utils.Run(exec.Command("kubectl", "patch", "daemonset", probeDS, "-n", ns,
-				"--type=json", "-p", `[{"op":"replace","path":"/spec/template/spec/containers/0/command","value":["/probe","--help"]}]`))
-			_ = err
-
-			By("manually labeling a node to simulate a successful provision-network probe")
-			labeledNode = networkPickKindNode()
-			cmd := exec.Command("kubectl", "label", "node", labeledNode,
-				labelKey+"=true",
-				revKey+"="+revVal,
-				"--overwrite")
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to label node %s", labeledNode)
+			patch := fmt.Sprintf(`{"spec":{"networkProbe":{"provisionNetwork":{"subnet":%q}}}}`, nodeIP)
+			_, err = utils.Run(exec.Command("kubectl", "patch", "openchamicontrolplane", clusterName,
+				"--type=merge", "-p", patch))
+			Expect(err).NotTo(HaveOccurred())
 
 			By("waiting for the coredhcp DaemonSet to exist and reference the probe label")
 			Eventually(func(g Gomega) {
-				// Re-apply label in case the probe pod wrote false right before exiting
-				_, _ = utils.Run(exec.Command("kubectl", "label", "node", labeledNode,
-					labelKey+"=true", revKey+"="+revVal, "--overwrite"))
 				cmd := exec.Command("kubectl", "get", "daemonset", ds, "-n", ns,
 					"-o", fmt.Sprintf("jsonpath={.spec.template.spec.nodeSelector['%s']}",
 						strings.ReplaceAll(labelKey, ".", "\\.")))
@@ -172,8 +141,6 @@ var _ = Describe("Network", Ordered, func() {
 
 			By("waiting for the coredhcp DaemonSet to schedule a pod on the labeled node")
 			Eventually(func(g Gomega) {
-				_, _ = utils.Run(exec.Command("kubectl", "label", "node", labeledNode,
-					labelKey+"=true", revKey+"="+revVal, "--overwrite"))
 				scheduled := networkDaemonSetCurrentNumberScheduled(g, ns, ds)
 				ready := networkDaemonSetNumberReady(g, ns, ds)
 				g.Expect(scheduled+ready).To(BeNumerically(">", 0),
