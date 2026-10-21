@@ -442,9 +442,9 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 
 	Context("E2E-09 version pin gating", func() {
 		const (
-			name      = "venado"
-			badPinned = "0.0.0-mismatch"
+			name = "venado"
 		)
+		badPinned := "nonexistent-version-" + fmt.Sprintf("%d", time.Now().Unix())
 
 		AfterEach(func() {
 			lifecycleDeleteCluster(name)

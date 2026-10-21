@@ -110,11 +110,11 @@ var _ = Describe("Network", Ordered, func() {
 			ds := "coredhcp"
 			labelKey := networkNodeLabel(clusterName, "provision")
 
-			By("waiting for DHCPReady=False/WaitingForProbe while no node matches 10.0.0.0/24")
+			By("waiting for DHCPReady=False/WaitingForNetworkProbe while no node is eligible")
 			Eventually(func(g Gomega) {
 				status, reason := networkPollCondition(g, clusterName, "DHCPReady")
 				g.Expect(status).To(Equal("False"))
-				g.Expect(reason).To(Equal("WaitingForProbe"))
+				g.Expect(reason).To(Equal("WaitingForNetworkProbe"))
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
 			By("discovering the Kind node's actual InternalIP and updating provisionNetwork.subnet so the probe succeeds")
