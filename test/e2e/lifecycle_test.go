@@ -187,6 +187,11 @@ func lifecycleDeleteCluster(name string) {
 	if err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter, "kubectl delete openchamicontrolplane %s: %s\n", name, string(output))
 	}
+	Eventually(func() bool {
+		return lifecycleClusterGone(name) && lifecycleNamespaceGone(name)
+	}).WithTimeout(lifecycleNamespaceTimeout).
+		WithPolling(lifecycleClusterPolling).
+		Should(BeTrue(), "cluster %s and its namespace were not removed", name)
 }
 
 // lifecyclePauseVault interrupts the operator's actual Vault connection without
@@ -282,6 +287,15 @@ func lifecycleNamespaceGone(name string) bool {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Treat get errors as "still around"; the spec will keep polling.
+		return false
+	}
+	return strings.TrimSpace(string(output)) == ""
+}
+
+func lifecycleClusterGone(name string) bool {
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane", name, "--ignore-not-found", "-o", "name")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
 		return false
 	}
 	return strings.TrimSpace(string(output)) == ""
