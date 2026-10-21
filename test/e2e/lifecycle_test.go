@@ -412,6 +412,8 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 
 			By("waiting for VaultConfigured=False with Reason=Unreachable")
 			Eventually(func() bool {
+				_, _ = exec.Command("kubectl", "annotate", "openchamicontrolplane", name,
+					fmt.Sprintf("openchami.org/e2e-poke=%d", time.Now().UnixNano()), "--overwrite").CombinedOutput()
 				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionFalse &&
 					lifecycleConditionReason(name, "VaultConfigured") == "Unreachable" &&
 					lifecycleClusterPhase(name) == "Degraded"
@@ -428,6 +430,8 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 			By("resuming Vault and waiting for full recovery without restarting the operator")
 			resumeVault()
 			Eventually(func() bool {
+				_, _ = exec.Command("kubectl", "annotate", "openchamicontrolplane", name,
+					fmt.Sprintf("openchami.org/e2e-poke=%d", time.Now().UnixNano()), "--overwrite").CombinedOutput()
 				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionTrue &&
 					lifecycleClusterPhase(name) == "Ready"
 			}).WithTimeout(lifecycleClusterTimeout).
