@@ -307,7 +307,7 @@ var _ = Describe("Observability", Ordered, func() {
 			By("waiting for a Warning Event with reason=ExpirationImminent")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "events",
-					"-n", observabilityVenadoNamespace,
+					"-n", observabilityVenadoCRNamespace,
 					"--field-selector", "reason=ExpirationImminent,type=Warning",
 					"-o", "jsonpath={.items[*].metadata.name}",
 				)
