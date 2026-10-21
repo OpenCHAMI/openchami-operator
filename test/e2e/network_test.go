@@ -97,6 +97,7 @@ var _ = Describe("Network", Ordered, func() {
 
 		BeforeAll(func() {
 			yaml := networkProbeClusterYAML(clusterName, "10.0.0.0/24", "10.1.0.0/24")
+			yaml = strings.Replace(yaml, "    bmcNetwork:\n      subnet: 10.1.0.0/24\n", "", 1)
 			yaml = networkEnableCoreDHCP(yaml, "10.0.0.0/24", "10.0.0.100", "10.0.0.200")
 			networkApplyCluster(clusterName, yaml)
 		})
@@ -131,7 +132,7 @@ var _ = Describe("Network", Ordered, func() {
 			By("waiting for the coredhcp DaemonSet to exist and reference the probe label")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "daemonset", ds, "-n", ns,
-					"-o", fmt.Sprintf("jsonpath={.spec.template.spec.nodeSelector['%s']}",
+					"-o", fmt.Sprintf("jsonpath={.spec.template.spec.nodeSelector.%s}",
 						strings.ReplaceAll(labelKey, ".", "\\.")))
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "kubectl get coredhcp DaemonSet failed")
