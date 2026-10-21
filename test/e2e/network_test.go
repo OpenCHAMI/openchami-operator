@@ -206,8 +206,6 @@ var _ = Describe("Network", Ordered, func() {
 		})
 
 		It("should set ConditionNetworkProbeReady=False with reason NoEligibleNodes and emit a Warning Event", func() {
-			ns := networkClusterNamespace(clusterName)
-
 			By("waiting for ConditionNetworkProbeReady=False/NoEligibleNodes")
 			Eventually(func(g Gomega) {
 				status, reason := networkPollCondition(g, clusterName, "NetworkProbeReady")
@@ -219,7 +217,7 @@ var _ = Describe("Network", Ordered, func() {
 
 			By("verifying a Warning Event with reason NoEligibleNodes was recorded")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "events", "-n", ns,
+				cmd := exec.Command("kubectl", "get", "events", "-n", "default",
 					"--field-selector=reason=NoEligibleNodes,type=Warning",
 					"-o", "jsonpath={.items[*].metadata.name}")
 				out, err := utils.Run(cmd)
@@ -358,7 +356,7 @@ spec:
   domain: %[1]s.local
   platform:
     vault:
-      address: "http://localhost:8200"
+      address: %[5]q
       authMethod: appRole
       appRoleSecretRef:
         name: %[1]s-approle
@@ -406,7 +404,7 @@ spec:
   logging:
     enabled: false
   operatorChannel: stable
-`, clusterName, provisionSubnet, bmcSubnet, networkProbeIntervalSeconds)
+`, clusterName, provisionSubnet, bmcSubnet, networkProbeIntervalSeconds, lifecycleDevVaultAddr())
 }
 
 // networkEnableCoreDHCP rewrites the disabled coreDHCP block produced by
