@@ -497,6 +497,10 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		)
 
 		AfterEach(func() {
+			// Unpin before deleting so the upgraded (0.2.0) operator is allowed
+			// to reconcile finalizer removal on pinnedcluster.
+			_, _ = exec.Command("kubectl", "patch", "openchamicontrolplane", pinnedName,
+				"--type=merge", "-p", `{"spec":{"operatorChannel":"stable","pinnedVersion":null}}`).CombinedOutput()
 			lifecycleDeleteCluster(pinnedName)
 			lifecycleDeleteCluster(unpinnedName)
 		})
@@ -521,11 +525,11 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 			lifecycleApplyClusterWithChannel(pinnedName, lifecycleDevVaultAddr(), pinnedName,
 				"pinned", beforeVersion)
 			Eventually(func() bool {
-				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionFalse &&
-					lifecycleConditionReason(pinnedName, "ReconcileActive") == "VersionPinned"
+				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionTrue &&
+					lifecycleClusterManagedByVersion(pinnedName) == beforeVersion
 			}).WithTimeout(lifecycleConditionTimeout).
 				WithPolling(lifecycleClusterPolling).
-				Should(BeTrue(), "pinned cluster did not settle on ReconcileActive=False/VersionPinned")
+				Should(BeTrue(), "pinned cluster did not get reconciled by baseline version %s", beforeVersion)
 
 			By("rebuilding the operator at version " + upgradeTo)
 			cmd := exec.Command(upgradeScript, upgradeTo)
@@ -541,6 +545,14 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 				Should(Equal(upgradeTo),
 					"unpinned cluster should have been re-managed by the new operator")
 
+			By("waiting for the pinned cluster to report ReconcileActive=False/VersionPinned under " + upgradeTo)
+			Eventually(func() bool {
+				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionFalse &&
+					lifecycleConditionReason(pinnedName, "ReconcileActive") == "VersionPinned"
+			}).WithTimeout(lifecycleConditionTimeout).
+				WithPolling(lifecycleClusterPolling).
+				Should(BeTrue(), "pinned cluster did not transition to ReconcileActive=False/VersionPinned after upgrade")
+
 			By("verifying the pinned cluster's ManagedByVersion did not advance")
 			Consistently(func() string {
 				return lifecycleClusterManagedByVersion(pinnedName)
@@ -548,9 +560,6 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 				WithPolling(lifecycleClusterPolling).
 				Should(Equal(beforeVersion),
 					"pinned cluster's ManagedByVersion changed across upgrade")
-			Expect(lifecycleConditionStatus(pinnedName, "ReconcileActive")).
-				To(Equal(lifecycleConditionFalse),
-					"pinned cluster ReconcileActive should remain False after upgrade")
 		})
 	})
 })
