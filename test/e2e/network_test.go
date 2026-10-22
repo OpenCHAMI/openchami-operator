@@ -186,7 +186,7 @@ var _ = Describe("Network", Ordered, func() {
 		const clusterName = "netbad06"
 
 		BeforeAll(func() {
-			yaml := networkProbeClusterYAML(clusterName, "999.999.999.999/32", "10.1.0.0/24")
+			yaml := networkProbeClusterYAML(clusterName, "203.0.113.254/32", "10.1.0.0/24")
 			networkApplyCluster(clusterName, yaml)
 		})
 
@@ -244,14 +244,32 @@ func networkApplyCluster(clusterName, yaml string) {
 	Expect(err).NotTo(HaveOccurred(), "failed to apply cluster %s", clusterName)
 }
 
-// networkDeleteCluster deletes the cluster CR and tolerates already-gone
-// resources so cleanup is idempotent across test ordering.
+// networkDeleteCluster deletes the cluster CR and waits for both the CR and
+// its per-cluster namespace to be fully removed so resources do not leak into
+// subsequent specs.
 func networkDeleteCluster(clusterName string) {
 	GinkgoHelper()
 	By("deleting OpenCHAMIControlPlane " + clusterName)
 	cmd := exec.Command("kubectl", "delete", "openchamicontrolplane", clusterName,
 		"--ignore-not-found=true", "--wait=false")
 	_, _ = utils.Run(cmd)
+
+	ns := networkClusterNamespace(clusterName)
+	Eventually(func(g Gomega) {
+		crCmd := exec.Command("kubectl", "get", "openchamicontrolplane", clusterName,
+			"--ignore-not-found", "-o", "name")
+		crOut, err := utils.Run(crCmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(crOut)).To(BeEmpty(),
+			"OpenCHAMIControlPlane %s still exists", clusterName)
+
+		nsCmd := exec.Command("kubectl", "get", "namespace", ns,
+			"--ignore-not-found", "-o", "name")
+		nsOut, err := utils.Run(nsCmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(nsOut)).To(BeEmpty(),
+			"namespace %s still exists", ns)
+	}).WithTimeout(3 * time.Minute).WithPolling(networkPollInterval).Should(Succeed())
 }
 
 // networkPollCondition extracts the (status, reason) of a status.condition
