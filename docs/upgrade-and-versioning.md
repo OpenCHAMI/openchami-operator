@@ -60,17 +60,31 @@ The conversion webhook itself is a stub today; it becomes substantive when `v1be
 
 Per-release default service image tags are pinned in `SERVICES.md` at the repository root. **Each release** updates this file alongside `UPGRADE.md`.
 
-```
-| Service        | Image                                   | Source constant                                          |
-|----------------|-----------------------------------------|----------------------------------------------------------|
-| SMD            | ghcr.io/openchami/smd:v1.4.2            | defaultSMDImage (internal/reconcilers/smd.go)            |
-| Tokensmith     | ghcr.io/openchami/tokensmith:v1.4.2     | defaultTokensmithImage (...)                             |
-| ...            | ...                                     | ...                                                      |
-```
+| Service | Image | Source |
+|---|---|---|
+| SMD | `ghcr.io/openchami/smd:v2.20.3` | `builtInImages` in `internal/reconcilers/images.go` |
+| Tokensmith | `ghcr.io/openchami/tokensmith:v0.4.2` | `builtInImages` in `internal/reconcilers/images.go` |
 
-Per-cluster overrides via `spec.services.<name>.image.{repository,tag}` always win.
+See [SERVICES.md](../SERVICES.md) for the complete list. Per-cluster overrides
+via `spec.services.<name>.image.{repository,tag}` always win.
 
-`latest` is intended only for development. Cutting a release means walking each constant and replacing `:latest` with a pinned tag, then committing the change to `SERVICES.md` in the same PR.
+TokenSmith's release default is `v0.4.2`, which supports the issuer, claim-policy,
+Vault-provider mode, and TLS settings configured by the operator. Older pinned
+images can lack these features; update explicit pins and overrides to a
+compatible version. The image resolver preserves user-supplied versions.
+
+`spec.services.tokensmith.claimPolicy` defaults to `enriched`. Set it to
+`csm-keycloak` only when the upstream provider uses that claim contract.
+Changing this setting updates the pod template and replaces the single
+TokenSmith pod using its existing Recreate strategy and retained data PVC.
+
+TokenSmith now receives `TOKENSMITH_CLUSTER_ID=spec.clusterName` and
+`TOKENSMITH_OPENCHAMI_ID=metadata.name`. Newly minted tokens use these identities
+instead of image defaults. Update downstream policies that match the old
+placeholder claim values before upgrading.
+
+`latest` is intended for development. Update curated tags in `builtInImages`
+and `SERVICES.md` together when cutting a release.
 
 ## What you do NOT need to do at upgrade time
 

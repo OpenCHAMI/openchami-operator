@@ -170,6 +170,9 @@ func (w *OpenCHAMIControlPlaneWebhook) Default(_ context.Context, obj *OpenCHAMI
 	if obj.Spec.Services.Tokensmith.Replicas == 0 {
 		obj.Spec.Services.Tokensmith.Replicas = 1
 	}
+	if obj.Spec.Services.Tokensmith.ClaimPolicy == "" {
+		obj.Spec.Services.Tokensmith.ClaimPolicy = TokensmithClaimPolicyEnriched
+	}
 	if len(obj.Spec.Services.Tokensmith.CLIOIDC.RedirectURIs) == 0 {
 		obj.Spec.Services.Tokensmith.CLIOIDC.RedirectURIs = []string{DefaultTokensmithCLIRedirectURI}
 	}
@@ -322,6 +325,11 @@ func (w *OpenCHAMIControlPlaneWebhook) validate(ctx context.Context, obj *OpenCH
 			"oidcIssuerURL is required when oidcProvider is external",
 		))
 	}
+
+	allErrs = append(allErrs, validateTokensmithClaimPolicy(
+		specPath.Child("services", "tokensmith", "claimPolicy"),
+		obj.Spec.Services.Tokensmith.ClaimPolicy,
+	)...)
 
 	allErrs = append(allErrs, validateCLIOIDC(
 		specPath.Child("services", "tokensmith", "cliOIDC"),
@@ -779,4 +787,14 @@ func validateNetworkProbeTargets(probe NetworkProbeSpec, probePath *field.Path) 
 		}
 	}
 	return errs
+}
+
+func validateTokensmithClaimPolicy(path *field.Path, policy string) field.ErrorList {
+	switch policy {
+	case "", TokensmithClaimPolicyEnriched, TokensmithClaimPolicyCSMKeycloak:
+		return nil
+	default:
+		return field.ErrorList{field.NotSupported(path, policy,
+			[]string{TokensmithClaimPolicyEnriched, TokensmithClaimPolicyCSMKeycloak})}
+	}
 }

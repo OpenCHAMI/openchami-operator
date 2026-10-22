@@ -960,3 +960,45 @@ func TestValidateCreate_CoreDHCPWithoutConfigSourceWarns(t *testing.T) {
 		t.Errorf("expected missing-config warning, got %v", warnings)
 	}
 }
+
+func TestTokensmithClaimPolicyDefaulting(t *testing.T) {
+	for _, policy := range []string{"", TokensmithClaimPolicyEnriched, TokensmithClaimPolicyCSMKeycloak} {
+		t.Run("policy="+policy, func(t *testing.T) {
+			cp := newFixtureCluster("alpha")
+			cp.Spec.Services.Tokensmith.ClaimPolicy = policy
+			w := newWebhook(t)
+			if err := w.Default(context.Background(), cp); err != nil {
+				t.Fatal(err)
+			}
+			want := policy
+			if want == "" {
+				want = TokensmithClaimPolicyEnriched
+			}
+			if got := cp.Spec.Services.Tokensmith.ClaimPolicy; got != want {
+				t.Fatalf("claimPolicy = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestTokensmithClaimPolicyValidation(t *testing.T) {
+	for _, policy := range []string{"", TokensmithClaimPolicyEnriched, TokensmithClaimPolicyCSMKeycloak, "unknown", "Enriched", " enriched "} {
+		t.Run("policy="+policy, func(t *testing.T) {
+			old := newFixtureCluster("alpha")
+			cp := old.DeepCopy()
+			cp.Spec.Services.Tokensmith.ClaimPolicy = policy
+			w := newWebhook(t)
+			_, createErr := w.ValidateCreate(context.Background(), cp)
+			_, updateErr := w.ValidateUpdate(context.Background(), old, cp)
+			valid := policy == "" || policy == TokensmithClaimPolicyEnriched || policy == TokensmithClaimPolicyCSMKeycloak
+			for _, err := range []error{createErr, updateErr} {
+				if valid && err != nil {
+					t.Fatalf("valid policy rejected: %v", err)
+				}
+				if !valid {
+					expectInvalid(t, err, "services.tokensmith.claimPolicy")
+				}
+			}
+		})
+	}
+}

@@ -275,6 +275,10 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 	// service-identity condition. This gives users direct control over
 	// when TLS is activated.
 	tlsEnabled := cp.Spec.Services.Tokensmith.TLS.Enabled
+	claimPolicy := cp.Spec.Services.Tokensmith.ClaimPolicy
+	if claimPolicy == "" {
+		claimPolicy = openchamiv1alpha1.TokensmithClaimPolicyEnriched
+	}
 
 	env := []corev1.EnvVar{
 		{
@@ -303,11 +307,8 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		// mounted at tokensmithDataPath. The image declares VOLUMEs at
 		// /tokensmith/{data,keys,config} but Kubernetes ignores Dockerfile
 		// VOLUMEs and the readOnlyRootFilesystem=true policy makes those
-		// paths unwritable. The image's entrypoint is fixed to pass
-		// --config="$TOKENSMITH_CONFIG", --key-dir="$TOKENSMITH_KEY_DIR",
-		// --rfc8693-bootstrap-store and --rfc8693-refresh-store on every
-		// invocation, so overriding the env vars is the only way to
-		// redirect them.
+		// paths unwritable. TokenSmith v0.4.2 reads the config, key directory,
+		// and RFC 8693 store paths directly from these environment variables.
 		//
 		// TOKENSMITH_CONFIG is set to the empty string deliberately:
 		// LoadFileConfig("") in tokensmith/pkg/tokenservice/config.go
@@ -324,6 +325,11 @@ func (r *TokensmithReconciler) buildDeployment(cp *openchamiv1alpha1.OpenCHAMICo
 		// the gateway root, so its public issuer identity is the
 		// cluster FQDN.
 		{Name: tokensmithIssuerEnvName, Value: tokensmithIssuer(cp)},
+		{Name: "TOKENSMITH_OIDC_CLAIM_POLICY", Value: claimPolicy},
+		// Stable identities derived from the immutable cluster name and
+		// control-plane resource name, rather than the image's placeholders.
+		{Name: "TOKENSMITH_CLUSTER_ID", Value: cp.Spec.ClusterName},
+		{Name: "TOKENSMITH_OPENCHAMI_ID", Value: cp.Name},
 	}
 
 	switch cp.Spec.Services.Tokensmith.OIDCProvider {
