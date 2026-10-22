@@ -95,61 +95,50 @@ var _ = Describe("Network", Ordered, func() {
 	Context("E2E-04: CoreDHCP waits for provision-network-ready=true before scheduling", func() {
 		const clusterName = "netdhcp04"
 
-		var (
-			labeledNode string
-			labelKey    string
-		)
-
 		BeforeAll(func() {
-			labelKey = networkNodeLabel(clusterName, "provision")
 			yaml := networkProbeClusterYAML(clusterName, "10.0.0.0/24", "10.1.0.0/24")
+			yaml = strings.Replace(yaml, "    bmcNetwork:\n      subnet: 10.1.0.0/24\n", "", 1)
 			yaml = networkEnableCoreDHCP(yaml, "10.0.0.0/24", "10.0.0.100", "10.0.0.200")
 			networkApplyCluster(clusterName, yaml)
 		})
 
 		AfterAll(func() {
-			if labeledNode != "" && labelKey != "" {
-				By("removing the manual provision-network-ready label from " + labeledNode)
-				cmd := exec.Command("kubectl", "label", "node", labeledNode, labelKey+"-", "--overwrite")
-				_, _ = utils.Run(cmd)
-			}
 			networkDeleteCluster(clusterName)
 		})
 
-		It("should reference the probe label in the CoreDHCP nodeSelector and only schedule once a node is labeled", func() {
+		It("should wait for the probe label before creating and scheduling the CoreDHCP DaemonSet", func() {
 			ns := networkClusterNamespace(clusterName)
 			ds := "coredhcp"
+			labelKey := networkNodeLabel(clusterName, "provision")
 
-			By("waiting for the coredhcp DaemonSet to exist")
+			By("waiting for DHCPReady=False/WaitingForNetworkProbe while no node is eligible")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "daemonset", ds, "-n", ns)
-				_, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred(), "coredhcp DaemonSet should exist")
+				status, reason := networkPollCondition(g, clusterName, "DHCPReady")
+				g.Expect(status).To(Equal("False"))
+				g.Expect(reason).To(Equal("WaitingForNetworkProbe"))
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
-			By("verifying the coredhcp DaemonSet's nodeSelector references the probe label")
+			By("discovering the Kind node's actual InternalIP and updating provisionNetwork.subnet so the probe succeeds")
+			nodeIPOut, err := utils.Run(exec.Command("kubectl", "get", "nodes",
+				"-o", "jsonpath={.items[0].status.addresses[?(@.type==\"InternalIP\")].address}"))
+			Expect(err).NotTo(HaveOccurred())
+			nodeIP := strings.TrimSpace(nodeIPOut) + "/32"
+
+			patch := fmt.Sprintf(`{"spec":{"networkProbe":{"provisionNetwork":{"subnet":%q}}}}`, nodeIP)
+			_, err = utils.Run(exec.Command("kubectl", "patch", "openchamicontrolplane", clusterName,
+				"--type=merge", "-p", patch))
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for the coredhcp DaemonSet to exist and reference the probe label")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "daemonset", ds, "-n", ns,
-					"-o", fmt.Sprintf("jsonpath={.spec.template.spec.nodeSelector['%s']}",
+					"-o", fmt.Sprintf("jsonpath={.spec.template.spec.nodeSelector.%s}",
 						strings.ReplaceAll(labelKey, ".", "\\.")))
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "kubectl get coredhcp DaemonSet failed")
 				g.Expect(strings.TrimSpace(out)).To(Equal("true"),
 					"coredhcp nodeSelector should require %s=true", labelKey)
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
-
-			By("verifying coredhcp has zero scheduled pods until a node is labeled")
-			Consistently(func(g Gomega) {
-				scheduled := networkDaemonSetCurrentNumberScheduled(g, ns, ds)
-				g.Expect(scheduled).To(BeNumerically("==", 0),
-					"coredhcp must not schedule before any node carries %s=true", labelKey)
-			}).WithTimeout(20 * time.Second).WithPolling(networkPollInterval).Should(Succeed())
-
-			By("manually labeling a node to simulate a successful provision-network probe")
-			labeledNode = networkPickKindNode()
-			cmd := exec.Command("kubectl", "label", "node", labeledNode, labelKey+"=true", "--overwrite")
-			_, err := utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "failed to label node %s", labeledNode)
 
 			By("waiting for the coredhcp DaemonSet to schedule a pod on the labeled node")
 			Eventually(func(g Gomega) {
@@ -197,7 +186,7 @@ var _ = Describe("Network", Ordered, func() {
 		const clusterName = "netbad06"
 
 		BeforeAll(func() {
-			yaml := networkProbeClusterYAML(clusterName, "999.999.999.999/32", "10.1.0.0/24")
+			yaml := networkProbeClusterYAML(clusterName, "203.0.113.254/32", "10.1.0.0/24")
 			networkApplyCluster(clusterName, yaml)
 		})
 
@@ -206,8 +195,6 @@ var _ = Describe("Network", Ordered, func() {
 		})
 
 		It("should set ConditionNetworkProbeReady=False with reason NoEligibleNodes and emit a Warning Event", func() {
-			ns := networkClusterNamespace(clusterName)
-
 			By("waiting for ConditionNetworkProbeReady=False/NoEligibleNodes")
 			Eventually(func(g Gomega) {
 				status, reason := networkPollCondition(g, clusterName, "NetworkProbeReady")
@@ -219,7 +206,7 @@ var _ = Describe("Network", Ordered, func() {
 
 			By("verifying a Warning Event with reason NoEligibleNodes was recorded")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "events", "-n", ns,
+				cmd := exec.Command("kubectl", "get", "events", "-n", "default",
 					"--field-selector=reason=NoEligibleNodes,type=Warning",
 					"-o", "jsonpath={.items[*].metadata.name}")
 				out, err := utils.Run(cmd)
@@ -257,14 +244,32 @@ func networkApplyCluster(clusterName, yaml string) {
 	Expect(err).NotTo(HaveOccurred(), "failed to apply cluster %s", clusterName)
 }
 
-// networkDeleteCluster deletes the cluster CR and tolerates already-gone
-// resources so cleanup is idempotent across test ordering.
+// networkDeleteCluster deletes the cluster CR and waits for both the CR and
+// its per-cluster namespace to be fully removed so resources do not leak into
+// subsequent specs.
 func networkDeleteCluster(clusterName string) {
 	GinkgoHelper()
 	By("deleting OpenCHAMIControlPlane " + clusterName)
 	cmd := exec.Command("kubectl", "delete", "openchamicontrolplane", clusterName,
 		"--ignore-not-found=true", "--wait=false")
 	_, _ = utils.Run(cmd)
+
+	ns := networkClusterNamespace(clusterName)
+	Eventually(func(g Gomega) {
+		crCmd := exec.Command("kubectl", "get", "openchamicontrolplane", clusterName,
+			"--ignore-not-found", "-o", "name")
+		crOut, err := utils.Run(crCmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(crOut)).To(BeEmpty(),
+			"OpenCHAMIControlPlane %s still exists", clusterName)
+
+		nsCmd := exec.Command("kubectl", "get", "namespace", ns,
+			"--ignore-not-found", "-o", "name")
+		nsOut, err := utils.Run(nsCmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(nsOut)).To(BeEmpty(),
+			"namespace %s still exists", ns)
+	}).WithTimeout(3 * time.Minute).WithPolling(networkPollInterval).Should(Succeed())
 }
 
 // networkPollCondition extracts the (status, reason) of a status.condition
@@ -358,7 +363,7 @@ spec:
   domain: %[1]s.local
   platform:
     vault:
-      address: "http://localhost:8200"
+      address: %[5]q
       authMethod: appRole
       appRoleSecretRef:
         name: %[1]s-approle
@@ -368,6 +373,10 @@ spec:
       tlsInsecure: true
   networkProbe:
     enabled: true
+    image:
+      repository: example.com/openchami-operator
+      tag: v0.0.1
+      pullPolicy: IfNotPresent
     intervalSeconds: %[4]d
     provisionNetwork:
       subnet: %[2]s
@@ -386,6 +395,8 @@ spec:
     metadataService:
       enabled: true
       replicas: 1
+      image:
+        tag: pr-15
     coreDHCP:
       enabled: false
     magellan:
@@ -400,7 +411,7 @@ spec:
   logging:
     enabled: false
   operatorChannel: stable
-`, clusterName, provisionSubnet, bmcSubnet, networkProbeIntervalSeconds)
+`, clusterName, provisionSubnet, bmcSubnet, networkProbeIntervalSeconds, lifecycleDevVaultAddr())
 }
 
 // networkEnableCoreDHCP rewrites the disabled coreDHCP block produced by

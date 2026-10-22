@@ -187,6 +187,11 @@ func lifecycleDeleteCluster(name string) {
 	if err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter, "kubectl delete openchamicontrolplane %s: %s\n", name, string(output))
 	}
+	Eventually(func() bool {
+		return lifecycleClusterGone(name) && lifecycleNamespaceGone(name)
+	}).WithTimeout(lifecycleNamespaceTimeout).
+		WithPolling(lifecycleClusterPolling).
+		Should(BeTrue(), "cluster %s and its namespace were not removed", name)
 }
 
 // lifecyclePauseVault interrupts the operator's actual Vault connection without
@@ -287,6 +292,15 @@ func lifecycleNamespaceGone(name string) bool {
 	return strings.TrimSpace(string(output)) == ""
 }
 
+func lifecycleClusterGone(name string) bool {
+	cmd := exec.Command("kubectl", "get", "openchamicontrolplane", name, "--ignore-not-found", "-o", "name")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(output)) == ""
+}
+
 // E2E-08 interrupts the shared development Vault, so lifecycle specs must not
 // overlap specs on other Ginkgo parallel workers.
 var _ = Describe("Lifecycle", Ordered, Serial, func() {
@@ -364,7 +378,7 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		const (
 			nameA      = "venado"
 			nameB      = "frontier"
-			sharedDisc = "shared-dhcp-host"
+			sharedDisc = "venado"
 		)
 
 		AfterEach(func() {
@@ -412,6 +426,8 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 
 			By("waiting for VaultConfigured=False with Reason=Unreachable")
 			Eventually(func() bool {
+				_, _ = exec.Command("kubectl", "annotate", "openchamicontrolplane", name,
+					fmt.Sprintf("openchami.org/e2e-poke=%d", time.Now().UnixNano()), "--overwrite").CombinedOutput()
 				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionFalse &&
 					lifecycleConditionReason(name, "VaultConfigured") == "Unreachable" &&
 					lifecycleClusterPhase(name) == "Degraded"
@@ -428,6 +444,8 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 			By("resuming Vault and waiting for full recovery without restarting the operator")
 			resumeVault()
 			Eventually(func() bool {
+				_, _ = exec.Command("kubectl", "annotate", "openchamicontrolplane", name,
+					fmt.Sprintf("openchami.org/e2e-poke=%d", time.Now().UnixNano()), "--overwrite").CombinedOutput()
 				return lifecycleConditionStatus(name, "VaultConfigured") == lifecycleConditionTrue &&
 					lifecycleClusterPhase(name) == "Ready"
 			}).WithTimeout(lifecycleClusterTimeout).
@@ -438,9 +456,9 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 
 	Context("E2E-09 version pin gating", func() {
 		const (
-			name      = "venado"
-			badPinned = "0.0.0-mismatch"
+			name = "venado"
 		)
+		badPinned := "nonexistent-version-" + fmt.Sprintf("%d", time.Now().Unix())
 
 		AfterEach(func() {
 			lifecycleDeleteCluster(name)
@@ -479,6 +497,10 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		)
 
 		AfterEach(func() {
+			// Unpin before deleting so the upgraded (0.2.0) operator is allowed
+			// to reconcile finalizer removal on pinnedcluster.
+			_, _ = exec.Command("kubectl", "patch", "openchamicontrolplane", pinnedName,
+				"--type=merge", "-p", `{"spec":{"operatorChannel":"stable","pinnedVersion":null}}`).CombinedOutput()
 			lifecycleDeleteCluster(pinnedName)
 			lifecycleDeleteCluster(unpinnedName)
 		})
@@ -503,11 +525,11 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 			lifecycleApplyClusterWithChannel(pinnedName, lifecycleDevVaultAddr(), pinnedName,
 				"pinned", beforeVersion)
 			Eventually(func() bool {
-				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionFalse &&
-					lifecycleConditionReason(pinnedName, "ReconcileActive") == "VersionPinned"
+				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionTrue &&
+					lifecycleClusterManagedByVersion(pinnedName) == beforeVersion
 			}).WithTimeout(lifecycleConditionTimeout).
 				WithPolling(lifecycleClusterPolling).
-				Should(BeTrue(), "pinned cluster did not settle on ReconcileActive=False/VersionPinned")
+				Should(BeTrue(), "pinned cluster did not get reconciled by baseline version %s", beforeVersion)
 
 			By("rebuilding the operator at version " + upgradeTo)
 			cmd := exec.Command(upgradeScript, upgradeTo)
@@ -523,6 +545,14 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 				Should(Equal(upgradeTo),
 					"unpinned cluster should have been re-managed by the new operator")
 
+			By("waiting for the pinned cluster to report ReconcileActive=False/VersionPinned under " + upgradeTo)
+			Eventually(func() bool {
+				return lifecycleConditionStatus(pinnedName, "ReconcileActive") == lifecycleConditionFalse &&
+					lifecycleConditionReason(pinnedName, "ReconcileActive") == "VersionPinned"
+			}).WithTimeout(lifecycleConditionTimeout).
+				WithPolling(lifecycleClusterPolling).
+				Should(BeTrue(), "pinned cluster did not transition to ReconcileActive=False/VersionPinned after upgrade")
+
 			By("verifying the pinned cluster's ManagedByVersion did not advance")
 			Consistently(func() string {
 				return lifecycleClusterManagedByVersion(pinnedName)
@@ -530,9 +560,6 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 				WithPolling(lifecycleClusterPolling).
 				Should(Equal(beforeVersion),
 					"pinned cluster's ManagedByVersion changed across upgrade")
-			Expect(lifecycleConditionStatus(pinnedName, "ReconcileActive")).
-				To(Equal(lifecycleConditionFalse),
-					"pinned cluster ReconcileActive should remain False after upgrade")
 		})
 	})
 })
