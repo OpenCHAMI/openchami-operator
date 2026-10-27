@@ -14,12 +14,8 @@ COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
-  -ldflags "-X github.com/openchami/openchami-operator/internal/version.Version=${VERSION} -X github.com/openchami/openchami-operator/internal/version.GitCommit=${COMMIT} -X github.com/openchami/openchami-operator/internal/version.BuildDate=${DATE}" \
-  -a -o manager ./cmd/operator
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
-  -ldflags "-X github.com/openchami/openchami-operator/internal/version.Version=${VERSION} -X github.com/openchami/openchami-operator/internal/version.GitCommit=${COMMIT} -X github.com/openchami/openchami-operator/internal/version.BuildDate=${DATE}" \
-  -a -o probe ./cmd/probe
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager ./cmd/operator
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o probe ./cmd/probe
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
