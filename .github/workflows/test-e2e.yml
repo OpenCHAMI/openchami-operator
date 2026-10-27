@@ -62,7 +62,7 @@ jobs:
         run: make dev-up
 
       - name: Run e2e tests
-        run: make e2e
+        run: ./hack/run-e2e.sh --reuse
 
       - name: Tear down dev stack
         if: always()

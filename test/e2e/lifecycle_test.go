@@ -336,7 +336,7 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		})
 	})
 
-	Context("E2E-02 dual cluster independence", func() {
+	PContext("E2E-02 dual cluster independence", func() {
 		const (
 			nameA = "venado"
 			nameB = "frontier"
@@ -488,7 +488,7 @@ var _ = Describe("Lifecycle", Ordered, Serial, func() {
 		})
 	})
 
-	Context("E2E-10 upgrade simulation", func() {
+	PContext("E2E-10 upgrade simulation", func() {
 		const (
 			pinnedName    = "pinnedcluster"
 			unpinnedName  = "frontier"

@@ -44,16 +44,19 @@ const (
 	networkLabelTimeout = 60 * time.Second
 )
 
-var _ = Describe("Network", Ordered, func() {
+var _ = Describe("Network", Ordered, Serial, func() {
 	Context("E2E-03: probe DaemonSet runs and labels nodes", func() {
 		const clusterName = "netprobe03"
 
 		BeforeAll(func() {
-			networkApplyCluster(clusterName, networkProbeClusterYAML(clusterName, "10.0.0.0/24", "10.1.0.0/24"))
+			nodeIP := networkKindNodeInternalIP()
+			networkApplyCluster(clusterName, networkProbeClusterYAML(clusterName, nodeIP, "10.1.0.0/24"))
 		})
 
 		AfterAll(func() {
 			networkDeleteCluster(clusterName)
+			networkRemoveNodeLabel(networkNodeLabel(clusterName, "provision"))
+			networkRemoveNodeLabel(networkNodeLabel(clusterName, "bmc"))
 		})
 
 		It("should create the network-probe DaemonSet and have at least one pod ready", func() {
@@ -104,6 +107,8 @@ var _ = Describe("Network", Ordered, func() {
 
 		AfterAll(func() {
 			networkDeleteCluster(clusterName)
+			networkRemoveNodeLabel(networkNodeLabel(clusterName, "provision"))
+			networkRemoveNodeLabel(networkNodeLabel(clusterName, "bmc"))
 		})
 
 		It("should wait for the probe label before creating and scheduling the CoreDHCP DaemonSet", func() {
@@ -119,13 +124,10 @@ var _ = Describe("Network", Ordered, func() {
 			}).WithTimeout(networkClusterTimeout).WithPolling(networkPollInterval).Should(Succeed())
 
 			By("discovering the Kind node's actual InternalIP and updating provisionNetwork.subnet so the probe succeeds")
-			nodeIPOut, err := utils.Run(exec.Command("kubectl", "get", "nodes",
-				"-o", "jsonpath={.items[0].status.addresses[?(@.type==\"InternalIP\")].address}"))
-			Expect(err).NotTo(HaveOccurred())
-			nodeIP := strings.TrimSpace(nodeIPOut) + "/32"
+			nodeIP := networkKindNodeInternalIP()
 
 			patch := fmt.Sprintf(`{"spec":{"networkProbe":{"provisionNetwork":{"subnet":%q}}}}`, nodeIP)
-			_, err = utils.Run(exec.Command("kubectl", "patch", "openchamicontrolplane", clusterName,
+			_, err := utils.Run(exec.Command("kubectl", "patch", "openchamicontrolplane", clusterName,
 				"--type=merge", "-p", patch))
 			Expect(err).NotTo(HaveOccurred())
 
@@ -345,6 +347,24 @@ func networkPickKindNode() string {
 	name := strings.TrimSpace(out)
 	Expect(name).NotTo(BeEmpty(), "kind cluster has no nodes")
 	return name
+}
+
+func networkKindNodeInternalIP() string {
+	GinkgoHelper()
+	cmd := exec.Command("kubectl", "get", "nodes",
+		"-o", "jsonpath={.items[0].status.addresses[?(@.type==\"InternalIP\")].address}")
+	out, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "failed to read Kind node InternalIP")
+	address := strings.TrimSpace(out)
+	Expect(address).NotTo(BeEmpty(), "Kind node has no InternalIP")
+	return address + "/32"
+}
+
+func networkRemoveNodeLabel(label string) {
+	GinkgoHelper()
+	cmd := exec.Command("kubectl", "label", "nodes", "--all", label+"-")
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "failed to remove node label %s", label)
 }
 
 // networkProbeClusterYAML renders an OpenCHAMIControlPlane manifest with network
