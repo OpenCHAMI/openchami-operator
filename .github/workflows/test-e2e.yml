@@ -20,7 +20,6 @@ permissions: {}
 
 jobs:
   test-e2e:
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     permissions:
       contents: read
     name: Run on Ubuntu
@@ -58,11 +57,8 @@ jobs:
       - name: Verify Vault CLI installation
         run: vault version
 
-      - name: Provision dev stack
-        run: make dev-up
-
       - name: Run e2e tests
-        run: ./hack/run-e2e.sh --reuse
+        run: ./hack/run-e2e.sh
 
       - name: Tear down dev stack
         if: always()
