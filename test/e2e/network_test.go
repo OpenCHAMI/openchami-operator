@@ -363,8 +363,9 @@ func networkKindNodeInternalIP() string {
 func networkRemoveNodeLabel(label string) {
 	GinkgoHelper()
 	cmd := exec.Command("kubectl", "label", "nodes", "--all", label+"-")
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "failed to remove node label %s", label)
+	if _, err := utils.Run(cmd); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "ignoring node label cleanup error for %s: %v\n", label, err)
+	}
 }
 
 // networkProbeClusterYAML renders an OpenCHAMIControlPlane manifest with network

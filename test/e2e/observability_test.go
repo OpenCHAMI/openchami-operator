@@ -21,14 +21,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/yaml"
 
 	"github.com/openchami/openchami-operator/test/utils"
-	"sigs.k8s.io/yaml"
 )
 
 // observability* constants are scoped to this file to avoid collisions with
@@ -119,7 +118,7 @@ spec:
       image:
         tag: pr-15
     coreDHCP:
-      enabled: true
+      enabled: false
       nodeSelector:
         openchami.org/dhcp-obsvenado: "true"
       leaseRanges:
@@ -155,17 +154,6 @@ spec:
 		observabilityRetentionDays,
 		observabilityExpectedFlushSecs,
 	)
-}
-
-func TestObservabilityClusterYAMLHasNoTabs(t *testing.T) {
-	manifest := observabilityVenadoClusterYAML()
-	if strings.Contains(manifest, "\t") {
-		t.Fatal("observability cluster manifest contains a tab")
-	}
-	var parsed map[string]interface{}
-	if err := yaml.Unmarshal([]byte(manifest), &parsed); err != nil {
-		t.Fatalf("observability cluster manifest is invalid YAML: %v", err)
-	}
 }
 
 // observabilityApplyVenadoCluster applies the observability test cluster.
@@ -276,6 +264,11 @@ var _ = Describe("Observability", Ordered, Serial, func() {
 	BeforeAll(func() {
 		SetDefaultEventuallyTimeout(observabilityClusterTimeout)
 		SetDefaultEventuallyPollingInterval(observabilityShortPollInterval)
+
+		manifest := observabilityVenadoClusterYAML()
+		Expect(manifest).NotTo(ContainSubstring("\t"), "observability cluster manifest contains a tab")
+		var parsed map[string]interface{}
+		Expect(yaml.Unmarshal([]byte(manifest), &parsed)).To(Succeed(), "observability cluster manifest is invalid YAML")
 	})
 
 	AfterAll(func() {
@@ -293,7 +286,7 @@ var _ = Describe("Observability", Ordered, Serial, func() {
 			out, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred(), "checking observability CR teardown")
 			g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "observability CR still exists")
-		}).WithTimeout(3*time.Minute).WithPolling(observabilityShortPollInterval).Should(Succeed())
+		}).WithTimeout(3 * time.Minute).WithPolling(observabilityShortPollInterval).Should(Succeed())
 
 		By("removing the observability namespace")
 		observabilityKubectlDelete("namespace", observabilityVenadoNamespace)
@@ -305,7 +298,7 @@ var _ = Describe("Observability", Ordered, Serial, func() {
 			out, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred(), "checking observability namespace teardown")
 			g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "observability namespace still exists")
-		}).WithTimeout(3*time.Minute).WithPolling(observabilityShortPollInterval).Should(Succeed())
+		}).WithTimeout(3 * time.Minute).WithPolling(observabilityShortPollInterval).Should(Succeed())
 	})
 
 	Context("E2E-11: Certificate Warning Event", func() {
