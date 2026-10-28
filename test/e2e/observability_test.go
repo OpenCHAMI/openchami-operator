@@ -130,7 +130,7 @@ spec:
   networking:
     gatewayClass: envoy
     tls:
-      issuer: selfsigned-dev
+      issuer: ca-issuer
       secretName: %s
   database:
     instances: 1
