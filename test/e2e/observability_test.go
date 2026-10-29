@@ -25,6 +25,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"sigs.k8s.io/yaml"
 
 	"github.com/openchami/openchami-operator/test/utils"
 )
@@ -36,19 +37,19 @@ const (
 	observabilityShortPollInterval   = 5 * time.Second
 	observabilityLocalstackEndpoint  = "http://localhost:4566"
 	observabilityLocalstackEnvVar    = "LOCALSTACK_ENDPOINT"
-	observabilityVenadoClusterName   = "venado"
-	observabilityVenadoNamespace     = "openchami-venado"
-	observabilityVenadoLogBucket     = "venado-logs"
-	observabilityVenadoBackupBucket  = "venado-backups"
+	observabilityVenadoClusterName   = "obsvenado"
+	observabilityVenadoNamespace     = "openchami-obsvenado"
+	observabilityVenadoLogBucket     = "obsvenado-logs"
+	observabilityVenadoBackupBucket  = "obsvenado-backups"
 	observabilityVenadoCRNamespace   = "default"
 	observabilityRetentionDays       = 30
 	observabilityFunicularDaemonSet  = "funicular-collector"
 	observabilityFunicularFlushVar   = "FUNICULAR_FLUSH_INTERVAL"
 	observabilityExpectedFlushSecs   = "60"
 	observabilityOchamiAdminBinary   = "bin/ochami-admin"
-	observabilityVaultAddr           = "https://localhost:8200"
-	observabilityVaultToken          = "root"
-	observabilityCertSecretName      = "venado-gateway-tls"
+	observabilityVaultAddr           = "http://127.0.0.1:8200"
+	observabilityVaultToken          = "dev-root-token"
+	observabilityCertSecretName      = "obsvenado-gateway-tls"
 	observabilityShortLivedCertHours = 1
 )
 
@@ -79,34 +80,53 @@ func observabilityKubectlDelete(args ...string) {
 	}
 }
 
-// observabilityApplyVenadoCluster applies the venado test cluster YAML with
-// logging enabled and the specified TLS Secret reference.
-func observabilityApplyVenadoCluster() error {
-	manifest := fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
+// observabilityVenadoClusterYAML renders the observability test cluster.
+func observabilityVenadoClusterYAML() string {
+	return fmt.Sprintf(`apiVersion: openchami.openchami.org/v1alpha1
 kind: OpenCHAMIControlPlane
 metadata:
   name: %s
   namespace: %s
 spec:
   clusterName: %s
-  domain: venado.hpc.example.com
+  domain: obsvenado.hpc.example.com
   platform:
     vault:
-      address: "https://vault.openchami-platform.svc.cluster.local:8200"
-      authMethod: kubernetes
+      address: %q
+      authMethod: appRole
+      appRoleSecretRef:
+        name: obsvenado-approle
     objectStorage:
       endpoint: "%s"
+      bucket: obsvenado-boot-images
+      tlsInsecure: true
   networkProbe:
     enabled: false
   services:
     smd:
+      enabled: true
       replicas: 1
     tokensmith:
+      enabled: true
       oidcProvider: vault
     bootService:
+      enabled: true
       replicas: 1
     metadataService:
+      enabled: true
       replicas: 1
+      image:
+        tag: pr-15
+    coreDHCP:
+      enabled: false
+      nodeSelector:
+        openchami.org/dhcp-obsvenado: "true"
+      leaseRanges:
+        - subnet: 192.168.100.0/24
+          start: 192.168.100.100
+          end: 192.168.100.200
+    magellan:
+      enabled: false
   networking:
     gatewayClass: envoy
     tls:
@@ -117,6 +137,9 @@ spec:
     storageSize: 1Gi
   logging:
     enabled: true
+    image:
+      repository: registry.k8s.io/pause
+      tag: "3.10"
     logBucket: %s
     retentionDays: %d
     flushIntervalSeconds: %s
@@ -124,13 +147,18 @@ spec:
 		observabilityVenadoClusterName,
 		observabilityVenadoCRNamespace,
 		observabilityVenadoClusterName,
+		lifecycleDevVaultAddr(),
 		observabilityLocalstackURL(),
 		observabilityCertSecretName,
 		observabilityVenadoLogBucket,
 		observabilityRetentionDays,
 		observabilityExpectedFlushSecs,
 	)
-	return observabilityKubectlApply(manifest)
+}
+
+// observabilityApplyVenadoCluster applies the observability test cluster.
+func observabilityApplyVenadoCluster() error {
+	return observabilityKubectlApply(observabilityVenadoClusterYAML())
 }
 
 // observabilityShortLivedSecretYAML generates a self-signed cert/key pair
@@ -232,20 +260,45 @@ func observabilityS3GetLifecycle(bucket string) (string, error) {
 	return utils.Run(cmd)
 }
 
-var _ = Describe("Observability", Ordered, func() {
+var _ = Describe("Observability", Ordered, Serial, func() {
 	BeforeAll(func() {
 		SetDefaultEventuallyTimeout(observabilityClusterTimeout)
 		SetDefaultEventuallyPollingInterval(observabilityShortPollInterval)
+
+		manifest := observabilityVenadoClusterYAML()
+		Expect(manifest).NotTo(ContainSubstring("\t"), "observability cluster manifest contains a tab")
+		var parsed map[string]interface{}
+		Expect(yaml.Unmarshal([]byte(manifest), &parsed)).To(Succeed(), "observability cluster manifest is invalid YAML")
 	})
 
 	AfterAll(func() {
-		By("removing the venado OpenCHAMIControlPlane CR")
+		By("removing the observability OpenCHAMIControlPlane CR")
 		observabilityKubectlDelete("openchamicontrolplane",
 			observabilityVenadoClusterName,
 			"-n", observabilityVenadoCRNamespace,
 		)
-		By("removing the venado namespace")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "openchamicontrolplane",
+				observabilityVenadoClusterName,
+				"-n", observabilityVenadoCRNamespace,
+				"--ignore-not-found", "-o", "name",
+			)
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred(), "checking observability CR teardown")
+			g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "observability CR still exists")
+		}).WithTimeout(3 * time.Minute).WithPolling(observabilityShortPollInterval).Should(Succeed())
+
+		By("removing the observability namespace")
 		observabilityKubectlDelete("namespace", observabilityVenadoNamespace)
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "namespace",
+				observabilityVenadoNamespace,
+				"--ignore-not-found", "-o", "name",
+			)
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred(), "checking observability namespace teardown")
+			g.Expect(strings.TrimSpace(out)).To(BeEmpty(), "observability namespace still exists")
+		}).WithTimeout(3 * time.Minute).WithPolling(observabilityShortPollInterval).Should(Succeed())
 	})
 
 	Context("E2E-11: Certificate Warning Event", func() {
@@ -283,7 +336,7 @@ var _ = Describe("Observability", Ordered, func() {
 			By("waiting for a Warning Event with reason=ExpirationImminent")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "events",
-					"-n", observabilityVenadoNamespace,
+					"-n", observabilityVenadoCRNamespace,
 					"--field-selector", "reason=ExpirationImminent,type=Warning",
 					"-o", "jsonpath={.items[*].metadata.name}",
 				)
