@@ -1286,6 +1286,16 @@ spec:
                     description: TokensmithSpec configures the tokensmith OIDC token
                       service.
                     properties:
+                      claimPolicy:
+                        default: enriched
+                        description: |-
+                          ClaimPolicy selects how TokenSmith validates and normalizes upstream
+                          OIDC claims. The default enriched policy preserves the strict claim
+                          contract; csm-keycloak enables CSM Keycloak claim normalization.
+                        enum:
+                        - enriched
+                        - csm-keycloak
+                        type: string
                       cliOIDC:
                         description: |-
                           CLIOIDC configures a separate public Vault OIDC client for CLI login.

@@ -32,7 +32,7 @@ const imageTagLatest = "latest"
 // SERVICES.md, and add an UPGRADE.md note if the change is not
 // backward-compatible.
 // builtInImages: tags verified against the OpenCHAMI org GitHub
-// releases on 2026-05-14.
+// releases on 2026-05-14; tokensmith v0.4.2 verified on 2026-10-16.
 //
 //   - smd, boot-service, metadata-service, tokensmith, magellan: curated
 //     tag points at the most recent GitHub Release tag.
@@ -50,7 +50,7 @@ const imageTagLatest = "latest"
 // SERVICES.md.
 var builtInImages = map[string]imageDefaults{
 	ServiceSMD:             {Repository: "ghcr.io/openchami/smd", ReleaseTag: "v2.20.3"},
-	ServiceTokensmith:      {Repository: "ghcr.io/openchami/tokensmith", ReleaseTag: "v0.4.1"},
+	ServiceTokensmith:      {Repository: "ghcr.io/openchami/tokensmith", ReleaseTag: "v0.4.2"},
 	ServiceBootService:     {Repository: "ghcr.io/openchami/boot-service", ReleaseTag: "v0.1.6"},
 	ServiceMetadataService: {Repository: "ghcr.io/openchami/metadata-service", ReleaseTag: "v0.1.0"},
 	ServiceCoreDHCP:        {Repository: "ghcr.io/openchami/coresmd", ReleaseTag: "v0.7.1"},

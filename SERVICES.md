@@ -11,7 +11,7 @@ This file documents the default container images baked into the operator binary 
 | Service | Repository | Release Tag | Source |
 |---|---|---|---|
 | SMD | `ghcr.io/openchami/smd` | `v2.20.3` | `internal/reconcilers/images.go` |
-| Tokensmith | `ghcr.io/openchami/tokensmith` | `v0.4.1` | `internal/reconcilers/images.go` |
+| Tokensmith | `ghcr.io/openchami/tokensmith` | `v0.4.2` | `internal/reconcilers/images.go` |
 | Boot service | `ghcr.io/openchami/boot-service` | `v0.1.5` | `internal/reconcilers/images.go` |
 | Metadata service | `ghcr.io/openchami/metadata-service` | `v0.1.0` | `internal/reconcilers/images.go` |
 | CoreDHCP | `ghcr.io/openchami/coresmd` | `v0.7.1` | `internal/reconcilers/images.go` |
@@ -46,7 +46,7 @@ Edit `internal/reconcilers/images.go` and update the `builtInImages` map:
 ```go
 var builtInImages = map[string]imageDefaults{
     ServiceSMD:             {Repository: "ghcr.io/openchami/smd", ReleaseTag: "v2.20.3"},
-    ServiceTokensmith:      {Repository: "ghcr.io/openchami/tokensmith", ReleaseTag: "v0.4.1"},
+    ServiceTokensmith:      {Repository: "ghcr.io/openchami/tokensmith", ReleaseTag: "v0.4.2"},
     // ... etc
 }
 ```
@@ -72,7 +72,7 @@ spec:
     stream: release   # or omit — release is the default
 ```
 
-**Effect:** SMD uses `v2.20.3`, tokensmith uses `v0.4.1`, etc.
+**Effect:** SMD uses `v2.20.3`, tokensmith uses `v0.4.2`, etc.
 
 #### `bleedingEdge`
 
@@ -96,7 +96,7 @@ spec:
     stream: pinned
     pinned:
       smd: v2.19.0
-      tokensmith: v0.4.0
+      tokensmith: v0.4.2
       bootService: v0.1.4
       metadataService: v0.1.0
       coredhcp: v0.7.1

@@ -217,3 +217,47 @@ var _ = Describe("Magellan legacy schedule suspension", func() {
 		Expect(job.Status).To(Equal(jobBefore.Status))
 	})
 })
+
+// Exercise generated CRD defaults and validation without admission webhooks.
+var _ = Describe("TokenSmith claim policy CRD", func() {
+	It("defaults omitted policies, persists supported changes, and rejects unknown policies", func() {
+		cp := &openchamiv1alpha1.OpenCHAMIControlPlane{
+			ObjectMeta: metav1.ObjectMeta{Name: "claim-policy", Namespace: testNamespace},
+			Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
+				ClusterName: "claim-policy",
+				Domain:      "claim-policy.test.local",
+				Platform: openchamiv1alpha1.PlatformSpec{
+					Vault:         openchamiv1alpha1.VaultSpec{Address: testVaultAddr},
+					ObjectStorage: openchamiv1alpha1.ObjectStorageSpec{Endpoint: testS3Endpoint},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, cp)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, cp)).To(Succeed()) })
+		Expect(cp.Spec.Services.Tokensmith.ClaimPolicy).To(Equal(openchamiv1alpha1.TokensmithClaimPolicyEnriched))
+
+		before := cp.DeepCopy()
+		cp.Spec.Services.Tokensmith.ClaimPolicy = openchamiv1alpha1.TokensmithClaimPolicyCSMKeycloak
+		Expect(k8sClient.Patch(ctx, cp, client.MergeFrom(before))).To(Succeed())
+		stored := &openchamiv1alpha1.OpenCHAMIControlPlane{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cp), stored)).To(Succeed())
+		Expect(stored.Spec.Services.Tokensmith.ClaimPolicy).To(Equal(openchamiv1alpha1.TokensmithClaimPolicyCSMKeycloak))
+
+		before = stored.DeepCopy()
+		stored.Spec.Services.Tokensmith.ClaimPolicy = "unknown"
+		err := k8sClient.Patch(ctx, stored, client.MergeFrom(before))
+		Expect(errors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("claimPolicy"))
+
+		invalid := before.DeepCopy()
+		invalid.ObjectMeta = metav1.ObjectMeta{Name: "claim-policy-invalid", Namespace: testNamespace}
+		invalid.Spec.ClusterName = invalid.Name
+		invalid.Spec.Services.Tokensmith.ClaimPolicy = "unknown"
+		err = k8sClient.Create(ctx, invalid)
+		if err == nil {
+			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, invalid)).To(Succeed()) })
+		}
+		Expect(errors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("claimPolicy"))
+	})
+})

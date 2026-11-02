@@ -561,3 +561,62 @@ func TestTokensmithReconciler_EndpointSchemeReflectsTLS(t *testing.T) {
 		t.Errorf("expected status.services[tokensmith] to be set")
 	}
 }
+
+func TestTokensmithReconciler_ClaimPolicyEnv(t *testing.T) {
+	for _, provider := range []string{"vault", "external"} {
+		for _, policy := range []string{"", openchamiv1alpha1.TokensmithClaimPolicyEnriched, openchamiv1alpha1.TokensmithClaimPolicyCSMKeycloak} {
+			t.Run(provider+"/policy="+policy, func(t *testing.T) {
+				cp := newTokensmithCluster()
+				cp.Spec.Services.Tokensmith.OIDCProvider = provider
+				cp.Spec.Services.Tokensmith.ClaimPolicy = policy
+				dep := (&TokensmithReconciler{}).buildDeployment(cp)
+				want := policy
+				if want == "" {
+					want = openchamiv1alpha1.TokensmithClaimPolicyEnriched
+				}
+				if got, found := tokensmithEnvValue(dep, "TOKENSMITH_OIDC_CLAIM_POLICY"); !found || got != want {
+					t.Fatalf("claim policy env = %q (present=%v), want %q", got, found, want)
+				}
+			})
+		}
+	}
+}
+
+func TestTokensmithReconciler_IdentityEnv(t *testing.T) {
+	for _, name := range []string{testAlphaName, "beta"} {
+		cp := newControlPlane(name)
+		cp.Name = "control-plane-" + name
+		dep := (&TokensmithReconciler{}).buildDeployment(cp)
+		for env, want := range map[string]string{
+			"TOKENSMITH_CLUSTER_ID":   name,
+			"TOKENSMITH_OPENCHAMI_ID": cp.Name,
+		} {
+			if got, found := tokensmithEnvValue(dep, env); !found || got != want {
+				t.Errorf("%s = %q (present=%v), want %q", env, got, found, want)
+			}
+		}
+	}
+}
+
+func TestTokensmithReconciler_ClaimPolicyUpdate(t *testing.T) {
+	cp := newTokensmithCluster()
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(cp).Build()
+	r := &TokensmithReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+	for _, policy := range []string{openchamiv1alpha1.TokensmithClaimPolicyEnriched, openchamiv1alpha1.TokensmithClaimPolicyCSMKeycloak, openchamiv1alpha1.TokensmithClaimPolicyCSMKeycloak, ""} {
+		cp.Spec.Services.Tokensmith.ClaimPolicy = policy
+		if _, err := r.Reconcile(context.Background(), cp); err != nil {
+			t.Fatal(err)
+		}
+		dep := &appsv1.Deployment{}
+		if err := c.Get(context.Background(), types.NamespacedName{Namespace: ControlPlaneNamespace(cp), Name: ServiceTokensmith}, dep); err != nil {
+			t.Fatal(err)
+		}
+		want := policy
+		if want == "" {
+			want = openchamiv1alpha1.TokensmithClaimPolicyEnriched
+		}
+		if got, found := tokensmithEnvValue(dep, "TOKENSMITH_OIDC_CLAIM_POLICY"); !found || got != want {
+			t.Fatalf("applied claim policy = %q (present=%v), want %q", got, found, want)
+		}
+	}
+}

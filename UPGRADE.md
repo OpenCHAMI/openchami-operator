@@ -4,6 +4,8 @@
 # Upgrading to openchami-operator (unreleased)
 
 ## CRD changes
+- Added `spec.services.tokensmith.claimPolicy`, accepting `enriched` (default)
+  or `csm-keycloak`. Apply the updated CRD before setting this field.
 - Added `spec.services.coreDHCP.configMapRef` (`name`, `key` default
   `config.yml`) for a user-provided CoreDHCP config (issue #66).
 - Removed the CRD-level defaults on `spec.services.coreDHCP.unknownLeaseDuration`
@@ -17,11 +19,23 @@
   `/boot/v1/bootscript` is also on boot-service's HTTPS `publicRoutes` list.
 
 ## Service image updates
+- TokenSmith: `v0.4.1` → `v0.4.2`, providing the issuer, claim-policy,
+  Vault-provider mode, and TLS configuration used by the operator (issue #47).
+  The release stream upgrades automatically unless a per-service override is
+  set. Explicit image pins and overrides keep their configured versions and
+  should be updated to a compatible image.
 - CoreDHCP: `ghcr.io/openchami/coredhcp:v0.3.1` → `ghcr.io/openchami/coresmd:v0.7.1`
   (CoreDHCP with the `coresmd` and `bootloop` plugins). The generated config
   uses only stock plugins and works unchanged on the new image.
 
 ## Breaking changes
+- TokenSmith now receives the cluster name as `TOKENSMITH_CLUSTER_ID` and the
+  control-plane resource name as `TOKENSMITH_OPENCHAMI_ID`. Newly issued tokens
+  replace the image's placeholder identities; update downstream policies that
+  match those placeholders. The image and environment changes replace the
+  single TokenSmith pod with its existing Recreate strategy, briefly interrupting
+  token issuance while retaining the data PVC. The claim policy remains
+  `enriched` unless explicitly changed to `csm-keycloak`.
 - Magellan discovery is unavailable pending functional scan/collect/send wiring
   (issue #44). The operator no longer creates no-op Magellan CronJobs and
   suspends legacy operator-managed schedules, even if Magellan is disabled.

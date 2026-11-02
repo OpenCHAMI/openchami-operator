@@ -92,7 +92,7 @@ spec:
     stream: pinned               # requires explicit tag for every enabled service
     pinned:
       smd: v2.20.3
-      tokensmith: v0.4.1
+      tokensmith: v0.4.2
       bootService: v0.1.5
       metadataService: v0.1.0
       coredhcp: v0.7.1
@@ -138,7 +138,7 @@ spec:
     stream: pinned
     pinned:
       smd: v2.19.0              # one version behind current release
-      tokensmith: v0.4.1
+      tokensmith: v0.4.2
       bootService: v0.1.5
       metadataService: v0.1.0
       coredhcp: v0.7.1
@@ -247,6 +247,7 @@ spec:
       oidcProvider: vault
       oidcIssuerURL: ""
       oidcIntrospectionEndpoint: ""
+      claimPolicy: enriched        # enriched (default) or csm-keycloak
       cliOIDC:
         redirectURIs: ["http://127.0.0.1:8250/callback"]
         assignments: ["allow_all"]
@@ -278,6 +279,17 @@ spec:
 ```
 
 The default image for each service is determined by the image stream (see [ImagesSpec](#imagesspec)). The `release` stream (default) uses curated tags from [SERVICES.md](../SERVICES.md).
+
+For tokensmith, `claimPolicy` selects the upstream OIDC claim contract and is
+passed as `TOKENSMITH_OIDC_CLAIM_POLICY`. It defaults to `enriched`, which
+requires the enriched authentication and session claims. Choose `csm-keycloak`
+explicitly for CSM Keycloak claim normalization; provider selection does not
+change the claim policy automatically. TokenSmith performs claim validation
+and normalization.
+
+The operator sets `TOKENSMITH_CLUSTER_ID` to `spec.clusterName` and
+`TOKENSMITH_OPENCHAMI_ID` to `metadata.name`. These stable values replace the
+image's placeholder identities in newly issued tokens.
 
 For tokensmith, `oidcIntrospectionEndpoint` is optional and provider-neutral.
 Set it when the upstream issuer discovery document omits both
