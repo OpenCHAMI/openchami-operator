@@ -7,6 +7,8 @@ package reconcilers
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -155,7 +157,9 @@ func (r *NetworkPoliciesReconciler) Reconcile(ctx context.Context, cp *openchami
 // not contact any external service". For external hostnames the resulting
 // allow-vault-egress / allow-versitygw-egress / allow-logs-egress policies
 // reference a sentinel ipBlock 0.0.0.0/0 in place of the resolved /32 peer.
-// Reconcile() resolves the peer for real before applying.
+// Reconcile() resolves the peer for real before applying. CoreDHCP node-address
+// ingress peers are omitted from this offline preview; no ingress placeholder
+// is emitted.
 func (r *NetworkPoliciesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]client.Object, error) {
 	policies, err := r.buildPolicies(context.Background(), cp, false)
 	if err != nil {
@@ -169,8 +173,7 @@ func (r *NetworkPoliciesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMICont
 }
 
 // buildPolicies materialises the full set of per-cluster NetworkPolicy objects.
-// Returns an error only when egress peer resolution (Vault or VersityGW) fails;
-// all policies that do not depend on external resolution are still constructed.
+// Returns an error when external peer or node-address discovery fails.
 //
 // resolveDNS controls how external (non-.svc.cluster.local) Vault/VersityGW
 // hostnames become peers, and whether the Kubernetes API-server endpoint IPs
@@ -178,7 +181,8 @@ func (r *NetworkPoliciesReconciler) Describe(cp *openchamiv1alpha1.OpenCHAMICont
 // net.LookupHost and the default/kubernetes Endpoints are read to produce /32
 // ipBlock peers — this is the Reconcile path. When false, the syntax-only
 // helpers substitute placeholder ipBlocks without touching DNS or the API —
-// this is the Describe path.
+// this is the Describe path. CoreDHCP ingress addresses are also discovered
+// only on the live path.
 func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane, resolveDNS bool) ([]networkingv1.NetworkPolicy, error) {
 	ns := ControlPlaneNamespace(cp)
 
@@ -211,6 +215,14 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		apiEgress = KubernetesAPIEgressPeersSyntax()
 	}
 
+	var coreDHCPPeers []networkingv1.NetworkPolicyPeer
+	if resolveDNS {
+		coreDHCPPeers, err = r.coreDHCPIngressPeers(ctx, cp)
+		if err != nil {
+			return nil, fmt.Errorf("discovering CoreDHCP ingress peers: %w", err)
+		}
+	}
+
 	return []networkingv1.NetworkPolicy{
 		r.defaultDenyAll(ns),
 		r.allowDNSEgress(ns),
@@ -218,9 +230,9 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		r.allowVersityGWEgress(ns, versityPeer),
 		r.allowLogsEgress(ns, versityPeer),
 		r.allowCNPGKubernetesAPIEgress(ns, apiEgress),
-		r.smdPolicy(ns),
+		r.smdPolicy(ns, coreDHCPPeers),
 		r.tokensmithPolicy(ns, vaultPeer),
-		r.bootServicePolicy(ns, versityPeer),
+		r.bootServicePolicy(ns, versityPeer, coreDHCPPeers),
 		r.metadataServicePolicy(ns),
 		r.coreDHCPPolicy(ns),
 		r.magellanPolicy(ns),
@@ -229,6 +241,49 @@ func (r *NetworkPoliciesReconciler) buildPolicies(ctx context.Context, cp *openc
 		r.postgresIngressPolicy(ns),
 		r.postgresEgressPolicy(ns),
 	}, nil
+}
+
+// coreDHCPIngressPeers admits host-network sources by the internal addresses of
+// nodes eligible for this cluster's CoreDHCP DaemonSet. These peers trust the
+// entire node, not an individual pod or namespace. A multihomed installation
+// must route service traffic through an advertised internal address.
+func (r *NetworkPoliciesReconciler) coreDHCPIngressPeers(ctx context.Context, cp *openchamiv1alpha1.OpenCHAMIControlPlane) ([]networkingv1.NetworkPolicyPeer, error) {
+	if !cp.Spec.Services.CoreDHCP.Enabled {
+		return nil, nil
+	}
+	nodes := &corev1.NodeList{}
+	if err := r.Client.List(ctx, nodes, client.MatchingLabels(EffectiveNodeSelector(cp, probeTypeProvision))); err != nil {
+		return nil, fmt.Errorf("listing CoreDHCP nodes: %w", err)
+	}
+	cidrs := map[string]struct{}{}
+	for _, node := range nodes.Items {
+		found := false
+		for _, address := range node.Status.Addresses {
+			if address.Type != corev1.NodeInternalIP {
+				continue
+			}
+			ip, err := netip.ParseAddr(address.Address)
+			if err != nil || ip.Zone() != "" || !ip.IsGlobalUnicast() {
+				return nil, fmt.Errorf("node %s has invalid internal IP %q", node.Name, address.Address)
+			}
+			ip = ip.Unmap()
+			cidrs[netip.PrefixFrom(ip, ip.BitLen()).String()] = struct{}{}
+			found = true
+		}
+		if !found {
+			return nil, fmt.Errorf("node %s has no internal IP for CoreDHCP ingress", node.Name)
+		}
+	}
+	ordered := make([]string, 0, len(cidrs))
+	for cidr := range cidrs {
+		ordered = append(ordered, cidr)
+	}
+	sort.Strings(ordered)
+	peers := make([]networkingv1.NetworkPolicyPeer, 0, len(ordered))
+	for _, cidr := range ordered {
+		peers = append(peers, networkingv1.NetworkPolicyPeer{IPBlock: &networkingv1.IPBlock{CIDR: cidr}})
+	}
+	return peers, nil
 }
 
 // objectMeta builds the common ObjectMeta for every NetworkPolicy in this
@@ -405,7 +460,7 @@ func (r *NetworkPoliciesReconciler) allowCNPGKubernetesAPIEgress(ns string, apiE
 
 // smdPolicy admits ingress to SMD from peer services and the gateway, and
 // permits egress to postgres-rw and tokensmith.
-func (r *NetworkPoliciesReconciler) smdPolicy(ns string) networkingv1.NetworkPolicy {
+func (r *NetworkPoliciesReconciler) smdPolicy(ns string, coreDHCPPeers []networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policySMD),
@@ -416,13 +471,12 @@ func (r *NetworkPoliciesReconciler) smdPolicy(ns string) networkingv1.NetworkPol
 				networkingv1.PolicyTypeEgress,
 			},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: []networkingv1.NetworkPolicyPeer{
+				From: append([]networkingv1.NetworkPolicyPeer{
 					{PodSelector: ptrPodMatch(ServiceBootService)},
 					{PodSelector: ptrPodMatch(ServiceMetadataService)},
-					{PodSelector: ptrPodMatch(ServiceCoreDHCP)},
 					{PodSelector: ptrPodMatch(ServiceMagellan)},
 					envoyGatewayNSPeer(),
-				},
+				}, coreDHCPPeers...),
 				Ports: []networkingv1.NetworkPolicyPort{portTCP(smdPort)},
 			}},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
@@ -476,7 +530,7 @@ func (r *NetworkPoliciesReconciler) tokensmithPolicy(ns string, vaultPeer networ
 
 // bootServicePolicy admits ingress from coredhcp and the gateway, and permits
 // egress to SMD, postgres, VersityGW, and tokensmith.
-func (r *NetworkPoliciesReconciler) bootServicePolicy(ns string, versityPeer networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
+func (r *NetworkPoliciesReconciler) bootServicePolicy(ns string, versityPeer networkingv1.NetworkPolicyPeer, coreDHCPPeers []networkingv1.NetworkPolicyPeer) networkingv1.NetworkPolicy {
 	return networkingv1.NetworkPolicy{
 		TypeMeta:   policyTypeMeta(),
 		ObjectMeta: policyMeta(ns, policyBootService),
@@ -487,10 +541,9 @@ func (r *NetworkPoliciesReconciler) bootServicePolicy(ns string, versityPeer net
 				networkingv1.PolicyTypeEgress,
 			},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: []networkingv1.NetworkPolicyPeer{
-					{PodSelector: ptrPodMatch(ServiceCoreDHCP)},
+				From: append([]networkingv1.NetworkPolicyPeer{
 					envoyGatewayNSPeer(),
-				},
+				}, coreDHCPPeers...),
 				Ports: []networkingv1.NetworkPolicyPort{portTCP(bootServicePort)},
 			}},
 			Egress: []networkingv1.NetworkPolicyEgressRule{

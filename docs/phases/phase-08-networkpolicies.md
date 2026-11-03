@@ -19,9 +19,9 @@ It is pre-written in `internal/reconcilers/helpers.go` — use it directly.
 | `allow-versitygw-egress` | boot-service | — | VersityGW :10000 |
 | `allow-logs-egress` | funicular-collector | — | VersityGW :10000 |
 | `allow-cnpg-kubernetes-api-egress` | cnpg.io/cluster=* | — | discovered Kubernetes API endpoint IPs and TCP ports |
-| `smd-policy` | smd | boot-service, metadata-service, coredhcp, magellan, envoy-gateway-system NS | postgres-rw:5432, tokensmith:8080 |
+| `smd-policy` | smd | boot-service, metadata-service, eligible CoreDHCP node IPs, magellan, envoy-gateway-system NS | postgres-rw:5432, tokensmith:8080 |
 | `tokensmith-policy` | tokensmith | all in NS, envoy-gateway-system NS | vault:8200, :443 |
-| `boot-service-policy` | boot-service | coredhcp, envoy-gateway-system NS | smd:27779, postgres-rw:5432, versitygw:10000, tokensmith:8080 |
+| `boot-service-policy` | boot-service | eligible CoreDHCP node IPs, envoy-gateway-system NS | smd:27779, postgres-rw:5432, versitygw:10000, tokensmith:8080 |
 | `metadata-service-policy` | metadata-service | envoy-gateway-system NS | smd:27779, tokensmith:8080 |
 | `coredhcp-policy` | coredhcp | — | smd:27779, boot-service:27778 |
 | `magellan-policy` | magellan | — | smd:27779, :443 |
@@ -42,6 +42,32 @@ NetworkPolicies apply to host-network pods depends on the CNI. These rules
 describe the probe's required egress where they are enforced; deployments
 must also allow it through any independent host firewall or host-network
 policy. Host networking and host subnet attachment checks remain required.
+
+## CoreDHCP host-network ingress (issue #46)
+
+SMD and boot-service admit CoreDHCP by the internal addresses advertised in
+`Node.status.addresses`, using one `/32` (IPv4) or `/128` (IPv6) peer per
+address. The policy reconciler lists nodes matching
+`EffectiveNodeSelector(cluster, "provision")`: probe readiness plus the current
+revision when probing is enabled, or the manual CoreDHCP selector otherwise.
+Addresses are deduplicated and sorted. No CoreDHCP ingress peers are emitted
+when CoreDHCP is disabled or no nodes match. Missing or invalid internal
+addresses on an eligible node report `NetworkPoliciesReady=False/Error` and
+retry without applying a partial policy set; previously applied policies remain
+until discovery succeeds.
+
+Node events refresh the policies for both probe and manual placement. Update
+handling maps both old and new node state so losing labels also triggers a
+refresh. Server-side apply removes obsolete addresses. Offline `Describe()`
+omits these dynamic ingress peers; it never inserts unrestricted ingress.
+
+An IP peer trusts **every process and host-network pod using that node IP**,
+regardless of namespace. It does not authenticate CoreDHCP. The allowance is
+restricted to SMD TCP/27779 and boot-service TCP/27778. Multihomed deployments
+must verify that the actual source address used to reach the services is an
+advertised node internal IP. No provision-subnet or all-node-CIDR fallback is
+provided. Independent host policies/firewalls remain the administrator's
+responsibility. The documented coresmd gateway path is still supported.
 
 ## Implementation pattern
 ```go

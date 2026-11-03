@@ -6,8 +6,11 @@ package reconcilers
 
 import (
 	"context"
+	"errors"
+	"maps"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,9 +23,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 	"github.com/openchami/openchami-operator/internal/conditions"
+	"github.com/openchami/openchami-operator/internal/networkprobe"
 )
 
 // Shared fixture URLs for the in-cluster .svc.cluster.local fast-path used by
@@ -91,7 +96,7 @@ func kubernetesEndpoints(ips ...string) *discoveryv1.EndpointSlice {
 //
 // Production code never hits this path: real apiservers do not depend on the
 // fake client's converter wiring.
-func newNetworkPolicyClient(scheme *runtime.Scheme, cp *openchamiv1alpha1.OpenCHAMIControlPlane) client.Client {
+func newNetworkPolicyClient(scheme *runtime.Scheme, cp *openchamiv1alpha1.OpenCHAMIControlPlane) client.WithWatch {
 	return fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(cp, kubernetesEndpoints(testAPIServerIP)).
@@ -253,7 +258,6 @@ func assertSMDPolicy(t *testing.T, list *networkingv1.NetworkPolicyList) {
 	wantPeers := map[string]bool{
 		ServiceBootService:     false,
 		ServiceMetadataService: false,
-		ServiceCoreDHCP:        false,
 		ServiceMagellan:        false,
 	}
 	sawEnvoyNS := false
@@ -930,4 +934,227 @@ func TestKubernetesAPIEgressPeersSyntax(t *testing.T) {
 	if len(peers.Peers) != 1 || peers.Peers[0].IPBlock == nil || peers.Peers[0].IPBlock.CIDR != SyntaxOnlyExternalCIDR {
 		t.Fatalf("expected sentinel peer %q, got %+v", SyntaxOnlyExternalCIDR, peers.Peers)
 	}
+}
+
+const (
+	testCoreDHCPNodeCIDR        = "10.0.0.2/32"
+	testCoreDHCPUpdatedNodeCIDR = "10.0.0.3/32"
+)
+
+// These are node addresses, not provision-subnet addresses: CoreDHCP's
+// host-network connections to pod-network services use the node's route.
+func coreDHCPPolicyNode(name string, labels map[string]string, ips ...string) *corev1.Node {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	for _, ip := range ips {
+		node.Status.Addresses = append(node.Status.Addresses, corev1.NodeAddress{Type: corev1.NodeInternalIP, Address: ip})
+	}
+	return node
+}
+
+func assertCoreDHCPIngress(t *testing.T, policies *networkingv1.NetworkPolicyList, want []string) {
+	t.Helper()
+	for name, port := range map[string]int32{policySMD: smdPort, policyBootService: bootServicePort} {
+		policy := policyByName(policies, name)
+		if policy == nil {
+			t.Fatalf("missing %s", name)
+		}
+		var got []string
+		for _, rule := range policy.Spec.Ingress {
+			if len(rule.From) == 0 {
+				t.Fatalf("%s has unrestricted ingress", name)
+			}
+			if !reflect.DeepEqual(rule.Ports, []networkingv1.NetworkPolicyPort{portTCP(port)}) {
+				t.Fatalf("%s has unexpected ingress ports: %+v", name, rule.Ports)
+			}
+			for _, peer := range rule.From {
+				if peer.PodSelector == nil && peer.NamespaceSelector == nil && peer.IPBlock == nil {
+					t.Fatalf("%s has unrestricted peer", name)
+				}
+				if peer.PodSelector != nil && peer.PodSelector.MatchLabels[labelAppName] == ServiceCoreDHCP {
+					t.Fatalf("%s still admits CoreDHCP by pod label", name)
+				}
+				if peer.IPBlock != nil {
+					if peer.PodSelector != nil || peer.NamespaceSelector != nil || len(peer.IPBlock.Except) != 0 {
+						t.Fatalf("%s has unexpected node peer: %+v", name, peer)
+					}
+					got = append(got, peer.IPBlock.CIDR)
+				}
+			}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s node CIDRs = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestNetworkPoliciesReconciler_CoreDHCPIngress(t *testing.T) {
+	for _, probe := range []bool{false, true} {
+		t.Run(map[bool]string{false: "manual", true: "probe"}[probe], func(t *testing.T) {
+			cp := newInClusterNetworkPolicyCluster(testAlphaName)
+			cp.Spec.Services.CoreDHCP.Enabled = true
+			cp.Spec.Services.CoreDHCP.NodeSelector = map[string]string{testNodeRoleDHCP: testAlphaName, "zone": "a"}
+			cp.Spec.NetworkProbe.Enabled = probe
+			selector := EffectiveNodeSelector(cp, probeTypeProvision)
+			eligible := coreDHCPPolicyNode("eligible", selector, "fd00::2", "10.0.0.2", "10.0.0.2")
+			eligible.Status.Addresses = append(eligible.Status.Addresses,
+				corev1.NodeAddress{Type: corev1.NodeExternalIP, Address: "203.0.113.1"},
+				corev1.NodeAddress{Type: corev1.NodeHostName, Address: "eligible"})
+			staleLabels := maps.Clone(selector)
+			staleKey := "zone"
+			if probe {
+				staleKey = networkprobe.RevisionLabel(cp.Spec.ClusterName, probeTypeProvision)
+			}
+			staleLabels[staleKey] = "stale"
+			c := newNetworkPolicyClient(newScheme(t), cp)
+			for _, node := range []*corev1.Node{
+				eligible,
+				coreDHCPPolicyNode("duplicate", selector, "::ffff:10.0.0.2"),
+				coreDHCPPolicyNode("other", map[string]string{testNodeRoleDHCP: "other"}, "10.0.0.3"),
+				coreDHCPPolicyNode("stale", staleLabels, "10.0.0.4"),
+			} {
+				if err := c.Create(context.Background(), node); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+			if _, err := r.Reconcile(context.Background(), cp); err != nil {
+				t.Fatal(err)
+			}
+			assertCoreDHCPIngress(t, listPolicies(t, c, ControlPlaneNamespace(cp)), []string{testCoreDHCPNodeCIDR, "fd00::2/128"})
+		})
+	}
+}
+
+func TestNetworkPoliciesReconciler_CoreDHCPRevokesIngress(t *testing.T) {
+	ctx := context.Background()
+	cp := newInClusterNetworkPolicyCluster(testAlphaName)
+	cp.Spec.Services.CoreDHCP.Enabled = true
+	cp.Spec.Services.CoreDHCP.NodeSelector = map[string]string{testNodeRoleDHCP: testAlphaName}
+	node := coreDHCPPolicyNode("n1", cp.Spec.Services.CoreDHCP.NodeSelector, "10.0.0.2")
+	c := newNetworkPolicyClient(newScheme(t), cp)
+	if err := c.Create(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+	reconcile := func(want []string) {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, cp); err != nil {
+			t.Fatal(err)
+		}
+		assertCoreDHCPIngress(t, listPolicies(t, c, ControlPlaneNamespace(cp)), want)
+	}
+	reconcile([]string{testCoreDHCPNodeCIDR})
+	reconcile([]string{testCoreDHCPNodeCIDR}) // idempotent apply
+	node.Status.Addresses[0].Address = "10.0.0.3"
+	if err := c.Status().Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	reconcile([]string{testCoreDHCPUpdatedNodeCIDR})
+	node.Labels = nil
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(nil)
+	node.Labels = cp.Spec.Services.CoreDHCP.NodeSelector
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	reconcile([]string{testCoreDHCPUpdatedNodeCIDR})
+	cp.Spec.Services.CoreDHCP.Enabled = false
+	reconcile(nil)
+	cp.Spec.Services.CoreDHCP.Enabled = true
+	reconcile([]string{testCoreDHCPUpdatedNodeCIDR})
+	if err := c.Delete(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(nil)
+}
+
+func TestNetworkPoliciesReconciler_CoreDHCPProbeRevisionRevokesIngress(t *testing.T) {
+	cp := newInClusterNetworkPolicyCluster(testAlphaName)
+	cp.Spec.NetworkProbe.Enabled = true
+	cp.Spec.Services.CoreDHCP.Enabled = true
+	c := newNetworkPolicyClient(newScheme(t), cp)
+	if err := c.Create(context.Background(), coreDHCPPolicyNode("n1", EffectiveNodeSelector(cp, probeTypeProvision), "10.0.0.2")); err != nil {
+		t.Fatal(err)
+	}
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: record.NewFakeRecorder(20)}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatal(err)
+	}
+	assertCoreDHCPIngress(t, listPolicies(t, c, ControlPlaneNamespace(cp)), []string{testCoreDHCPNodeCIDR})
+	cp.Spec.NetworkProbe.ProvisionNetwork = &openchamiv1alpha1.NetworkProbeTarget{Subnet: "192.0.2.0/24"}
+	if _, err := r.Reconcile(context.Background(), cp); err != nil {
+		t.Fatal(err)
+	}
+	assertCoreDHCPIngress(t, listPolicies(t, c, ControlPlaneNamespace(cp)), nil)
+}
+
+func TestNetworkPoliciesReconciler_CoreDHCPDiscoveryErrors(t *testing.T) {
+	for _, address := range []string{"missing", "invalid", "0.0.0.0", "127.0.0.1", "::", "fe80::1%eth0"} {
+		t.Run(address, func(t *testing.T) {
+			cp := newInClusterNetworkPolicyCluster(testAlphaName)
+			cp.Spec.Services.CoreDHCP.Enabled = true
+			node := coreDHCPPolicyNode("n1", nil, address)
+			if address == "missing" {
+				node.Status.Addresses = nil
+			}
+			c := newNetworkPolicyClient(newScheme(t), cp)
+			if err := c.Create(context.Background(), node); err != nil {
+				t.Fatal(err)
+			}
+			assertCoreDHCPDiscoveryError(t, cp, c)
+		})
+	}
+	t.Run("node list fails", func(t *testing.T) {
+		cp := newInClusterNetworkPolicyCluster(testAlphaName)
+		cp.Spec.Services.CoreDHCP.Enabled = true
+		c := interceptor.NewClient(newNetworkPolicyClient(newScheme(t), cp), interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.NodeList); ok {
+					return errors.New("node discovery unavailable")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		})
+		assertCoreDHCPDiscoveryError(t, cp, c)
+	})
+}
+
+func assertCoreDHCPDiscoveryError(t *testing.T, cp *openchamiv1alpha1.OpenCHAMIControlPlane, c client.Client) {
+	t.Helper()
+	recorder := record.NewFakeRecorder(20)
+	r := &NetworkPoliciesReconciler{Client: c, Recorder: recorder}
+	if _, err := r.Reconcile(context.Background(), cp); err == nil {
+		t.Fatal("expected node discovery error")
+	}
+	condition := apimeta.FindStatusCondition(cp.Status.Conditions, conditions.ConditionNetworkPoliciesReady)
+	if condition == nil || condition.Status != metav1.ConditionFalse || condition.Reason != conditions.ReasonError {
+		t.Fatalf("expected NetworkPoliciesReady=False/Error, got %+v", condition)
+	}
+	if len(listPolicies(t, c, ControlPlaneNamespace(cp)).Items) != 0 {
+		t.Fatal("discovery failure must not apply partial or unrestricted policies")
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, RunbookURL(conditions.ReasonError)) {
+			t.Fatalf("event missing runbook URL: %s", event)
+		}
+	default:
+		t.Fatal("expected warning event")
+	}
+}
+
+func TestNetworkPoliciesReconciler_CoreDHCPDescribeOffline(t *testing.T) {
+	cp := newInClusterNetworkPolicyCluster(testAlphaName)
+	cp.Spec.Services.CoreDHCP.Enabled = true
+	objects, err := (&NetworkPoliciesReconciler{}).Describe(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies := &networkingv1.NetworkPolicyList{}
+	for _, object := range objects {
+		policies.Items = append(policies.Items, *object.(*networkingv1.NetworkPolicy))
+	}
+	assertCoreDHCPIngress(t, policies, nil)
 }

@@ -436,9 +436,12 @@ How it behaves:
 
 ##### Reaching SMD and boot-service from coresmd
 
-coresmd runs on the host network, so in-cluster pod-selector
-NetworkPolicies do not admit it to SMD directly. Point it at the gateway
-instead:
+coresmd runs on the host network. The operator admits direct SMD and
+boot-service ingress from eligible CoreDHCP nodes' advertised internal IPs;
+pod-label selectors cannot reliably identify host-network traffic. This
+allowance trusts other processes using those same node IPs as well. On
+multihomed nodes, verify that service-bound traffic uses an advertised
+internal IP. The standard coresmd configuration uses the gateway:
 
 - `svc_base_uri=https://<spec.domain>` — coresmd only issues
   `GET /hsm/v2/Inventory/EthernetInterfaces` and `GET /hsm/v2/State/Components`,

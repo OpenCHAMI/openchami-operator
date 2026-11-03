@@ -12,7 +12,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	openchamiv1alpha1 "github.com/openchami/openchami-operator/api/v1alpha1"
 )
@@ -121,5 +125,78 @@ func TestNodeToCluster_IgnoresClustersWithProbeDisabled(t *testing.T) {
 	got := r.nodeToCluster(context.Background(), node)
 	if len(got) != 0 {
 		t.Fatalf("probe-disabled cluster should not enqueue; got %d enqueue(s)", len(got))
+	}
+}
+
+const (
+	manualPlacementCluster = "manual-placement"
+	manualPlacementLabel   = "dhcp"
+	manualPlacementZone    = "zone"
+)
+
+func TestNodeToCluster_ManualPlacementEvents(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := openchamiv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cp := &openchamiv1alpha1.OpenCHAMIControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Name: manualPlacementCluster, Namespace: testNamespace},
+		Spec: openchamiv1alpha1.OpenCHAMIControlPlaneSpec{
+			ClusterName: manualPlacementCluster,
+			Services: openchamiv1alpha1.ServicesSpec{CoreDHCP: openchamiv1alpha1.CoreDHCPSpec{
+				Enabled: true, NodeSelector: map[string]string{manualPlacementLabel: manualPlacementCluster, manualPlacementZone: "a"},
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cp).Build()
+	r := &OpenCHAMIControlPlaneReconciler{Client: c, Scheme: scheme}
+	h := handler.EnqueueRequestsFromMapFunc(r.nodeToCluster)
+	eligible := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1", Labels: map[string]string{manualPlacementLabel: manualPlacementCluster, manualPlacementZone: "a"}}}
+	unrelated := eligible.DeepCopy()
+	unrelated.Labels = map[string]string{manualPlacementLabel: "other", manualPlacementZone: "a"}
+	removed := eligible.DeepCopy()
+	removed.Labels = nil
+	changedAddress := eligible.DeepCopy()
+	changedAddress.Status.Addresses = []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: "10.0.0.3"}}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		old  *corev1.Node
+		new  *corev1.Node
+		want int
+	}{
+		{name: "create eligible", new: eligible, want: 1},
+		{name: "create unrelated", new: unrelated, want: 0},
+		{name: "address change", old: eligible, new: changedAddress, want: 1},
+		{name: "labels removed", old: eligible, new: removed, want: 1},
+		{name: "labels changed to another cluster", old: eligible, new: unrelated, want: 1},
+		{name: "gained eligibility", old: unrelated, new: eligible, want: 1},
+		{name: "delete eligible", old: eligible, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+			defer q.ShutDown()
+			switch {
+			case tc.old == nil:
+				h.Create(ctx, event.CreateEvent{Object: tc.new}, q)
+			case tc.new == nil:
+				h.Delete(ctx, event.DeleteEvent{Object: tc.old}, q)
+			default:
+				h.Update(ctx, event.UpdateEvent{ObjectOld: tc.old, ObjectNew: tc.new}, q)
+			}
+			if q.Len() != tc.want {
+				t.Fatalf("enqueued %d requests, want %d", q.Len(), tc.want)
+			}
+			if tc.want > 0 {
+				req, _ := q.Get()
+				defer q.Done(req)
+				if req.Name != cp.Name || req.Namespace != cp.Namespace {
+					t.Fatalf("unexpected cluster enqueued: %+v", req)
+				}
+			}
+		})
 	}
 }
